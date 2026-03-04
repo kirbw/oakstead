@@ -1,0 +1,10 @@
+{
+  "name": "school-grade-tracker",
+  "version": "2.0.0",
+  "description": "School CRM and gradebook with SQLite-backed storage",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  }
+}
