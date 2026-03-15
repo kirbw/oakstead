@@ -220,7 +220,7 @@ function pageTemplate({ title, currentPath, content, csrfToken }) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${esc(title)} · School Grade Tracker</title>
+<title>${esc(title)} · Oakstead</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -301,7 +301,7 @@ input[type="hidden"] { display:none; }
 <div class="container">
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand"><h1>School Grade Tracker</h1><p>Mobile-first operations hub for modern schools.</p></div>
+      <div class="brand"><h1>Oakstead</h1><p>Rooted Records for Growing Minds.</p></div>
       <button id="themeToggle" class="theme-btn" type="button" aria-label="Toggle dark mode">Toggle theme</button>
     </header>
     <div class="layout">
@@ -569,5 +569,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`School Grade Tracker running on http://localhost:${PORT}`);
+  console.log(`Oakstead running on http://localhost:${PORT}`);
 });

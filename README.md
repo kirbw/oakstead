@@ -1,4 +1,6 @@
-# School Grade Tracker
+# Oakstead
+
+**Rooted Records for Growing Minds.**
 
 A modernized, mobile-first school operations app with SQLite persistence.
 
