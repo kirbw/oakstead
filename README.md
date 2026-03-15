@@ -1,18 +1,23 @@
 # School Grade Tracker
 
-## Recommended stack
-For a polished long-term product, the best fit is **Django + HTMX (or React where needed) with SQLite/PostgreSQL** because this project is heavily form/data-workflow driven.
+A modernized, mobile-first school operations app with SQLite persistence.
 
-In this environment, package installation is blocked by a proxy policy, so this rebuild ships as a dependency-light Node app using:
-- built-in HTTP server
-- **SQLite database** (`school.db`)
-- server-rendered UI with a simplified menu
+## Highlights
 
-## What this version includes
-- Families + students CRM
-- Gradebook entry workflow
-- Unified **Settings** page for teachers, terms, classrooms, curriculum, and grade weights
-- Automatic numeric student promotion when creating a new term
+- 2026-style responsive UI designed mobile-first (iPhone), then scales to iPad/laptop layouts
+- Built-in light + dark mode toggle with persisted user preference
+- Unified workflows for families, students, settings, and gradebook operations
+- Security hardening for internet exposure:
+  - strict security headers (CSP, frame protections, referrer policy, etc.)
+  - CSRF protection for all form posts
+  - request body size limit
+  - consistent output escaping and constrained input handling
+
+## Tech
+
+- Node.js built-in HTTP server
+- SQLite database (`school.db`) via `sqlite3` CLI
+- Server-rendered HTML/CSS/JS (no frontend framework required)
 
 ## Run
 
@@ -20,7 +25,10 @@ In this environment, package installation is blocked by a proxy policy, so this 
 npm start
 ```
 
-Then open: `http://localhost:3000`
+Open: `http://localhost:3000`
 
-## Data
-- SQLite file: `school.db`
+## Validate
+
+```bash
+npm run check
+```
