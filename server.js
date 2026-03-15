@@ -4,10 +4,29 @@ const path = require('path');
 const { URL } = require('url');
 const querystring = require('querystring');
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(__dirname, 'school.db');
 const MAX_BODY_SIZE = 1_000_000;
+const MAX_LOGO_UPLOAD_SIZE = 2_000_000;
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const DEFAULT_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
+
+const LOGO_TYPES = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/svg+xml': 'svg'
+};
+
+const LOGO_MIME_BY_EXT = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  svg: 'image/svg+xml'
+};
 
 function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({
@@ -183,6 +202,103 @@ function parseBody(req) {
   });
 }
 
+function parseMultipartForm(req, sizeLimit = MAX_LOGO_UPLOAD_SIZE) {
+  return new Promise((resolve, reject) => {
+    const contentType = String(req.headers['content-type'] || '');
+    const boundaryMatch = contentType.match(/multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^;]+))/i);
+    if (!boundaryMatch) {
+      reject(new Error('Invalid multipart form data'));
+      return;
+    }
+    const boundary = `--${boundaryMatch[1] || boundaryMatch[2]}`;
+
+    const chunks = [];
+    let size = 0;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > sizeLimit) {
+        reject(new Error('Payload too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('latin1');
+      const parts = raw.split(boundary).slice(1, -1);
+      const fields = {};
+      let file = null;
+
+      for (const part of parts) {
+        const cleaned = part.replace(/^\r\n/, '').replace(/\r\n$/, '');
+        if (!cleaned || cleaned === '--') continue;
+
+        const sepIndex = cleaned.indexOf('\r\n\r\n');
+        if (sepIndex < 0) continue;
+
+        const rawHeaders = cleaned.slice(0, sepIndex);
+        let rawBody = cleaned.slice(sepIndex + 4);
+        rawBody = rawBody.replace(/\r\n$/, '');
+
+        const disposition = rawHeaders.match(/content-disposition:\s*form-data;\s*([^\r\n]+)/i);
+        if (!disposition) continue;
+
+        const nameMatch = disposition[1].match(/name="([^"]+)"/i);
+        if (!nameMatch) continue;
+        const fieldName = nameMatch[1];
+
+        const filenameMatch = disposition[1].match(/filename="([^"]*)"/i);
+        if (filenameMatch && filenameMatch[1]) {
+          const typeMatch = rawHeaders.match(/content-type:\s*([^\r\n]+)/i);
+          file = {
+            fieldName,
+            filename: path.basename(filenameMatch[1]),
+            mimeType: String(typeMatch?.[1] || '').trim().toLowerCase(),
+            content: Buffer.from(rawBody, 'latin1')
+          };
+        } else {
+          fields[fieldName] = rawBody;
+        }
+      }
+
+      resolve({ fields, file });
+    });
+
+    req.on('error', reject);
+  });
+}
+
+function getCurrentLogoAsset() {
+  const candidates = ['png', 'jpg', 'jpeg', 'webp', 'svg'];
+  for (const ext of candidates) {
+    const filePath = path.join(PUBLIC_DIR, `custom-logo.${ext}`);
+    if (fs.existsSync(filePath)) {
+      return {
+        filePath,
+        mimeType: LOGO_MIME_BY_EXT[ext],
+        urlPath: '/assets/logo',
+        source: 'custom'
+      };
+    }
+  }
+
+  return {
+    filePath: DEFAULT_LOGO_FILE,
+    mimeType: 'image/svg+xml',
+    urlPath: '/assets/logo',
+    source: 'default'
+  };
+}
+
+function clearCustomLogoFiles() {
+  ['png', 'jpg', 'jpeg', 'webp', 'svg'].forEach((ext) => {
+    const filePath = path.join(PUBLIC_DIR, `custom-logo.${ext}`);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  });
+}
+
 function sendHtml(res, html, extraHeaders = {}) {
   res.writeHead(200, {
     ...securityHeaders(),
@@ -258,8 +374,8 @@ body {
 .container { width: min(1120px, 100% - 1.2rem); margin: 1rem auto 2.8rem; }
 .app-shell { background: var(--panel); border: 1px solid var(--line); border-radius: 26px; box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(12px); }
 .topbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; padding: 1rem; border-bottom: 1px solid var(--line); }
-.brand h1 { margin: 0; font-size: 1.15rem; letter-spacing: .2px; }
-.brand p { margin: .25rem 0 0; color: var(--muted); font-size: .84rem; }
+.brand { display: flex; align-items: center; min-width: 0; }
+.brand-logo { width: min(320px, 65vw); height: auto; display: block; filter: drop-shadow(0 2px 8px rgba(0,0,0,.08)); }
 .theme-btn { border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; background: var(--panel-soft); color: var(--text); font-weight: 600; cursor: pointer; }
 .layout { display: grid; grid-template-columns: 1fr; }
 .sidebar { padding: 1rem; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .5rem; }
@@ -286,6 +402,8 @@ table { width: 100%; border-collapse: collapse; min-width: 640px; }
 th, td { padding: .6rem .65rem; border-bottom: 1px solid var(--line); font-size: .86rem; text-align: left; }
 th { color: var(--muted); font-weight: 600; }
 .muted { color: var(--muted); font-size: .86rem; }
+.logo-help { margin: .35rem 0 .1rem; color: var(--muted); font-size: .85rem; }
+.logo-preview { max-width: min(420px, 100%); height: auto; display: block; margin-top: .75rem; border: 1px solid var(--line); border-radius: 12px; padding: .55rem; background: var(--panel); }
 input[type="hidden"] { display:none; }
 @media (min-width: 760px) {
   .container { width: min(1200px, 100% - 2rem); margin-top: 1.4rem; }
@@ -294,6 +412,7 @@ input[type="hidden"] { display:none; }
   .main { padding: 1.2rem; }
   .form-grid.cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .kpi-grid { grid-template-columns: repeat(5, minmax(0,1fr)); }
+  .brand-logo { width: 360px; }
 }
 </style>
 </head>
@@ -301,7 +420,7 @@ input[type="hidden"] { display:none; }
 <div class="container">
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand"><h1>Oakstead</h1><p>Rooted Records for Growing Minds.</p></div>
+      <div class="brand"><img class="brand-logo" src="/assets/logo" alt="Oakstead logo" /></div>
       <button id="themeToggle" class="theme-btn" type="button" aria-label="Toggle dark mode">Toggle theme</button>
     </header>
     <div class="layout">
@@ -362,6 +481,21 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const p = url.pathname;
 
+    if (req.method === 'GET' && p === '/assets/logo') {
+      try {
+        const logoAsset = getCurrentLogoAsset();
+        const logo = fs.readFileSync(logoAsset.filePath);
+        res.writeHead(200, {
+          ...securityHeaders(),
+          'Content-Type': logoAsset.mimeType,
+          'Cache-Control': 'public, max-age=86400'
+        });
+        return res.end(logo);
+      } catch {
+        return sendText(res, 404, 'Logo not found');
+      }
+    }
+
     if (req.method === 'GET' && p === '/') {
       const [families] = querySql('SELECT COUNT(*) as c FROM families');
       const [students] = querySql('SELECT COUNT(*) as c FROM students');
@@ -414,6 +548,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && p === '/settings') {
+      const logoAsset = getCurrentLogoAsset();
       const teachers = querySql('SELECT * FROM teachers ORDER BY id DESC');
       const terms = querySql('SELECT * FROM terms ORDER BY id DESC');
       const classrooms = querySql('SELECT c.*, t.name as teacher_name, tr.name as term_name FROM classrooms c JOIN teachers t ON t.id=c.teacher_id JOIN terms tr ON tr.id=c.term_id ORDER BY c.id DESC');
@@ -427,6 +562,16 @@ const server = http.createServer(async (req, res) => {
 
       const content = `<section class="hero"><h2>Settings</h2><p>Manage staffing, calendars, curriculum maps, and grade strategy.</p></section>
       <div class="stack">
+      ${sectionCard('Branding', `<form method="post" action="/settings/logo" class="form-grid" enctype="multipart/form-data">${csrfInput(csrfToken)}
+          <label>Upload School Logo
+            <input name="logoFile" type="file" accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml" required />
+          </label>
+          <p class="logo-help">Recommended: 1200×400px (3:1 ratio), transparent PNG or SVG, under 2MB. Use strong contrast for light/dark themes.</p>
+          <button type="submit">Upload / Replace Logo</button>
+      </form>
+      <p class="muted">Current source: ${logoAsset.source === 'custom' ? 'Custom upload' : 'Default logo'}</p>
+      <img class="logo-preview" src="${logoAsset.urlPath}" alt="Current app logo preview" />`)}
+
       ${sectionCard('Teachers', `<form method="post" action="/settings/teachers" class="form-grid cols-2">${csrfInput(csrfToken)}
           <label>Name<input name="name" required maxlength="120"/></label>
           <label>Email<input type="email" name="email" maxlength="160"/></label>
@@ -503,6 +648,22 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST') {
+      if (p === '/settings/logo') {
+        const { fields, file } = await parseMultipartForm(req);
+        if (!requireCsrf(req, fields)) return sendText(res, 403, 'Invalid CSRF token');
+        if (!file || !file.content?.length) return sendText(res, 400, 'No file uploaded');
+
+        const filenameExt = (path.extname(file.filename || '').replace('.', '').toLowerCase());
+        const fromMime = LOGO_TYPES[file.mimeType];
+        const ext = fromMime || (LOGO_MIME_BY_EXT[filenameExt] ? filenameExt : '');
+        if (!ext) return sendText(res, 415, 'Unsupported image type');
+
+        fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+        clearCustomLogoFiles();
+        fs.writeFileSync(path.join(PUBLIC_DIR, `custom-logo.${ext}`), file.content);
+        return redirect(res, '/settings', resHeaders);
+      }
+
       const body = await parseBody(req);
       if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
 

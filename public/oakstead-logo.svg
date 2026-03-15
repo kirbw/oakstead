@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" viewBox="0 0 720 240" role="img" aria-labelledby="title desc">
+  <title id="title">Oakstead Logo</title>
+  <desc id="desc">Oakstead wordmark with tagline Rooted Records for Growing Minds.</desc>
+  <defs>
+    <linearGradient id="oak" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#4d7c0f"/>
+      <stop offset="100%" stop-color="#3f2a15"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="240" fill="none"/>
+  <text x="18" y="126" font-size="110" font-family="Georgia, 'Times New Roman', serif" fill="url(#oak)">Oakstead</text>
+  <line x1="20" y1="152" x2="700" y2="152" stroke="#5a3a1f" stroke-width="3"/>
+  <text x="22" y="206" font-size="48" font-style="italic" font-family="Georgia, 'Times New Roman', serif" fill="#5a3a1f">Rooted Records for Growing Minds</text>
+</svg>
