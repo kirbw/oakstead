@@ -4,6 +4,7 @@ const path = require('path');
 const { URL } = require('url');
 const querystring = require('querystring');
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(__dirname, 'school.db');
@@ -257,9 +258,12 @@ body {
 }
 .container { width: min(1120px, 100% - 1.2rem); margin: 1rem auto 2.8rem; }
 .app-shell { background: var(--panel); border: 1px solid var(--line); border-radius: 26px; box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(12px); }
-.topbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; padding: 1rem; border-bottom: 1px solid var(--line); }
-.brand h1 { margin: 0; font-size: 1.15rem; letter-spacing: .2px; }
-.brand p { margin: .25rem 0 0; color: var(--muted); font-size: .84rem; }
+.topbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; padding: .85rem 1rem; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: .8rem; min-width: 0; }
+.brand-logo { width: clamp(126px, 26vw, 210px); height: auto; display: block; object-fit: contain; filter: drop-shadow(0 5px 10px rgba(22, 38, 18, 0.16)); }
+.brand-copy { min-width: 0; }
+.brand h1 { margin: 0; font-size: 1.08rem; letter-spacing: .2px; }
+.brand p { margin: .25rem 0 0; color: var(--muted); font-size: .8rem; }
 .theme-btn { border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; background: var(--panel-soft); color: var(--text); font-weight: 600; cursor: pointer; }
 .layout { display: grid; grid-template-columns: 1fr; }
 .sidebar { padding: 1rem; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .5rem; }
@@ -301,7 +305,10 @@ input[type="hidden"] { display:none; }
 <div class="container">
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand"><h1>Oakstead</h1><p>Rooted Records for Growing Minds.</p></div>
+      <div class="brand">
+        <img class="brand-logo" src="/assets/oakstead-logo.svg" alt="Oakstead logo" />
+        <div class="brand-copy"><h1>Oakstead</h1><p>Rooted Records for Growing Minds.</p></div>
+      </div>
       <button id="themeToggle" class="theme-btn" type="button" aria-label="Toggle dark mode">Toggle theme</button>
     </header>
     <div class="layout">
@@ -361,6 +368,18 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const p = url.pathname;
+
+    if (req.method === 'GET' && p === '/assets/oakstead-logo.svg') {
+      const logoPath = path.join(__dirname, 'assets', 'oakstead-logo.svg');
+      if (!fs.existsSync(logoPath)) return sendText(res, 404, 'Not Found');
+      const logo = fs.readFileSync(logoPath, 'utf8');
+      res.writeHead(200, {
+        ...securityHeaders(),
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600'
+      });
+      return res.end(logo);
+    }
 
     if (req.method === 'GET' && p === '/') {
       const [families] = querySql('SELECT COUNT(*) as c FROM families');
