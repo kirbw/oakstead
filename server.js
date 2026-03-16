@@ -255,12 +255,77 @@ function clearSession(req, resHeaders) {
 function getCurrentUser(req) {
   const token = parseCookies(req).sessionToken;
   if (!token) return null;
-  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id
+  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.family_id
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
     LIMIT 1`);
   return rows[0] || null;
+}
+
+function average(values) {
+  if (!values.length) return null;
+  const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
+  return total / values.length;
+}
+
+function formatAverage(value) {
+  return value === null ? '—' : `${value.toFixed(1)}%`;
+}
+
+function scoreTone(value) {
+  if (value === null) return 'tone-muted';
+  if (value >= 90) return 'tone-strong';
+  if (value >= 75) return 'tone-mid';
+  return 'tone-low';
+}
+
+function renderTermChart(points) {
+  if (!points.length) return '<p class="muted">No grade data yet for this learner.</p>';
+  const width = 860;
+  const height = 260;
+  const padX = 54;
+  const padTop = 20;
+  const padBottom = 50;
+  const innerWidth = width - (padX * 2);
+  const innerHeight = height - padTop - padBottom;
+  const maxIndex = Math.max(points.length - 1, 1);
+  const pointData = points.map((point, index) => {
+    const x = padX + ((innerWidth * index) / maxIndex);
+    const y = padTop + ((100 - point.value) / 100) * innerHeight;
+    return { ...point, x, y };
+  });
+
+  const linePath = pointData.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
+  const yTicks = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0].map((tick) => {
+    const y = padTop + ((100 - tick) / 100) * innerHeight;
+    return `<line x1="${padX}" y1="${y}" x2="${width - padX}" y2="${y}" class="chart-grid"></line><text x="${padX - 10}" y="${y + 4}" text-anchor="end" class="chart-axis">${tick}</text>`;
+  }).join('');
+  const xLabels = pointData.map((point) => `<text x="${point.x}" y="${height - 20}" text-anchor="middle" class="chart-axis">${esc(point.label)}</text>`).join('');
+  const dots = pointData.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="5" class="chart-point"><title>${esc(point.label)}: ${formatAverage(point.value)}</title></circle>`).join('');
+
+  return `<svg class="line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Student average by term">
+    ${yTicks}
+    <path d="${linePath}" class="chart-line" fill="none"></path>
+    ${dots}
+    ${xLabels}
+  </svg>`;
+}
+
+function renderSubjectMiniCharts(subjects) {
+  if (!subjects.length) return '<p class="muted">No subject-level scores to display yet.</p>';
+  return `<div class="subject-grid">${subjects.map((subject) => {
+    const max = Math.max(...subject.points.map((point) => point.value), 100);
+    const bars = subject.points.map((point) => {
+      const height = Math.max(8, (point.value / max) * 100);
+      return `<div class="mini-bar-wrap"><div class="mini-bar ${scoreTone(point.value)}" style="height:${height}%"></div><span>${esc(point.label)}</span></div>`;
+    }).join('');
+    return `<article class="subject-card">
+      <h3>${esc(subject.name)}</h3>
+      <p class="muted">Year avg: <strong>${formatAverage(subject.average)}</strong></p>
+      <div class="mini-chart" role="img" aria-label="${esc(subject.name)} averages by term">${bars}</div>
+    </article>`;
+  }).join('')}</div>`;
 }
 
 function canAccess(role, allowedRoles) {
@@ -530,6 +595,23 @@ th { color: var(--muted); font-weight: 600; }
 .settings-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.5rem; }
 .settings-link { text-decoration:none; color:var(--text); background:var(--panel-soft); border:1px solid var(--line); border-radius:10px; padding:.55rem .6rem; text-align:center; font-weight:600; font-size:.85rem; }
 .settings-link.active { border-color: transparent; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color:#fff; }
+.inline-actions { display:flex; align-items:center; gap:.55rem; flex-wrap:wrap; }
+.line-chart { width: 100%; height: auto; max-height: 360px; }
+.chart-grid { stroke: var(--line); stroke-width: 1; }
+.chart-axis { fill: var(--muted); font-size: 12px; }
+.chart-line { stroke: var(--brand); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.chart-point { fill: var(--brand-2); }
+.subject-grid { display:grid; gap:.75rem; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); }
+.subject-card { border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:.7rem; }
+.subject-card h3 { margin:.1rem 0 .25rem; font-size:.95rem; }
+.mini-chart { display:grid; grid-template-columns:repeat(auto-fit,minmax(30px,1fr)); gap:.45rem; align-items:end; min-height:130px; margin-top:.45rem; }
+.mini-bar-wrap { text-align:center; display:grid; gap:.35rem; }
+.mini-bar { width:100%; border-radius:8px 8px 4px 4px; min-height:8px; }
+.mini-bar-wrap span { font-size:.73rem; color:var(--muted); }
+.tone-muted { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.tone-low { background: linear-gradient(180deg, #fb7185, #ef4444); }
+.tone-mid { background: linear-gradient(180deg, #f59e0b, #f97316); }
+.tone-strong { background: linear-gradient(180deg, #10b981, #14b8a6); }
 input[type="hidden"] { display:none; }
 @media (min-width: 760px) {
   .container { width: min(1200px, 100% - 2rem); margin-top: 1.4rem; }
@@ -541,6 +623,14 @@ input[type="hidden"] { display:none; }
   .brand-logo { width: 360px; }
   .settings-layout { grid-template-columns: 220px 1fr; align-items:start; }
   .settings-nav { grid-template-columns:1fr; }
+}
+@media print {
+  body { background: #fff !important; color: #111 !important; }
+  .container { width: 100%; margin: 0; }
+  .app-shell { box-shadow: none; border: 0; border-radius: 0; }
+  .topbar, .sidebar, .inline-actions, .settings-nav { display: none !important; }
+  .main { padding: 0; }
+  .card, .subject-card { break-inside: avoid; }
 }
 </style>
 </head>
@@ -560,6 +650,7 @@ input[type="hidden"] { display:none; }
         ${navLink('/', currentPath, 'Dashboard')}
         ${navLink('/families', currentPath, 'Families')}
         ${navLink('/gradebook', currentPath, 'Gradebook')}
+        ${navLink('/reports', currentPath, 'Reports')}
         ${navLink('/settings', currentPath, 'Settings')}
       </nav>
       <main class="main">
@@ -840,6 +931,70 @@ const server = http.createServer(async (req, res) => {
       </div>`;
 
       return sendHtml(res, pageTemplate({ title: 'Gradebook', currentPath: p, content, csrfToken, currentUser }), resHeaders);
+    }
+
+    if (req.method === 'GET' && p === '/reports') {
+      if (!requireRole(currentUser, [ROLE_ADMIN, ROLE_TEACHER, ROLE_PARENT])) return sendText(res, 403, 'Forbidden');
+
+      const allStudents = querySql('SELECT id, first_name, last_name, family_id FROM students ORDER BY last_name, first_name');
+      const students = currentUser.role === ROLE_PARENT
+        ? allStudents.filter((student) => student.family_id === asInt(currentUser.family_id))
+        : allStudents;
+      const selectedStudentId = asInt(url.searchParams.get('studentId')) || students[0]?.id || 0;
+      const selectedStudent = students.find((student) => student.id === selectedStudentId) || null;
+      const scoreRows = selectedStudent
+        ? querySql(`SELECT sc.score, t.name as term_name, t.start_date, s.name as subject_name
+            FROM scores sc
+            JOIN assessments a ON a.id=sc.assessment_id
+            JOIN terms t ON t.id=a.term_id
+            JOIN subjects s ON s.id=a.subject_id
+            WHERE sc.student_id=${selectedStudent.id}
+            ORDER BY t.start_date, a.id`)
+        : [];
+
+      const termMap = new Map();
+      const subjectMap = new Map();
+      scoreRows.forEach((row) => {
+        if (!termMap.has(row.term_name)) termMap.set(row.term_name, []);
+        termMap.get(row.term_name).push(Number(row.score));
+
+        if (!subjectMap.has(row.subject_name)) subjectMap.set(row.subject_name, new Map());
+        const subjectTerms = subjectMap.get(row.subject_name);
+        if (!subjectTerms.has(row.term_name)) subjectTerms.set(row.term_name, []);
+        subjectTerms.get(row.term_name).push(Number(row.score));
+      });
+
+      const termAverages = [...termMap.entries()].map(([label, values]) => ({ label, value: average(values) ?? 0 }));
+      const overallAverage = average(termAverages.map((entry) => entry.value));
+      const subjectAverages = [...subjectMap.entries()].map(([subjectName, terms]) => {
+        const points = [...terms.entries()].map(([label, values]) => ({ label, value: average(values) ?? 0 }));
+        return {
+          name: subjectName,
+          average: average(points.map((point) => point.value)),
+          points
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+
+      const studentOptions = students.map((student) => {
+        const fullName = `${student.first_name} ${student.last_name}`;
+        return `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(fullName)}</option>`;
+      }).join('');
+
+      const content = `<section class="hero"><h2>Average Grade Report</h2><p>Track annual performance trends and subject-level progress.</p></section>
+      <div class="stack">
+        ${sectionCard('Filters', `<form method="get" action="/reports" class="form-grid cols-2">
+          <label>Student
+            <select name="studentId" required>${studentOptions}</select>
+          </label>
+          <div class="inline-actions" style="align-self:end;">
+            <button type="submit">Load report</button>
+            <button class="logout-btn" type="button" onclick="window.print()">Print report</button>
+          </div>
+        </form>`, 'Choose a learner to render their yearly averages and subject snapshots.')}
+        ${sectionCard('Yearly Average by Term', `${selectedStudent ? `<p class="muted">Student: <strong>${esc(`${selectedStudent.first_name} ${selectedStudent.last_name}`)}</strong> · Year average: <strong>${formatAverage(overallAverage)}</strong></p>${renderTermChart(termAverages)}` : '<p class="muted">No students available to report on yet.</p>'}`)}
+        ${sectionCard('Subject Breakdown', renderSubjectMiniCharts(subjectAverages), 'Smaller term-by-term charts for each subject taught this year.')}
+      </div>`;
+      return sendHtml(res, pageTemplate({ title: 'Reports', currentPath: p, content, csrfToken, currentUser }), resHeaders);
     }
 
     if (req.method === 'POST') {
