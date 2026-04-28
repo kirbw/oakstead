@@ -1,62 +1,61 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { URL } = require('url');
 const querystring = require('querystring');
 const { execFileSync } = require('child_process');
-const fs = require('fs');
+const { URL } = require('url');
 
 const PORT = Number(process.env.PORT) || 3000;
-const DB_FILE = path.join(__dirname, 'school.db');
-const MAX_BODY_SIZE = 1_000_000;
-const MAX_LOGO_UPLOAD_SIZE = 2_000_000;
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DEFAULT_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
-
-const LOGO_TYPES = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/svg+xml': 'svg'
-};
-
-const LOGO_MIME_BY_EXT = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  svg: 'image/svg+xml'
-};
+const MAX_BODY_SIZE = 1_000_000;
+const SESSION_HOURS = 12;
 
 const ROLE_ADMIN = 'admin';
 const ROLE_TEACHER = 'teacher';
-const ROLE_PARENT = 'parent';
-const ALL_ROLES = [ROLE_ADMIN, ROLE_TEACHER, ROLE_PARENT];
+const ROLES = [ROLE_ADMIN, ROLE_TEACHER];
+const CATEGORIES = ['Lesson', 'Quiz', 'Test'];
 
-function esc(v) {
-  return String(v ?? '').replace(/[&<>"']/g, (c) => ({
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;',
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
     "'": '&#39;'
-  }[c]));
+  }[char]));
 }
 
-function sqlValue(v) {
-  if (v === null || v === undefined || v === '') return 'NULL';
-  return `'${String(v).replace(/'/g, "''")}'`;
+function sqlValue(value) {
+  if (value === null || value === undefined || value === '') return 'NULL';
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function asInt(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isInteger(n) && n >= 0 ? n : fallback;
+function asInt(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-function asScore(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  return Math.max(0, Math.min(100, n));
+function cleanText(value, max = 160) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
+}
+
+function cleanDate(value) {
+  const text = String(value ?? '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+}
+
+function cleanGrade(value) {
+  return cleanText(value, 24);
+}
+
+function asScore(value) {
+  if (String(value ?? '').trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(1000, parsed));
 }
 
 function runSql(sql) {
@@ -68,162 +67,9 @@ function querySql(sql) {
   return out ? JSON.parse(out) : [];
 }
 
-function ensureDb() {
-  runSql(`
-PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS families (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_name TEXT NOT NULL,
-  mom_name TEXT,
-  dad_name TEXT,
-  phone TEXT,
-  address TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS students (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_id INTEGER NOT NULL,
-  first_name TEXT NOT NULL,
-  last_name TEXT NOT NULL,
-  birth_date TEXT,
-  current_grade TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (family_id) REFERENCES families(id)
-);
-CREATE TABLE IF NOT EXISTS teachers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS terms (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  start_date TEXT NOT NULL,
-  end_date TEXT NOT NULL,
-  grades_offered TEXT NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS classrooms (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  teacher_id INTEGER NOT NULL,
-  term_id INTEGER NOT NULL,
-  grades TEXT NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (teacher_id) REFERENCES teachers(id),
-  FOREIGN KEY (term_id) REFERENCES terms(id)
-);
-CREATE TABLE IF NOT EXISTS subjects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE
-);
-CREATE TABLE IF NOT EXISTS curriculum_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  grade TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  FOREIGN KEY (subject_id) REFERENCES subjects(id)
-);
-CREATE TABLE IF NOT EXISTS grade_weights (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  category TEXT NOT NULL,
-  weight REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS assessments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  category TEXT NOT NULL,
-  term_id INTEGER NOT NULL,
-  grade TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (term_id) REFERENCES terms(id),
-  FOREIGN KEY (subject_id) REFERENCES subjects(id)
-);
-CREATE TABLE IF NOT EXISTS scores (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  assessment_id INTEGER NOT NULL,
-  student_id INTEGER NOT NULL,
-  score REAL NOT NULL,
-  FOREIGN KEY (assessment_id) REFERENCES assessments(id),
-  FOREIGN KEY (student_id) REFERENCES students(id)
-);
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  username TEXT NOT NULL UNIQUE,
-  role TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  teacher_id INTEGER,
-  family_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (teacher_id) REFERENCES teachers(id),
-  FOREIGN KEY (family_id) REFERENCES families(id)
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_token TEXT NOT NULL UNIQUE,
-  user_id INTEGER NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id)
-);
-`);
-
-  runSql("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);");
-  runSql("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token);");
-
-  const hasWeights = querySql('SELECT COUNT(*) as count FROM grade_weights')[0]?.count;
-  if (!hasWeights) {
-    runSql(`INSERT INTO grade_weights (category, weight) VALUES
-      ('Homework', 20), ('Lesson', 20), ('Quiz', 25), ('Test', 35);`);
-  }
-
-  const hasUsers = querySql('SELECT COUNT(*) as count FROM users')[0]?.count;
-  if (!hasUsers) {
-    const defaultPassword = hashPassword('ChangeMeNow!');
-    runSql(`INSERT INTO users (name, username, role, password_hash) VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(defaultPassword)});`);
-  }
-
-  runSql("DELETE FROM sessions WHERE expires_at <= datetime('now');");
-}
-
-function promoteGrade(grade) {
-  const n = Number(grade);
-  return Number.isNaN(n) ? grade : String(n + 1);
-}
-
-function parseCookies(req) {
-  const raw = req.headers.cookie || '';
-  return raw.split(';').reduce((acc, part) => {
-    const [k, ...rest] = part.trim().split('=');
-    if (k) acc[k] = decodeURIComponent(rest.join('='));
-    return acc;
-  }, {});
-}
-
-function readCookieValue(value) {
-  return encodeURIComponent(String(value)).replace(/%20/g, '+');
-}
-
-function appendSetCookie(resHeaders, cookie) {
-  const existing = resHeaders['Set-Cookie'];
-  if (!existing) {
-    resHeaders['Set-Cookie'] = cookie;
-    return;
-  }
-  resHeaders['Set-Cookie'] = Array.isArray(existing) ? [...existing, cookie] : [existing, cookie];
-}
-
-function getOrCreateCsrfToken(req, resHeaders) {
-  const cookies = parseCookies(req);
-  let token = cookies.csrfToken;
-  if (!token || !/^[a-f0-9]{48}$/.test(token)) {
-    token = crypto.randomBytes(24).toString('hex');
-    appendSetCookie(resHeaders, `csrfToken=${readCookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
-  }
-  return token;
+function insertReturningId(sql) {
+  const row = querySql(`${sql} RETURNING id;`)[0];
+  return asInt(row?.id);
 }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -232,142 +78,54 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
 }
 
 function verifyPassword(password, encoded) {
-  if (!encoded || !encoded.includes(':')) return false;
+  if (!encoded || !String(encoded).includes(':')) return false;
   const [salt, expected] = String(encoded).split(':');
   const actual = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+  try {
+    return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+  } catch {
+    return false;
+  }
 }
 
-function createSession(userId, resHeaders) {
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + (1000 * 60 * 60 * 12)).toISOString();
-  runSql(`INSERT INTO sessions (session_token, user_id, expires_at) VALUES (${sqlValue(token)}, ${asInt(userId)}, ${sqlValue(expiresAt)});`);
-  appendSetCookie(resHeaders, `sessionToken=${readCookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200`);
+function parseCookies(req) {
+  return String(req.headers.cookie || '').split(';').reduce((cookies, part) => {
+    const [key, ...rest] = part.trim().split('=');
+    if (key) cookies[key] = decodeURIComponent(rest.join('='));
+    return cookies;
+  }, {});
 }
 
-function clearSession(req, resHeaders) {
+function cookieValue(value) {
+  return encodeURIComponent(String(value)).replace(/%20/g, '+');
+}
+
+function appendSetCookie(headers, cookie) {
+  const existing = headers['Set-Cookie'];
+  if (!existing) {
+    headers['Set-Cookie'] = cookie;
+    return;
+  }
+  headers['Set-Cookie'] = Array.isArray(existing) ? [...existing, cookie] : [existing, cookie];
+}
+
+function getOrCreateCsrfToken(req, headers) {
   const cookies = parseCookies(req);
-  const token = cookies.sessionToken;
-  if (token) runSql(`DELETE FROM sessions WHERE session_token=${sqlValue(token)};`);
-  appendSetCookie(resHeaders, 'sessionToken=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  let token = cookies.csrfToken;
+  if (!token || !/^[a-f0-9]{48}$/.test(token)) {
+    token = crypto.randomBytes(24).toString('hex');
+    appendSetCookie(headers, `csrfToken=${cookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
+  }
+  return token;
 }
 
-function getCurrentUser(req) {
-  const token = parseCookies(req).sessionToken;
-  if (!token) return null;
-  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.family_id
-    FROM sessions s
-    JOIN users u ON u.id = s.user_id
-    WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
-    LIMIT 1`);
-  return rows[0] || null;
+function csrfInput(token) {
+  return `<input type="hidden" name="csrfToken" value="${esc(token)}" />`;
 }
 
-function average(values) {
-  if (!values.length) return null;
-  const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
-  return total / values.length;
-}
-
-function formatAverage(value) {
-  return value === null ? '—' : `${value.toFixed(1)}%`;
-}
-
-function scoreTone(value) {
-  if (value === null) return 'tone-muted';
-  if (value >= 90) return 'tone-strong';
-  if (value >= 75) return 'tone-mid';
-  return 'tone-low';
-}
-
-function renderTermChart(points) {
-  if (!points.length) return '<p class="muted">No grade data yet for this learner.</p>';
-  const width = 860;
-  const height = 260;
-  const padX = 54;
-  const padTop = 20;
-  const padBottom = 50;
-  const innerWidth = width - (padX * 2);
-  const innerHeight = height - padTop - padBottom;
-  const maxIndex = Math.max(points.length - 1, 1);
-  const pointData = points.map((point, index) => {
-    const x = padX + ((innerWidth * index) / maxIndex);
-    const y = padTop + ((100 - point.value) / 100) * innerHeight;
-    return { ...point, x, y };
-  });
-
-  const linePath = pointData.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
-  const yTicks = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0].map((tick) => {
-    const y = padTop + ((100 - tick) / 100) * innerHeight;
-    return `<line x1="${padX}" y1="${y}" x2="${width - padX}" y2="${y}" class="chart-grid"></line><text x="${padX - 10}" y="${y + 4}" text-anchor="end" class="chart-axis">${tick}</text>`;
-  }).join('');
-  const xLabels = pointData.map((point) => `<text x="${point.x}" y="${height - 20}" text-anchor="middle" class="chart-axis">${esc(point.label)}</text>`).join('');
-  const dots = pointData.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="5" class="chart-point"><title>${esc(point.label)}: ${formatAverage(point.value)}</title></circle>`).join('');
-
-  return `<svg class="line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Student average by term">
-    ${yTicks}
-    <path d="${linePath}" class="chart-line" fill="none"></path>
-    ${dots}
-    ${xLabels}
-  </svg>`;
-}
-
-function renderSubjectMiniCharts(subjects) {
-  if (!subjects.length) return '<p class="muted">No subject-level scores to display yet.</p>';
-  return `<div class="subject-grid">${subjects.map((subject) => {
-    const max = Math.max(...subject.points.map((point) => point.value), 100);
-    const bars = subject.points.map((point) => {
-      const height = Math.max(8, (point.value / max) * 100);
-      return `<div class="mini-bar-wrap"><div class="mini-bar ${scoreTone(point.value)}" style="height:${height}%"></div><span>${esc(point.label)}</span></div>`;
-    }).join('');
-    return `<article class="subject-card">
-      <h3>${esc(subject.name)}</h3>
-      <p class="muted">Year avg: <strong>${formatAverage(subject.average)}</strong></p>
-      <div class="mini-chart" role="img" aria-label="${esc(subject.name)} averages by term">${bars}</div>
-    </article>`;
-  }).join('')}</div>`;
-}
-
-function canAccess(role, allowedRoles) {
-  return allowedRoles.includes(role);
-}
-
-function requireRole(user, allowedRoles) {
-  return Boolean(user && canAccess(user.role, allowedRoles));
-}
-
-function roleLabel(role) {
-  if (role === ROLE_ADMIN) return 'Admin';
-  if (role === ROLE_TEACHER) return 'Teacher';
-  if (role === ROLE_PARENT) return 'Parent';
-  return 'Unknown';
-}
-
-function settingsLink(pathname, currentPath, label) {
-  const active = pathname === currentPath ? 'active' : '';
-  return `<a class="settings-link ${active}" href="${pathname}">${label}</a>`;
-}
-
-function settingsShell(currentPath, title, description, body) {
-  return `<section class="hero"><h2>${title}</h2><p>${description}</p></section>
-  <div class="settings-layout">
-    <aside class="settings-nav" aria-label="Settings sections">
-      ${settingsLink('/settings/users', currentPath, 'Users')}
-      ${settingsLink('/settings/curriculum', currentPath, 'Curriculum')}
-      ${settingsLink('/settings/branding', currentPath, 'Branding')}
-    </aside>
-    <div class="stack">${body}</div>
-  </div>`;
-}
-
-function securityHeaders() {
-  return {
-    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-    'X-Frame-Options': 'DENY',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
-  };
+function requireCsrf(req, body) {
+  const cookies = parseCookies(req);
+  return Boolean(body.csrfToken && cookies.csrfToken && body.csrfToken === cookies.csrfToken);
 }
 
 function parseBody(req) {
@@ -385,745 +143,1368 @@ function parseBody(req) {
   });
 }
 
-function parseMultipartForm(req, sizeLimit = MAX_LOGO_UPLOAD_SIZE) {
-  return new Promise((resolve, reject) => {
-    const contentType = String(req.headers['content-type'] || '');
-    const boundaryMatch = contentType.match(/multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^;]+))/i);
-    if (!boundaryMatch) {
-      reject(new Error('Invalid multipart form data'));
-      return;
-    }
-    const boundary = `--${boundaryMatch[1] || boundaryMatch[2]}`;
-
-    const chunks = [];
-    let size = 0;
-
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > sizeLimit) {
-        reject(new Error('Payload too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('latin1');
-      const parts = raw.split(boundary).slice(1, -1);
-      const fields = {};
-      let file = null;
-
-      for (const part of parts) {
-        const cleaned = part.replace(/^\r\n/, '').replace(/\r\n$/, '');
-        if (!cleaned || cleaned === '--') continue;
-
-        const sepIndex = cleaned.indexOf('\r\n\r\n');
-        if (sepIndex < 0) continue;
-
-        const rawHeaders = cleaned.slice(0, sepIndex);
-        let rawBody = cleaned.slice(sepIndex + 4);
-        rawBody = rawBody.replace(/\r\n$/, '');
-
-        const disposition = rawHeaders.match(/content-disposition:\s*form-data;\s*([^\r\n]+)/i);
-        if (!disposition) continue;
-
-        const nameMatch = disposition[1].match(/name="([^"]+)"/i);
-        if (!nameMatch) continue;
-        const fieldName = nameMatch[1];
-
-        const filenameMatch = disposition[1].match(/filename="([^"]*)"/i);
-        if (filenameMatch && filenameMatch[1]) {
-          const typeMatch = rawHeaders.match(/content-type:\s*([^\r\n]+)/i);
-          file = {
-            fieldName,
-            filename: path.basename(filenameMatch[1]),
-            mimeType: String(typeMatch?.[1] || '').trim().toLowerCase(),
-            content: Buffer.from(rawBody, 'latin1')
-          };
-        } else {
-          fields[fieldName] = rawBody;
-        }
-      }
-
-      resolve({ fields, file });
-    });
-
-    req.on('error', reject);
-  });
-}
-
-function getCurrentLogoAsset() {
-  const candidates = ['png', 'jpg', 'jpeg', 'webp', 'svg'];
-  for (const ext of candidates) {
-    const filePath = path.join(PUBLIC_DIR, `custom-logo.${ext}`);
-    if (fs.existsSync(filePath)) {
-      return {
-        filePath,
-        mimeType: LOGO_MIME_BY_EXT[ext],
-        urlPath: '/assets/logo',
-        source: 'custom'
-      };
-    }
-  }
-
+function securityHeaders() {
   return {
-    filePath: DEFAULT_LOGO_FILE,
-    mimeType: 'image/svg+xml',
-    urlPath: '/assets/logo',
-    source: 'default'
+    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    'X-Frame-Options': 'DENY',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
   };
 }
 
-function clearCustomLogoFiles() {
-  ['png', 'jpg', 'jpeg', 'webp', 'svg'].forEach((ext) => {
-    const filePath = path.join(PUBLIC_DIR, `custom-logo.${ext}`);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  });
-}
-
-function sendHtml(res, html, extraHeaders = {}) {
-  res.writeHead(200, {
-    ...securityHeaders(),
-    ...extraHeaders,
-    'Content-Type': 'text/html; charset=utf-8'
-  });
+function sendHtml(res, html, headers = {}) {
+  res.writeHead(200, { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }
 
-function sendText(res, status, text) {
-  res.writeHead(status, {
-    ...securityHeaders(),
-    'Content-Type': 'text/plain; charset=utf-8'
-  });
+function sendText(res, status, text, headers = {}) {
+  res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
 }
 
-function redirect(res, location, extraHeaders = {}) {
-  res.writeHead(302, { ...securityHeaders(), ...extraHeaders, Location: location });
+function redirect(res, location, headers = {}) {
+  res.writeHead(302, { ...securityHeaders(), ...headers, Location: location });
   res.end();
 }
 
-function navLink(pathname, current, label) {
-  const active = current === pathname || (pathname !== '/' && current.startsWith(`${pathname}/`)) ? 'active' : '';
-  return `<a class="nav-link ${active}" href="${pathname}">${label}</a>`;
+function ensureDb() {
+  runSql(`
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS os_school_years (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  start_date TEXT,
+  end_date TEXT,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_families (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_name TEXT NOT NULL,
+  father_name TEXT,
+  mother_name TEXT,
+  phone TEXT,
+  email TEXT,
+  address TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_students (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_id INTEGER NOT NULL,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  birth_date TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (family_id) REFERENCES os_families(id)
+);
+CREATE TABLE IF NOT EXISTS os_teachers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_classrooms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  teacher_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
+);
+CREATE TABLE IF NOT EXISTS os_classroom_grades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  classroom_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  UNIQUE (classroom_id, grade_level),
+  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_student_years (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL,
+  school_year_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  classroom_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'enrolled',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (student_id, school_year_id),
+  FOREIGN KEY (student_id) REFERENCES os_students(id),
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id)
+);
+CREATE TABLE IF NOT EXISTS os_subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_grade_subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  UNIQUE (school_year_id, grade_level, subject_id),
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
+);
+CREATE TABLE IF NOT EXISTS os_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  classroom_id INTEGER,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  assignment_date TEXT,
+  max_score REAL NOT NULL DEFAULT 100,
+  teacher_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id),
+  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id),
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
+);
+CREATE TABLE IF NOT EXISTS os_scores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  assignment_id INTEGER NOT NULL,
+  student_id INTEGER NOT NULL,
+  score REAL,
+  note TEXT,
+  UNIQUE (assignment_id, student_id),
+  FOREIGN KEY (assignment_id) REFERENCES os_assignments(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES os_students(id)
+);
+CREATE TABLE IF NOT EXISTS os_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  username TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  teacher_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
+);
+CREATE TABLE IF NOT EXISTS os_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_token TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES os_users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
+CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
+`);
+
+  const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
+  if (!yearCount) {
+    runSql(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
+      VALUES ('2025-2026', '2025-08-15', '2026-05-31', 1);`);
+  }
+
+  const userCount = querySql('SELECT COUNT(*) AS count FROM os_users')[0]?.count || 0;
+  if (!userCount) {
+    runSql(`INSERT INTO os_users (name, username, role, password_hash)
+      VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
+  }
+
+  runSql("DELETE FROM os_sessions WHERE expires_at <= datetime('now');");
 }
 
-function sectionCard(title, body, subtitle = '') {
-  return `<section class="card"><div class="card-head"><h2>${title}</h2>${subtitle ? `<p>${subtitle}</p>` : ''}</div>${body}</section>`;
+function createSession(userId, headers) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + SESSION_HOURS * 60 * 60 * 1000).toISOString();
+  runSql(`INSERT INTO os_sessions (session_token, user_id, expires_at)
+    VALUES (${sqlValue(token)}, ${asInt(userId)}, ${sqlValue(expiresAt)});`);
+  appendSetCookie(headers, `sessionToken=${cookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_HOURS * 3600}`);
 }
 
-function pageTemplate({ title, currentPath, content, csrfToken, currentUser }) {
+function clearSession(req, headers) {
+  const token = parseCookies(req).sessionToken;
+  if (token) runSql(`DELETE FROM os_sessions WHERE session_token=${sqlValue(token)};`);
+  appendSetCookie(headers, 'sessionToken=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+}
+
+function currentUser(req) {
+  const token = parseCookies(req).sessionToken;
+  if (!token) return null;
+  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id
+    FROM os_sessions s
+    JOIN os_users u ON u.id = s.user_id
+    WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
+    LIMIT 1;`);
+  return rows[0] || null;
+}
+
+function isAdmin(user) {
+  return user?.role === ROLE_ADMIN;
+}
+
+function roleLabel(role) {
+  return role === ROLE_ADMIN ? 'Admin' : 'Teacher';
+}
+
+function getSchoolYears() {
+  return querySql('SELECT * FROM os_school_years ORDER BY start_date DESC, id DESC;');
+}
+
+function getSelectedYear(req, url) {
+  const years = getSchoolYears();
+  const requested = asInt(url.searchParams.get('yearId')) || asInt(parseCookies(req).selectedYearId);
+  const selected = years.find((year) => year.id === requested)
+    || years.find((year) => year.is_active)
+    || years[0]
+    || null;
+  return { years, selected };
+}
+
+function sortGrades(grades) {
+  const rank = (grade) => {
+    const text = String(grade);
+    if (/^pre-?k$/i.test(text)) return -2;
+    if (/^k(indergarten)?$/i.test(text)) return -1;
+    const number = Number(text);
+    return Number.isFinite(number) ? number : 100 + text.toLowerCase().charCodeAt(0);
+  };
+  return [...new Set(grades.filter(Boolean))].sort((a, b) => rank(a) - rank(b) || String(a).localeCompare(String(b)));
+}
+
+function promoteGrade(grade) {
+  const text = String(grade || '').trim();
+  if (/^pre-?k$/i.test(text)) return 'K';
+  if (/^k(indergarten)?$/i.test(text)) return '1';
+  const number = Number(text);
+  if (Number.isFinite(number)) return number >= 12 ? 'Graduated' : String(number + 1);
+  return text;
+}
+
+function average(values) {
+  const numeric = values.map(Number).filter(Number.isFinite);
+  if (!numeric.length) return null;
+  return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
+}
+
+function formatPercent(value) {
+  return value === null || value === undefined ? '&mdash;' : `${Number(value).toFixed(1)}%`;
+}
+
+function gradeTone(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 'quiet';
+  if (score >= 90) return 'good';
+  if (score >= 75) return 'watch';
+  return 'low';
+}
+
+function gradeOptions(selected = '') {
+  const common = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'Graduated'];
+  return common.map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
+}
+
+function categoryOptions(selected = 'Lesson') {
+  return CATEGORIES.map((category) => `<option value="${esc(category)}" ${category === selected ? 'selected' : ''}>${esc(category)}</option>`).join('');
+}
+
+function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
+  if (!user || user.role !== ROLE_TEACHER) return true;
+  if (!user.teacher_id) return false;
+  const roomClause = classroomId ? `AND c.id=${asInt(classroomId)}` : '';
+  const rows = querySql(`SELECT c.id
+    FROM os_classrooms c
+    JOIN os_classroom_grades cg ON cg.classroom_id = c.id
+    WHERE c.school_year_id=${asInt(yearId)}
+      AND c.teacher_id=${asInt(user.teacher_id)}
+      AND cg.grade_level=${sqlValue(grade)}
+      ${roomClause}
+    LIMIT 1;`);
+  return Boolean(rows.length);
+}
+
+function navLink(pathname, currentPath, label) {
+  const active = currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
+  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${esc(label)}</a>`;
+}
+
+function actionPanel(title, body, meta = '') {
+  return `<section class="panel">
+    <div class="panel-title"><h2>${esc(title)}</h2>${meta ? `<p>${meta}</p>` : ''}</div>
+    ${body}
+  </section>`;
+}
+
+function emptyState(text) {
+  return `<p class="empty">${esc(text)}</p>`;
+}
+
+function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
+  const yearSwitcher = user && selectedYear ? `<form class="year-form" method="post" action="/switch-year">
+      ${csrfInput(csrfToken)}
+      <select name="yearId" aria-label="School year">
+        ${years.map((year) => `<option value="${year.id}" ${year.id === selectedYear.id ? 'selected' : ''}>${esc(year.name)}</option>`).join('')}
+      </select>
+      <button type="submit" title="Switch school year">Go</button>
+    </form>` : '';
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>${esc(title)} &middot; Oakstead</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f3ea;
+  --paper: #fffdf7;
+  --paper-strong: #ffffff;
+  --ink: #1d211b;
+  --muted: #667062;
+  --line: #ded8c9;
+  --line-strong: #c8c0ae;
+  --accent: #2f6f4e;
+  --accent-dark: #205039;
+  --gold: #b97924;
+  --red: #a64233;
+  --blue: #345c8c;
+  --shadow: 0 18px 50px rgba(58, 47, 31, .09);
+  --radius: 8px;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #151712;
+  --paper: #20231d;
+  --paper-strong: #282c24;
+  --ink: #f5f1e5;
+  --muted: #b7b19f;
+  --line: #3a3d33;
+  --line-strong: #555847;
+  --accent: #8cc79f;
+  --accent-dark: #b4deb9;
+  --gold: #d6a34e;
+  --red: #e28a7d;
+  --blue: #97b7df;
+  --shadow: 0 18px 60px rgba(0, 0, 0, .35);
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-height: 100svh;
+  background:
+    linear-gradient(90deg, rgba(47,111,78,.04) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(0deg, rgba(47,111,78,.035) 1px, transparent 1px) 0 0 / 28px 28px,
+    var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+a { color: inherit; }
+button, input, select, textarea { font: inherit; }
+button, select, input { min-height: 42px; }
+.app {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .7rem;
+  padding: .75rem max(.85rem, env(safe-area-inset-left)) .65rem max(.85rem, env(safe-area-inset-right));
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(16px);
+}
+.brand-row, .top-actions, .year-form, .user-chip { display: flex; align-items: center; gap: .6rem; }
+.brand-row { justify-content: space-between; min-width: 0; }
+.brand { display: flex; align-items: center; gap: .65rem; min-width: 0; text-decoration: none; }
+.brand img { width: 44px; height: 44px; object-fit: contain; }
+.brand-text strong { display: block; font-size: 1.05rem; letter-spacing: 0; }
+.brand-text span { display: block; color: var(--muted); font-size: .78rem; margin-top: .05rem; }
+.top-actions { justify-content: space-between; flex-wrap: wrap; }
+.year-form { flex: 1 1 210px; }
+.year-form select { max-width: 220px; }
+.year-form button, .icon-btn, .logout-btn {
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: .48rem .68rem;
+  cursor: pointer;
+}
+.logout-form { margin: 0; }
+.user-chip { color: var(--muted); font-size: .84rem; white-space: nowrap; }
+.sidebar {
+  position: sticky;
+  top: 117px;
+  z-index: 10;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: .45rem;
+  overflow-x: auto;
+  padding: .55rem .85rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  scrollbar-width: none;
+}
+.sidebar::-webkit-scrollbar { display: none; }
+.nav-link {
+  text-decoration: none;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: .58rem .78rem;
+  font-weight: 700;
+  font-size: .88rem;
+  white-space: nowrap;
+  transition: color .18s ease, border-color .18s ease, transform .18s ease;
+}
+.nav-link.active { color: var(--paper-strong); background: var(--accent); border-color: var(--accent); }
+.nav-link:hover { transform: translateY(-1px); border-color: var(--accent); color: var(--accent-dark); }
+.nav-link.active:hover { color: var(--paper-strong); }
+.main {
+  padding: 1rem .85rem 3.5rem;
+}
+.workspace {
+  display: grid;
+  gap: 1rem;
+}
+.page-head {
+  display: grid;
+  gap: .35rem;
+  padding: .35rem 0 .1rem;
+}
+.page-head h1 {
+  margin: 0;
+  font-size: clamp(1.45rem, 4.5vw, 2.35rem);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+.page-head p { margin: 0; color: var(--muted); max-width: 760px; line-height: 1.45; }
+.ledger {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.ledger-head {
+  display: grid;
+  gap: .3rem;
+  padding: .95rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg));
+}
+.ledger-head h2, .panel-title h2 { margin: 0; font-size: 1rem; letter-spacing: 0; }
+.ledger-head p, .panel-title p { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.4; }
+.panel {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: .9rem;
+  box-shadow: var(--shadow);
+}
+.panel-title { display: grid; gap: .25rem; margin-bottom: .85rem; }
+.grid-2, .grid-3, .grid-4 { display: grid; gap: .7rem; grid-template-columns: 1fr; }
+.form-grid { display: grid; gap: .7rem; grid-template-columns: 1fr; }
+label { display: grid; gap: .32rem; color: var(--muted); font-size: .84rem; font-weight: 700; }
+input, select, textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+  color: var(--ink);
+  padding: .62rem .68rem;
+}
+textarea { min-height: 82px; resize: vertical; }
+input:focus, select:focus, textarea:focus {
+  outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent);
+}
+.primary-btn, button[type="submit"] {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  padding: .62rem .85rem;
+  cursor: pointer;
+}
+.secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+  color: var(--ink);
+  font-weight: 800;
+  padding: .62rem .85rem;
+}
+.inline-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .55rem; }
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem;
+}
+.kpi {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: .85rem;
+}
+.kpi span { display: block; color: var(--muted); font-size: .78rem; font-weight: 800; }
+.kpi strong { display: block; margin-top: .18rem; font-size: 1.55rem; line-height: 1; }
+.table-wrap { width: 100%; overflow-x: auto; }
+table { width: 100%; min-width: 760px; border-collapse: collapse; }
+th, td { padding: .68rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: .9rem; }
+th { color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg)); }
+tr:last-child td { border-bottom: 0; }
+.compact-table table { min-width: 560px; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: .18rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--paper-strong);
+  font-size: .78rem;
+  font-weight: 800;
+  margin: .05rem .18rem .05rem 0;
+}
+.badge.good { color: var(--accent-dark); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.badge.watch { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, var(--line)); }
+.badge.low { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+.split {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.filters {
+  display: grid;
+  gap: .7rem;
+  grid-template-columns: 1fr;
+}
+.score-sheet {
+  display: grid;
+  gap: .45rem;
+}
+.score-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 96px;
+  gap: .55rem;
+  align-items: center;
+  padding: .55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+}
+.score-row b { font-size: .92rem; }
+.score-row small { display: block; color: var(--muted); margin-top: .12rem; }
+.score-row input { text-align: center; font-weight: 800; }
+.quick-scores {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  display: flex;
+  gap: .38rem;
+  overflow-x: auto;
+  padding: .55rem 0 .2rem;
+  background: linear-gradient(180deg, transparent, var(--paper) 24%);
+}
+.quick-scores button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--paper-strong);
+  color: var(--ink);
+  font-weight: 900;
+  min-width: 54px;
+  cursor: pointer;
+}
+.empty {
+  margin: 0;
+  color: var(--muted);
+  padding: .8rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--paper-strong) 65%, transparent);
+}
+.login {
+  min-height: 100svh;
+  display: grid;
+  align-items: center;
+  padding: 1rem;
+}
+.login-panel {
+  width: min(440px, 100%);
+  margin: 0 auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 1rem;
+}
+.login-logo { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+.login-logo img { width: 56px; height: 56px; object-fit: contain; }
+.login-logo h1 { margin: 0; font-size: 1.55rem; }
+.login-logo p { margin: .1rem 0 0; color: var(--muted); }
+.notice { color: var(--muted); font-size: .86rem; line-height: 1.4; }
+.danger { color: var(--red); font-weight: 800; }
+@media (min-width: 720px) {
+  .topbar { grid-template-columns: 1fr auto; align-items: center; top: 0; }
+  .top-actions { justify-content: end; }
+  .sidebar { top: 70px; padding-inline: 1rem; }
+  .main { padding: 1.2rem 1rem 4rem; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; }
+  .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
+}
+@media (min-width: 1040px) {
+  .app { grid-template-columns: 230px 1fr; }
+  .topbar { grid-column: 1 / -1; }
+  .sidebar {
+    position: sticky;
+    top: 70px;
+    height: calc(100svh - 70px);
+    align-self: start;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    align-content: start;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+    padding: 1rem;
+  }
+  .nav-link { border-radius: var(--radius); }
+  .main { padding: 1.35rem 1.35rem 4rem; }
+  .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
+  .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media print {
+  body { background: #fff; color: #111; }
+  .topbar, .sidebar, .filters, .inline-actions, .quick-scores { display: none !important; }
+  .app { display: block; width: 100%; }
+  .main { padding: 0; }
+  .panel, .ledger, .kpi { box-shadow: none; break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand-row">
+      <a class="brand" href="/">
+        <img src="/assets/logo" alt="Oakstead" />
+        <span class="brand-text"><strong>Oakstead</strong><span>School records and gradebook</span></span>
+      </a>
+      <button id="themeToggle" class="icon-btn" type="button" title="Toggle theme">Theme</button>
+    </div>
+    <div class="top-actions">
+      ${yearSwitcher}
+      ${user ? `<span class="user-chip">${esc(user.name)} &middot; ${roleLabel(user.role)}</span>
+        <form class="logout-form" method="post" action="/logout">${csrfInput(csrfToken)}<button class="logout-btn" type="submit">Log out</button></form>` : ''}
+    </div>
+  </header>
+  ${user ? `<nav class="sidebar" aria-label="Primary">
+    ${navLink('/', currentPath, 'Dashboard')}
+    ${navLink('/families', currentPath, 'Families')}
+    ${navLink('/setup', currentPath, 'School Setup')}
+    ${navLink('/gradebook', currentPath, 'Gradebook')}
+    ${navLink('/reports', currentPath, 'Reports')}
+    ${navLink('/users', currentPath, 'Users')}
+  </nav>` : ''}
+  <main class="main">${content}</main>
+</div>
+<script>
+(function(){
+  const root = document.documentElement;
+  const saved = localStorage.getItem('oakstead-theme');
+  if (saved === 'dark') root.setAttribute('data-theme', 'dark');
+  const themeToggle = document.getElementById('themeToggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', function(){
+      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next === 'dark' ? 'dark' : '');
+      localStorage.setItem('oakstead-theme', next);
+    });
+  }
+
+  let activeScoreInput = null;
+  document.addEventListener('focusin', function(event) {
+    if (event.target.matches('[data-score-input]')) activeScoreInput = event.target;
+  });
+  document.querySelectorAll('[data-score-chip]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      const target = activeScoreInput || document.querySelector('[data-score-input]');
+      if (!target) return;
+      target.value = button.dataset.scoreChip;
+      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
+      if (next) {
+        next.focus();
+        next.select();
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>`;
+}
+
+function loginPage(csrfToken, hasError) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${esc(title)} · Oakstead</title>
-<style>
-:root {
-  color-scheme: light dark;
-  --bg: #f4f7ff;
-  --panel: rgba(255, 255, 255, 0.88);
-  --panel-soft: #ffffff;
-  --text: #121824;
-  --muted: #60708f;
-  --line: #dce3f1;
-  --brand: #4f46e5;
-  --brand-2: #2563eb;
-  --success: #0f766e;
-  --radius: 18px;
-  --shadow: 0 16px 40px rgba(13, 23, 49, 0.08);
-}
-[data-theme="dark"] {
-  --bg: #0b1020;
-  --panel: rgba(18, 26, 48, 0.9);
-  --panel-soft: #121a30;
-  --text: #ebf0ff;
-  --muted: #98a6c6;
-  --line: #253150;
-  --brand: #7c8cff;
-  --brand-2: #4f7cff;
-  --success: #2dd4bf;
-  --shadow: 0 18px 40px rgba(2, 6, 18, 0.5);
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-  background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.2), transparent 40%), var(--bg);
-  color: var(--text);
-}
-.container { width: min(1120px, 100% - 1.2rem); margin: 1rem auto 2.8rem; }
-.app-shell { background: var(--panel); border: 1px solid var(--line); border-radius: 26px; box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(12px); }
-.topbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; padding: 1rem; border-bottom: 1px solid var(--line); }
-.brand { display: flex; align-items: center; min-width: 0; }
-.brand-logo { width: min(320px, 65vw); height: auto; display: block; filter: drop-shadow(0 2px 8px rgba(0,0,0,.08)); }
-.theme-btn { border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; background: var(--panel-soft); color: var(--text); font-weight: 600; cursor: pointer; }
-.layout { display: grid; grid-template-columns: 1fr; }
-.sidebar { padding: 1rem; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .5rem; }
-.nav-link { text-decoration: none; color: var(--text); background: var(--panel-soft); border: 1px solid var(--line); border-radius: 12px; padding: .65rem .7rem; text-align: center; font-weight: 600; font-size: .9rem; }
-.nav-link.active { border-color: transparent; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; }
-.main { padding: 1rem; }
-.hero { margin-bottom: 1rem; }
-.hero h2 { margin: 0; font-size: 1.35rem; }
-.hero p { margin: .5rem 0 0; color: var(--muted); }
-.kpi-grid { display: grid; gap: .8rem; grid-template-columns: repeat(2, minmax(0,1fr)); margin-top: 1rem; }
-.kpi { background: var(--panel-soft); border: 1px solid var(--line); border-radius: 14px; padding: .85rem; }
-.kpi .label { color: var(--muted); font-size: .82rem; margin-bottom: .25rem; }
-.kpi .value { font-size: 1.45rem; font-weight: 700; }
-.stack { display: grid; gap: .85rem; }
-.card { background: var(--panel-soft); border: 1px solid var(--line); border-radius: var(--radius); padding: .95rem; }
-.card-head h2 { margin: 0; font-size: 1rem; }
-.card-head p { margin: .35rem 0 .8rem; font-size: .86rem; color: var(--muted); }
-.form-grid { display: grid; grid-template-columns: 1fr; gap: .65rem; }
-label { font-size: .85rem; color: var(--muted); display: block; }
-input, select { width: 100%; margin-top: .35rem; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: .62rem .7rem; color: var(--text); font: inherit; }
-button[type="submit"], .button { display:inline-flex; align-items:center; justify-content:center; border: none; border-radius: 12px; padding: .68rem .95rem; font-weight: 700; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; cursor: pointer; }
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin-top: .9rem; }
-table { width: 100%; border-collapse: collapse; min-width: 640px; }
-th, td { padding: .6rem .65rem; border-bottom: 1px solid var(--line); font-size: .86rem; text-align: left; }
-th { color: var(--muted); font-weight: 600; }
-.muted { color: var(--muted); font-size: .86rem; }
-.logo-help { margin: .35rem 0 .1rem; color: var(--muted); font-size: .85rem; }
-.logo-preview { max-width: min(420px, 100%); height: auto; display: block; margin-top: .75rem; border: 1px solid var(--line); border-radius: 12px; padding: .55rem; background: var(--panel); }
-.user-chip { display:inline-flex; align-items:center; gap:.45rem; font-size:.82rem; color:var(--muted); margin-right:.6rem; }
-.header-actions { display:flex; align-items:center; gap:.55rem; flex-wrap:wrap; justify-content:flex-end; }
-.logout-form { margin: 0; }
-.logout-btn { border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; background: transparent; color: var(--text); font-weight: 600; cursor: pointer; }
-.settings-layout { display:grid; grid-template-columns:1fr; gap:.75rem; }
-.settings-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.5rem; }
-.settings-link { text-decoration:none; color:var(--text); background:var(--panel-soft); border:1px solid var(--line); border-radius:10px; padding:.55rem .6rem; text-align:center; font-weight:600; font-size:.85rem; }
-.settings-link.active { border-color: transparent; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color:#fff; }
-.inline-actions { display:flex; align-items:center; gap:.55rem; flex-wrap:wrap; }
-.line-chart { width: 100%; height: auto; max-height: 360px; }
-.chart-grid { stroke: var(--line); stroke-width: 1; }
-.chart-axis { fill: var(--muted); font-size: 12px; }
-.chart-line { stroke: var(--brand); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
-.chart-point { fill: var(--brand-2); }
-.subject-grid { display:grid; gap:.75rem; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); }
-.subject-card { border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:.7rem; }
-.subject-card h3 { margin:.1rem 0 .25rem; font-size:.95rem; }
-.mini-chart { display:grid; grid-template-columns:repeat(auto-fit,minmax(30px,1fr)); gap:.45rem; align-items:end; min-height:130px; margin-top:.45rem; }
-.mini-bar-wrap { text-align:center; display:grid; gap:.35rem; }
-.mini-bar { width:100%; border-radius:8px 8px 4px 4px; min-height:8px; }
-.mini-bar-wrap span { font-size:.73rem; color:var(--muted); }
-.tone-muted { background: color-mix(in srgb, var(--muted) 45%, transparent); }
-.tone-low { background: linear-gradient(180deg, #fb7185, #ef4444); }
-.tone-mid { background: linear-gradient(180deg, #f59e0b, #f97316); }
-.tone-strong { background: linear-gradient(180deg, #10b981, #14b8a6); }
-input[type="hidden"] { display:none; }
-@media (min-width: 760px) {
-  .container { width: min(1200px, 100% - 2rem); margin-top: 1.4rem; }
-  .layout { grid-template-columns: 220px 1fr; }
-  .sidebar { border-bottom: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-content: start; }
-  .main { padding: 1.2rem; }
-  .form-grid.cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .kpi-grid { grid-template-columns: repeat(5, minmax(0,1fr)); }
-  .brand-logo { width: 360px; }
-  .settings-layout { grid-template-columns: 220px 1fr; align-items:start; }
-  .settings-nav { grid-template-columns:1fr; }
-}
-@media print {
-  body { background: #fff !important; color: #111 !important; }
-  .container { width: 100%; margin: 0; }
-  .app-shell { box-shadow: none; border: 0; border-radius: 0; }
-  .topbar, .sidebar, .inline-actions, .settings-nav { display: none !important; }
-  .main { padding: 0; }
-  .card, .subject-card { break-inside: avoid; }
-}
-</style>
+<title>Sign in &middot; Oakstead</title>
+<style>${pageTemplate({ title: 'x', currentPath: '', content: '', csrfToken, user: null }).match(/<style>([\s\S]*?)<\/style>/)[1]}</style>
 </head>
 <body>
-<div class="container">
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand"><img class="brand-logo" src="/assets/logo" alt="Oakstead logo" /></div>
-      <div class="header-actions">
-        ${currentUser ? `<span class="user-chip">${esc(currentUser.name)} · ${roleLabel(currentUser.role)}</span>
-        <form class="logout-form" method="post" action="/logout">${csrfInput(csrfToken)}<button class="logout-btn" type="submit">Log out</button></form>` : ''}
-        <button id="themeToggle" class="theme-btn" type="button" aria-label="Toggle dark mode">Toggle theme</button>
-      </div>
-    </header>
-    <div class="layout">
-      <nav class="sidebar" aria-label="Primary navigation">
-        ${navLink('/', currentPath, 'Dashboard')}
-        ${navLink('/families', currentPath, 'Families')}
-        ${navLink('/gradebook', currentPath, 'Gradebook')}
-        ${navLink('/reports', currentPath, 'Reports')}
-        ${navLink('/settings', currentPath, 'Settings')}
-      </nav>
-      <main class="main">
-        ${content}
-      </main>
+<main class="login">
+  <section class="login-panel">
+    <div class="login-logo">
+      <img src="/assets/logo" alt="Oakstead" />
+      <div><h1>Oakstead</h1><p>School records and gradebook</p></div>
     </div>
-  </div>
-</div>
-<script>
-(function(){
-  const root = document.documentElement;
-  const key = 'school-theme';
-  const saved = localStorage.getItem(key);
-  if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved);
-  const button = document.getElementById('themeToggle');
-  const updateLabel = () => {
-    const dark = root.getAttribute('data-theme') === 'dark';
-    button.textContent = dark ? 'Switch to light' : 'Switch to dark';
-  };
-  updateLabel();
-  button.addEventListener('click', function() {
-    const dark = root.getAttribute('data-theme') === 'dark';
-    const next = dark ? 'light' : 'dark';
-    root.setAttribute('data-theme', next);
-    localStorage.setItem(key, next);
-    updateLabel();
-  });
-})();
-</script>
-${csrfToken ? `<!-- csrf:${csrfToken.slice(0, 8)} -->` : ''}
+    <form method="post" action="/login" class="form-grid">
+      ${csrfInput(csrfToken)}
+      <label>Username<input name="username" autocomplete="username" required maxlength="80" /></label>
+      <label>Password<input type="password" name="password" autocomplete="current-password" required maxlength="120" /></label>
+      <button type="submit">Sign in</button>
+    </form>
+    ${hasError ? '<p class="notice danger">That username or password did not match.</p>' : '<p class="notice">Default administrator: admin / ChangeMeNow!</p>'}
+  </section>
+</main>
 </body>
 </html>`;
 }
 
-function csrfInput(token) {
-  return `<input type="hidden" name="csrfToken" value="${token}" />`;
+function schoolYearHead(title, description, selectedYear) {
+  return `<header class="page-head">
+    <h1>${esc(title)}</h1>
+    <p>${esc(description)} ${selectedYear ? `Current view: ${selectedYear.name}.` : ''}</p>
+  </header>`;
 }
 
-function requireCsrf(req, body) {
-  const cookies = parseCookies(req);
-  return Boolean(body.csrfToken && cookies.csrfToken && body.csrfToken === cookies.csrfToken);
+function logoAsset() {
+  return fs.existsSync(DEFAULT_LOGO_FILE) ? DEFAULT_LOGO_FILE : path.join(__dirname, 'assets', 'oakstead-logo.svg');
+}
+
+function dashboardPage(selectedYear) {
+  const yearId = asInt(selectedYear.id);
+  const kpis = {
+    families: querySql('SELECT COUNT(*) AS c FROM os_families;')[0]?.c || 0,
+    students: querySql(`SELECT COUNT(*) AS c FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`)[0]?.c || 0,
+    teachers: querySql('SELECT COUNT(*) AS c FROM os_teachers;')[0]?.c || 0,
+    classrooms: querySql(`SELECT COUNT(*) AS c FROM os_classrooms WHERE school_year_id=${yearId};`)[0]?.c || 0,
+    assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments WHERE school_year_id=${yearId};`)[0]?.c || 0
+  };
+  const recent = querySql(`SELECT a.title, a.category, a.grade_level, s.name AS subject_name,
+      COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score
+    FROM os_assignments a
+    JOIN os_subjects s ON s.id = a.subject_id
+    LEFT JOIN os_scores sc ON sc.assignment_id = a.id
+    WHERE a.school_year_id=${yearId}
+    GROUP BY a.id
+    ORDER BY a.assignment_date DESC, a.id DESC
+    LIMIT 8;`);
+  const roster = querySql(`SELECT sy.grade_level, COUNT(*) AS count
+    FROM os_student_years sy
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+    GROUP BY sy.grade_level;`);
+  const gradeBadges = sortGrades(roster.map((row) => row.grade_level))
+    .map((grade) => {
+      const row = roster.find((entry) => entry.grade_level === grade);
+      return `<span class="badge">Grade ${esc(grade)} &middot; ${row?.count || 0}</span>`;
+    }).join('') || '<span class="badge">No students enrolled</span>';
+
+  return `<div class="workspace">
+    ${schoolYearHead('Dashboard', 'A compact working view for enrollment, classrooms, and grades.', selectedYear)}
+    <section class="kpis">
+      <article class="kpi"><span>Families</span><strong>${kpis.families}</strong></article>
+      <article class="kpi"><span>Students</span><strong>${kpis.students}</strong></article>
+      <article class="kpi"><span>Teachers</span><strong>${kpis.teachers}</strong></article>
+      <article class="kpi"><span>Classrooms</span><strong>${kpis.classrooms}</strong></article>
+      <article class="kpi"><span>Assignments</span><strong>${kpis.assignments}</strong></article>
+    </section>
+    <div class="split">
+      ${actionPanel('Roster by Grade', gradeBadges)}
+      <section class="ledger">
+        <div class="ledger-head"><h2>Recent Gradebook Entries</h2><p>Newest lessons, quizzes, and tests in this school year.</p></div>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Assignment</th><th>Type</th><th>Grade</th><th>Subject</th><th>Class Avg</th></tr>
+          ${recent.map((row) => `<tr><td>${esc(row.title)}</td><td>${esc(row.category)}</td><td>${esc(row.grade_level)}</td><td>${esc(row.subject_name)}</td><td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No grades have been entered for this year yet.')}</td></tr>`}
+        </table></div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function familiesPage(selectedYear, csrfToken) {
+  const yearId = asInt(selectedYear.id);
+  const families = querySql(`SELECT f.*,
+      COUNT(st.id) AS child_count
+    FROM os_families f
+    LEFT JOIN os_students st ON st.family_id = f.id
+    GROUP BY f.id
+    ORDER BY f.family_name;`);
+  const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, c.name AS classroom_name
+    FROM os_students st
+    JOIN os_families f ON f.id = st.family_id
+    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
+    LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
+    ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`);
+  const classrooms = querySql(`SELECT id, name FROM os_classrooms WHERE school_year_id=${yearId} ORDER BY name;`);
+  const familyOptions = families.map((family) => `<option value="${family.id}">${esc(family.family_name)}</option>`).join('');
+  const classroomOptions = classrooms.map((room) => `<option value="${room.id}">${esc(room.name)}</option>`).join('');
+  const unenrolledOptions = students.filter((student) => !student.grade_level)
+    .map((student) => `<option value="${student.id}">${esc(`${student.first_name} ${student.last_name} - ${student.family_name}`)}</option>`).join('');
+
+  return `<div class="workspace">
+    ${schoolYearHead('Families', "Enter households, children, birthdays, and each child's school-year placement.", selectedYear)}
+    <div class="split">
+      <div class="workspace">
+        ${actionPanel('Add Family', `<form method="post" action="/families" class="form-grid two">
+          ${csrfInput(csrfToken)}
+          <label>Family Name<input name="familyName" required maxlength="120" /></label>
+          <label>Phone<input name="phone" inputmode="tel" maxlength="40" /></label>
+          <label>Father<input name="fatherName" maxlength="120" /></label>
+          <label>Mother<input name="motherName" maxlength="120" /></label>
+          <label>Email<input name="email" type="email" maxlength="160" /></label>
+          <label>Address<input name="address" maxlength="220" /></label>
+          <button type="submit">Save Family</button>
+        </form>`)}
+        ${actionPanel('Add Child', `<form method="post" action="/students" class="form-grid two">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <label>First Name<input name="firstName" required maxlength="80" /></label>
+          <label>Last Name<input name="lastName" required maxlength="80" /></label>
+          <label>Birthday<input type="date" name="birthDate" /></label>
+          <label>Family<select name="familyId" required><option value="">Choose family</option>${familyOptions}</select></label>
+          <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
+          <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions}</select></label>
+          <button type="submit">Save Child</button>
+        </form>`)}
+        ${actionPanel('Enroll Existing Child', `<form method="post" action="/enrollments" class="form-grid two">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <label>Child<select name="studentId" required><option value="">Choose child</option>${unenrolledOptions}</select></label>
+          <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
+          <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions}</select></label>
+          <button type="submit">Enroll in ${esc(selectedYear.name)}</button>
+        </form>`, 'Use this when a child exists from a prior school year but is not enrolled in the selected year.')}
+      </div>
+      <section class="ledger">
+        <div class="ledger-head"><h2>Family Directory</h2><p>Households and enrolled children for the selected school year.</p></div>
+        <div class="table-wrap"><table>
+          <tr><th>Family</th><th>Parents</th><th>Contact</th><th>Children</th></tr>
+          ${families.map((family) => {
+            const kids = students.filter((student) => student.family_id === family.id)
+              .map((student) => `<span class="badge">${esc(student.first_name)} ${esc(student.last_name)} &middot; ${esc(student.grade_level || 'not enrolled')}${student.classroom_name ? ` &middot; ${esc(student.classroom_name)}` : ''}</span>`)
+              .join('');
+            return `<tr><td><strong>${esc(family.family_name)}</strong></td><td>${esc([family.father_name, family.mother_name].filter(Boolean).join(' / ')) || '&mdash;'}</td><td>${esc([family.phone, family.email].filter(Boolean).join(' - ')) || '&mdash;'}<br>${esc(family.address || '')}</td><td>${kids || '&mdash;'}</td></tr>`;
+          }).join('') || `<tr><td colspan="4">${emptyState('No families have been entered yet.')}</td></tr>`}
+        </table></div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function setupPage(selectedYear, csrfToken) {
+  const yearId = asInt(selectedYear.id);
+  const teachers = querySql('SELECT * FROM os_teachers ORDER BY name;');
+  const subjects = querySql('SELECT * FROM os_subjects ORDER BY name;');
+  const classrooms = querySql(`SELECT c.*, t.name AS teacher_name,
+      GROUP_CONCAT(cg.grade_level, ', ') AS grades
+    FROM os_classrooms c
+    LEFT JOIN os_teachers t ON t.id = c.teacher_id
+    LEFT JOIN os_classroom_grades cg ON cg.classroom_id = c.id
+    WHERE c.school_year_id=${yearId}
+    GROUP BY c.id
+    ORDER BY c.name;`);
+  const gradeSubjects = querySql(`SELECT gs.grade_level, s.name AS subject_name
+    FROM os_grade_subjects gs
+    JOIN os_subjects s ON s.id = gs.subject_id
+    WHERE gs.school_year_id=${yearId}
+    ORDER BY gs.grade_level, s.name;`);
+  const teacherOptions = teachers.map((teacher) => `<option value="${teacher.id}">${esc(teacher.name)}</option>`).join('');
+  const subjectOptions = subjects.map((subject) => `<option value="${subject.id}">${esc(subject.name)}</option>`).join('');
+
+  return `<div class="workspace">
+    ${schoolYearHead('School Setup', 'Set school years, teachers, classrooms, grades, and grade-level subjects.', selectedYear)}
+    <div class="split">
+      <div class="workspace">
+        ${actionPanel('Teachers', `<form method="post" action="/teachers" class="form-grid three">
+          ${csrfInput(csrfToken)}
+          <label>Name<input name="name" required maxlength="120" /></label>
+          <label>Email<input name="email" type="email" maxlength="160" /></label>
+          <label>Phone<input name="phone" inputmode="tel" maxlength="40" /></label>
+          <button type="submit">Save Teacher</button>
+        </form>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Name</th><th>Email</th><th>Phone</th></tr>
+          ${teachers.map((teacher) => `<tr><td>${esc(teacher.name)}</td><td>${esc(teacher.email || '') || '&mdash;'}</td><td>${esc(teacher.phone || '') || '&mdash;'}</td></tr>`).join('') || `<tr><td colspan="3">${emptyState('No teachers yet.')}</td></tr>`}
+        </table></div>`)}
+        ${actionPanel('Classrooms', `<form method="post" action="/classrooms" class="form-grid three">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <label>Room Name<input name="name" placeholder="Upper Room" required maxlength="120" /></label>
+          <label>Teacher<select name="teacherId"><option value="">Unassigned</option>${teacherOptions}</select></label>
+          <label>Grades in Room<input name="grades" placeholder="3, 4" required maxlength="120" /></label>
+          <button type="submit">Save Classroom</button>
+        </form>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Classroom</th><th>Teacher</th><th>Grades</th></tr>
+          ${classrooms.map((room) => `<tr><td>${esc(room.name)}</td><td>${esc(room.teacher_name || 'Unassigned')}</td><td>${String(room.grades || '').split(',').filter(Boolean).map((grade) => `<span class="badge">${esc(grade.trim())}</span>`).join('')}</td></tr>`).join('') || `<tr><td colspan="3">${emptyState('No classrooms for this year yet.')}</td></tr>`}
+        </table></div>`)}
+      </div>
+      <div class="workspace">
+        ${actionPanel('Subjects by Grade', `<form method="post" action="/subjects" class="form-grid two">
+          ${csrfInput(csrfToken)}
+          <label>New Subject<input name="name" placeholder="Arithmetic" required maxlength="120" /></label>
+          <button type="submit">Add Subject</button>
+        </form>
+        <form method="post" action="/grade-subjects" class="form-grid three" style="margin-top:.8rem">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
+          <label>Subject<select name="subjectId" required><option value="">Choose subject</option>${subjectOptions}</select></label>
+          <button type="submit">Assign Subject</button>
+        </form>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Grade</th><th>Subjects</th></tr>
+          ${sortGrades(gradeSubjects.map((row) => row.grade_level)).map((grade) => `<tr><td>${esc(grade)}</td><td>${gradeSubjects.filter((row) => row.grade_level === grade).map((row) => `<span class="badge">${esc(row.subject_name)}</span>`).join('')}</td></tr>`).join('') || `<tr><td colspan="2">${emptyState('No subjects have been assigned to grades yet.')}</td></tr>`}
+        </table></div>`)}
+        ${actionPanel('School Years', `<form method="post" action="/school-years" class="form-grid two">
+          ${csrfInput(csrfToken)}
+          <label>Name<input name="name" placeholder="2026-2027" required maxlength="40" /></label>
+          <label>Start Date<input type="date" name="startDate" /></label>
+          <label>End Date<input type="date" name="endDate" /></label>
+          <label>Make Active<select name="makeActive"><option value="1">Yes</option><option value="0">No</option></select></label>
+          <button type="submit">Create Year</button>
+        </form>
+        <form method="post" action="/promote-year" class="form-grid two" style="margin-top:.8rem">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="fromYearId" value="${yearId}" />
+          <label>Next Year Name<input name="name" placeholder="2026-2027" required maxlength="40" /></label>
+          <label>Start Date<input type="date" name="startDate" /></label>
+          <label>End Date<input type="date" name="endDate" /></label>
+          <label>Make Active<select name="makeActive"><option value="1">Yes</option><option value="0">No</option></select></label>
+          <button type="submit">Promote Students</button>
+        </form>`, 'Promotion creates new year-specific enrollment records and leaves prior grades untouched.')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function gradebookPage(req, url, user, selectedYear, csrfToken) {
+  const yearId = asInt(selectedYear.id);
+  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  const selectedSubjectId = asInt(url.searchParams.get('subjectId'));
+  const selectedClassroomId = asInt(url.searchParams.get('classroomId'));
+  const allGrades = sortGrades([
+    ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level),
+    ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((row) => row.grade_level)
+  ]);
+  const teacherRoomFilter = user.role === ROLE_TEACHER ? `AND c.teacher_id=${asInt(user.teacher_id)}` : '';
+  const classrooms = querySql(`SELECT c.id, c.name, GROUP_CONCAT(cg.grade_level, ', ') AS grades
+    FROM os_classrooms c
+    LEFT JOIN os_classroom_grades cg ON cg.classroom_id = c.id
+    WHERE c.school_year_id=${yearId} ${teacherRoomFilter}
+    GROUP BY c.id
+    ORDER BY c.name;`);
+  const subjects = selectedGrade
+    ? querySql(`SELECT s.id, s.name
+        FROM os_grade_subjects gs
+        JOIN os_subjects s ON s.id = gs.subject_id
+        WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)}
+        ORDER BY s.name;`)
+    : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
+  const subject = subjects.find((row) => row.id === selectedSubjectId);
+  const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, selectedClassroomId);
+  const classroomClause = selectedClassroomId ? `AND sy.classroom_id=${selectedClassroomId}` : '';
+  const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
+  const students = selectedGrade && allowed ? querySql(`SELECT st.id, st.first_name, st.last_name, st.birth_date, c.name AS classroom_name
+      FROM os_student_years sy
+      JOIN os_students st ON st.id = sy.student_id
+      LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
+      WHERE sy.school_year_id=${yearId}
+        AND sy.grade_level=${sqlValue(selectedGrade)}
+        AND sy.status='enrolled'
+        ${classroomClause}
+        ${teacherStudentClause}
+      ORDER BY st.last_name, st.first_name;`) : [];
+  const assignments = selectedGrade && selectedSubjectId ? querySql(`SELECT a.*, s.name AS subject_name,
+      COUNT(sc.id) AS score_count,
+      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score
+    FROM os_assignments a
+    JOIN os_subjects s ON s.id = a.subject_id
+    LEFT JOIN os_scores sc ON sc.assignment_id = a.id
+    WHERE a.school_year_id=${yearId}
+      AND a.grade_level=${sqlValue(selectedGrade)}
+      AND a.subject_id=${selectedSubjectId}
+      ${selectedClassroomId ? `AND COALESCE(a.classroom_id, 0)=${selectedClassroomId}` : ''}
+    GROUP BY a.id
+    ORDER BY a.assignment_date DESC, a.id DESC
+    LIMIT 18;`) : [];
+
+  const gradeSelect = `<select name="grade" required><option value="">Grade</option>${allGrades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
+  const subjectSelect = `<select name="subjectId" required><option value="">Subject</option>${subjects.map((subj) => `<option value="${subj.id}" ${subj.id === selectedSubjectId ? 'selected' : ''}>${esc(subj.name)}</option>`).join('')}</select>`;
+  const classroomSelect = `<select name="classroomId"><option value="">All classrooms</option>${classrooms.map((room) => `<option value="${room.id}" ${room.id === selectedClassroomId ? 'selected' : ''}>${esc(room.name)}${room.grades ? ` - ${esc(room.grades)}` : ''}</option>`).join('')}</select>`;
+
+  return `<div class="workspace">
+    ${schoolYearHead('Gradebook', 'Choose a year, grade, subject, and lesson; then enter the whole class at once.', selectedYear)}
+    <section class="panel">
+      <form method="get" action="/gradebook" class="filters">
+        <input type="hidden" name="yearId" value="${yearId}" />
+        <label>Grade${gradeSelect}</label>
+        <label>Subject${subjectSelect}</label>
+        <label>Classroom${classroomSelect}</label>
+        <button type="submit">Load Class</button>
+      </form>
+    </section>
+    <div class="split">
+      ${actionPanel('Enter Scores', !allowed ? emptyState('This grade is not assigned to your teacher account.')
+        : (!selectedGrade || !selectedSubjectId ? emptyState('Select a grade and subject to begin.')
+          : `<form method="post" action="/gradebook" class="form-grid">
+            ${csrfInput(csrfToken)}
+            <input type="hidden" name="schoolYearId" value="${yearId}" />
+            <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+            <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+            <input type="hidden" name="classroomId" value="${selectedClassroomId || ''}" />
+            <div class="form-grid three">
+              <label>Lesson / Assignment<input name="title" placeholder="Lesson 24" required maxlength="140" /></label>
+              <label>Type<select name="category">${categoryOptions()}</select></label>
+              <label>Date<input type="date" name="assignmentDate" value="${new Date().toISOString().slice(0, 10)}" /></label>
+              <label>Max Score<input type="number" name="maxScore" value="100" min="1" max="1000" step="0.01" required /></label>
+            </div>
+            <div class="quick-scores" aria-label="Quick scores">
+              ${[100, 95, 90, 85, 80, 75, 70, 65, 60, 0].map((score) => `<button type="button" data-score-chip="${score}">${score}</button>`).join('')}
+            </div>
+            <div class="score-sheet">
+              ${students.map((student) => `<div class="score-row">
+                <div><b>${esc(`${student.last_name}, ${student.first_name}`)}</b><small>${esc(student.classroom_name || 'No classroom')}</small></div>
+                <input data-score-input name="score_${student.id}" type="number" inputmode="decimal" min="0" max="1000" step="0.01" autocomplete="off" />
+              </div>`).join('') || emptyState('No enrolled students match this selection.')}
+            </div>
+            <button type="submit">Save Scores</button>
+          </form>`), subject ? `Grade ${esc(selectedGrade)} &middot; ${esc(subject.name)}` : '')}
+      <section class="ledger">
+        <div class="ledger-head"><h2>Assignment History</h2><p>Recent entries for the loaded grade and subject.</p></div>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Date</th><th>Assignment</th><th>Type</th><th>Scores</th><th>Average</th></tr>
+          ${assignments.map((assignment) => `<tr><td>${esc(assignment.assignment_date || '') || '&mdash;'}</td><td>${esc(assignment.title)}</td><td>${esc(assignment.category)}</td><td>${assignment.score_count}</td><td><span class="badge ${gradeTone(assignment.avg_score)}">${formatPercent(assignment.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No assignment history for this selection yet.')}</td></tr>`}
+        </table></div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function reportsPage(url, selectedYear) {
+  const yearId = asInt(selectedYear.id);
+  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  const gradeClause = selectedGrade ? `AND a.grade_level=${sqlValue(selectedGrade)}` : '';
+  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level));
+  const classRows = querySql(`SELECT a.grade_level, s.name AS subject_name,
+      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score,
+      COUNT(sc.id) AS score_count
+    FROM os_assignments a
+    JOIN os_subjects s ON s.id = a.subject_id
+    LEFT JOIN os_scores sc ON sc.assignment_id = a.id
+    WHERE a.school_year_id=${yearId} ${gradeClause}
+    GROUP BY a.grade_level, a.subject_id
+    ORDER BY a.grade_level, s.name;`);
+  const studentRows = querySql(`SELECT st.id, st.last_name, st.first_name, sy.grade_level, s.name AS subject_name,
+      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score
+    FROM os_scores sc
+    JOIN os_assignments a ON a.id = sc.assignment_id
+    JOIN os_subjects s ON s.id = a.subject_id
+    JOIN os_students st ON st.id = sc.student_id
+    JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id
+    WHERE a.school_year_id=${yearId} ${gradeClause}
+    GROUP BY st.id, a.subject_id
+    ORDER BY sy.grade_level, st.last_name, st.first_name, s.name;`);
+  const studentIds = [...new Set(studentRows.map((row) => row.id))];
+
+  return `<div class="workspace">
+    ${schoolYearHead('Reports', 'Review averages by subject, student, class, and school year.', selectedYear)}
+    <section class="panel">
+      <form method="get" action="/reports" class="filters">
+        <input type="hidden" name="yearId" value="${yearId}" />
+        <label>Grade<select name="grade"><option value="">All grades</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select></label>
+        <button type="submit">Load Report</button>
+        <button class="secondary-btn" type="button" onclick="window.print()">Print</button>
+      </form>
+    </section>
+    <div class="split">
+      <section class="ledger">
+        <div class="ledger-head"><h2>Class Averages</h2><p>Subject averages across the selected grade scope.</p></div>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Grade</th><th>Subject</th><th>Scores</th><th>Average</th></tr>
+          ${classRows.map((row) => `<tr><td>${esc(row.grade_level)}</td><td>${esc(row.subject_name)}</td><td>${row.score_count}</td><td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="4">${emptyState('No class averages available yet.')}</td></tr>`}
+        </table></div>
+      </section>
+      <section class="ledger">
+        <div class="ledger-head"><h2>Student Subject Averages</h2><p>Each student's current average per subject.</p></div>
+        <div class="table-wrap"><table>
+          <tr><th>Student</th><th>Grade</th><th>Subjects</th></tr>
+          ${studentIds.map((id) => {
+            const rows = studentRows.filter((row) => row.id === id);
+            const first = rows[0];
+            return `<tr><td>${esc(`${first.last_name}, ${first.first_name}`)}</td><td>${esc(first.grade_level)}</td><td>${rows.map((row) => `<span class="badge ${gradeTone(row.avg_score)}">${esc(row.subject_name)} &middot; ${formatPercent(row.avg_score)}</span>`).join('')}</td></tr>`;
+          }).join('') || `<tr><td colspan="3">${emptyState('No student averages available yet.')}</td></tr>`}
+        </table></div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function usersPage(csrfToken) {
+  const users = querySql(`SELECT u.id, u.name, u.username, u.role, t.name AS teacher_name
+    FROM os_users u
+    LEFT JOIN os_teachers t ON t.id = u.teacher_id
+    ORDER BY u.name;`);
+  const teachers = querySql('SELECT id, name FROM os_teachers ORDER BY name;');
+  const teacherOptions = teachers.map((teacher) => `<option value="${teacher.id}">${esc(teacher.name)}</option>`).join('');
+  return `<div class="workspace">
+    <header class="page-head"><h1>Users</h1><p>Create administrator and teacher sign-ins.</p></header>
+    <div class="split">
+      ${actionPanel('Create User', `<form method="post" action="/users" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>Name<input name="name" required maxlength="120" /></label>
+        <label>Username<input name="username" required maxlength="80" /></label>
+        <label>Role<select name="role"><option value="${ROLE_ADMIN}">Admin</option><option value="${ROLE_TEACHER}">Teacher</option></select></label>
+        <label>Teacher Link<select name="teacherId"><option value="">None</option>${teacherOptions}</select></label>
+        <label>Password<input type="password" name="password" required maxlength="120" /></label>
+        <button type="submit">Create User</button>
+      </form>`)}
+      <section class="ledger">
+        <div class="ledger-head"><h2>Current Users</h2><p>Teacher users can enter grades for classrooms linked to their teacher record.</p></div>
+        <div class="table-wrap compact-table"><table>
+          <tr><th>Name</th><th>Username</th><th>Role</th><th>Teacher</th></tr>
+          ${users.map((user) => `<tr><td>${esc(user.name)}</td><td>${esc(user.username)}</td><td>${roleLabel(user.role)}</td><td>${esc(user.teacher_name || '') || '&mdash;'}</td></tr>`).join('')}
+        </table></div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function parseGrades(value) {
+  return sortGrades(String(value || '').split(',').map((grade) => cleanGrade(grade)).filter(Boolean));
+}
+
+function handlePost(req, res, p, body, user, headers) {
+  if (p === '/login') {
+    if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
+    const username = cleanText(body.username, 80).toLowerCase();
+    const password = String(body.password || '').slice(0, 120);
+    const row = querySql(`SELECT * FROM os_users WHERE username=${sqlValue(username)} LIMIT 1;`)[0];
+    if (!row || !verifyPassword(password, row.password_hash)) return redirect(res, '/login?error=1', headers);
+    clearSession(req, headers);
+    createSession(row.id, headers);
+    return redirect(res, '/', headers);
+  }
+
+  if (!user) return redirect(res, '/login', headers);
+  if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
+
+  if (p === '/logout') {
+    clearSession(req, headers);
+    return redirect(res, '/login', headers);
+  }
+
+  if (p === '/switch-year') {
+    const yearId = asInt(body.yearId);
+    appendSetCookie(headers, `selectedYearId=${cookieValue(yearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    return redirect(res, req.headers.referer ? new URL(req.headers.referer).pathname : '/', headers);
+  }
+
+  if (p === '/families') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    insertReturningId(`INSERT INTO os_families (family_name, father_name, mother_name, phone, email, address)
+      VALUES (${sqlValue(cleanText(body.familyName, 120))}, ${sqlValue(cleanText(body.fatherName, 120))}, ${sqlValue(cleanText(body.motherName, 120))}, ${sqlValue(cleanText(body.phone, 40))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.address, 220))})`);
+    return redirect(res, '/families', headers);
+  }
+
+  if (p === '/students') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const schoolYearId = asInt(body.schoolYearId);
+    const studentId = insertReturningId(`INSERT INTO os_students (family_id, first_name, last_name, birth_date)
+      VALUES (${asInt(body.familyId)}, ${sqlValue(cleanText(body.firstName, 80))}, ${sqlValue(cleanText(body.lastName, 80))}, ${sqlValue(cleanDate(body.birthDate))})`);
+    runSql(`INSERT INTO os_student_years (student_id, school_year_id, grade_level, classroom_id)
+      VALUES (${studentId}, ${schoolYearId}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'});`);
+    return redirect(res, '/families', headers);
+  }
+
+  if (p === '/enrollments') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    runSql(`INSERT OR REPLACE INTO os_student_years (student_id, school_year_id, grade_level, classroom_id, status)
+      VALUES (${asInt(body.studentId)}, ${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'}, 'enrolled');`);
+    return redirect(res, '/families', headers);
+  }
+
+  if (p === '/teachers') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    runSql(`INSERT INTO os_teachers (name, email, phone)
+      VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.phone, 40))});`);
+    return redirect(res, '/setup', headers);
+  }
+
+  if (p === '/classrooms') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const classroomId = insertReturningId(`INSERT INTO os_classrooms (school_year_id, name, teacher_id)
+      VALUES (${asInt(body.schoolYearId)}, ${sqlValue(cleanText(body.name, 120))}, ${asInt(body.teacherId) || 'NULL'})`);
+    parseGrades(body.grades).forEach((grade) => {
+      runSql(`INSERT OR IGNORE INTO os_classroom_grades (classroom_id, grade_level)
+        VALUES (${classroomId}, ${sqlValue(grade)});`);
+    });
+    return redirect(res, '/setup', headers);
+  }
+
+  if (p === '/subjects') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    runSql(`INSERT OR IGNORE INTO os_subjects (name) VALUES (${sqlValue(cleanText(body.name, 120))});`);
+    return redirect(res, '/setup', headers);
+  }
+
+  if (p === '/grade-subjects') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    runSql(`INSERT OR IGNORE INTO os_grade_subjects (school_year_id, grade_level, subject_id)
+      VALUES (${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.subjectId)});`);
+    return redirect(res, '/setup', headers);
+  }
+
+  if (p === '/school-years') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
+    const yearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
+      VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
+    appendSetCookie(headers, `selectedYearId=${cookieValue(yearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    return redirect(res, '/setup', headers);
+  }
+
+  if (p === '/promote-year') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const fromYearId = asInt(body.fromYearId);
+    if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
+    const newYearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
+      VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
+    const enrollments = querySql(`SELECT student_id, grade_level FROM os_student_years WHERE school_year_id=${fromYearId} AND status='enrolled';`);
+    enrollments.forEach((enrollment) => {
+      runSql(`INSERT OR IGNORE INTO os_student_years (student_id, school_year_id, grade_level, status)
+        VALUES (${asInt(enrollment.student_id)}, ${newYearId}, ${sqlValue(promoteGrade(enrollment.grade_level))}, 'enrolled');`);
+    });
+    appendSetCookie(headers, `selectedYearId=${cookieValue(newYearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    return redirect(res, '/setup', headers);
+  }
+
+  if (p === '/users') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const role = cleanText(body.role, 20).toLowerCase();
+    if (!ROLES.includes(role)) return sendText(res, 400, 'Invalid role');
+    runSql(`INSERT INTO os_users (name, username, role, password_hash, teacher_id)
+      VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.username, 80).toLowerCase())}, ${sqlValue(role)}, ${sqlValue(hashPassword(String(body.password || '').slice(0, 120)))}, ${role === ROLE_TEACHER ? (asInt(body.teacherId) || 'NULL') : 'NULL'});`);
+    return redirect(res, '/users', headers);
+  }
+
+  if (p === '/gradebook') {
+    const schoolYearId = asInt(body.schoolYearId);
+    const gradeLevel = cleanGrade(body.gradeLevel);
+    const subjectId = asInt(body.subjectId);
+    const classroomId = asInt(body.classroomId);
+    if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel, classroomId)) return sendText(res, 403, 'Forbidden');
+    const maxScore = Math.max(1, asScore(body.maxScore) || 100);
+    const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
+    const assignmentId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, classroom_id, title, category, assignment_date, max_score, teacher_id)
+      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${classroomId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(cleanText(body.category, 24) || 'Lesson')}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+    Object.keys(body).forEach((key) => {
+      if (!key.startsWith('score_')) return;
+      const score = asScore(body[key]);
+      if (score === null) return;
+      runSql(`INSERT INTO os_scores (assignment_id, student_id, score)
+        VALUES (${assignmentId}, ${asInt(key.replace('score_', ''))}, ${score});`);
+    });
+    return redirect(res, `/gradebook?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&classroomId=${classroomId || ''}`, headers);
+  }
+
+  return sendText(res, 404, 'Not Found');
 }
 
 ensureDb();
 
 const server = http.createServer(async (req, res) => {
-  const resHeaders = {};
-  const csrfToken = getOrCreateCsrfToken(req, resHeaders);
+  const headers = {};
+  const csrfToken = getOrCreateCsrfToken(req, headers);
 
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const p = url.pathname;
-    const currentUser = getCurrentUser(req);
+    const user = currentUser(req);
 
     if (req.method === 'GET' && p === '/assets/logo') {
-      try {
-        const logoAsset = getCurrentLogoAsset();
-        const logo = fs.readFileSync(logoAsset.filePath);
-        res.writeHead(200, {
-          ...securityHeaders(),
-          'Content-Type': logoAsset.mimeType,
-          'Cache-Control': 'public, max-age=86400'
-        });
-        return res.end(logo);
-      } catch {
-        return sendText(res, 404, 'Logo not found');
-      }
-    }
-
-    if (req.method === 'GET' && p === '/login') {
-      if (currentUser) return redirect(res, '/', resHeaders);
-      const authError = url.searchParams.get('error') === '1';
-      const content = `<section class="hero"><h2>Sign in</h2><p>Use your role account to access the school portal securely.</p></section>
-      <div class="stack">
-      ${sectionCard('Account Login', `<form method="post" action="/login" class="form-grid">${csrfInput(csrfToken)}
-        <label>Username<input name="username" required maxlength="80" autocomplete="username" /></label>
-        <label>Password<input type="password" name="password" required maxlength="120" autocomplete="current-password" /></label>
-        <button type="submit">Sign in</button>
-      </form>
-      ${authError ? '<p class="muted">Invalid credentials. Please try again.</p>' : '<p class="muted">Default admin account: username <strong>admin</strong> / password <strong>ChangeMeNow!</strong> (change immediately).</p>'}`)}
-      </div>`;
-      return sendHtml(res, pageTemplate({ title: 'Login', currentPath: p, content, csrfToken, currentUser: null }), resHeaders);
-    }
-
-    if (!currentUser) {
-      return redirect(res, '/login', resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/') {
-      const [families] = querySql('SELECT COUNT(*) as c FROM families');
-      const [students] = querySql('SELECT COUNT(*) as c FROM students');
-      const [teachers] = querySql('SELECT COUNT(*) as c FROM teachers');
-      const [terms] = querySql('SELECT COUNT(*) as c FROM terms');
-      const [assessments] = querySql('SELECT COUNT(*) as c FROM assessments');
-      const content = `
-        <section class="hero"><h2>Overview</h2><p>Secure, internet-ready workflow for enrollment, classrooms, and grading.</p></section>
-        <div class="kpi-grid">
-          <article class="kpi"><div class="label">Families</div><div class="value">${families.c}</div></article>
-          <article class="kpi"><div class="label">Students</div><div class="value">${students.c}</div></article>
-          <article class="kpi"><div class="label">Teachers</div><div class="value">${teachers.c}</div></article>
-          <article class="kpi"><div class="label">Terms</div><div class="value">${terms.c}</div></article>
-          <article class="kpi"><div class="label">Assessments</div><div class="value">${assessments.c}</div></article>
-        </div>
-      `;
-      return sendHtml(res, pageTemplate({ title: 'Dashboard', currentPath: p, content, csrfToken, currentUser }), resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/families') {
-      if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-      const families = querySql('SELECT * FROM families ORDER BY id DESC');
-      const students = querySql('SELECT s.*, f.family_name FROM students s JOIN families f ON f.id=s.family_id ORDER BY s.id DESC');
-      const familyOptions = families.map((f) => `<option value="${f.id}">${esc(f.family_name)}</option>`).join('');
-      const familiesTable = `<div class="table-wrap"><table><tr><th>ID</th><th>Family</th><th>Mom</th><th>Dad</th><th>Phone</th><th>Address</th></tr>${families.map((f) => `<tr><td>${f.id}</td><td>${esc(f.family_name)}</td><td>${esc(f.mom_name)}</td><td>${esc(f.dad_name)}</td><td>${esc(f.phone)}</td><td>${esc(f.address)}</td></tr>`).join('')}</table></div>`;
-      const studentsTable = `<div class="table-wrap"><table><tr><th>ID</th><th>Student</th><th>Birth Date</th><th>Grade</th><th>Family</th></tr>${students.map((s) => `<tr><td>${s.id}</td><td>${esc(`${s.first_name} ${s.last_name}`)}</td><td>${esc(s.birth_date)}</td><td>${esc(s.current_grade)}</td><td>${esc(s.family_name)}</td></tr>`).join('')}</table></div>`;
-
-      const content = `<section class="hero"><h2>Families & Enrollment</h2><p>Capture household profiles and student records with optimized mobile forms.</p></section>
-      <div class="stack">
-      ${sectionCard('Add Family', `<form method="post" action="/families" class="form-grid cols-2">${csrfInput(csrfToken)}
-        <label>Family Name<input name="familyName" required maxlength="120" /></label>
-        <label>Phone<input name="phone" maxlength="32" /></label>
-        <label>Mom Name<input name="momName" maxlength="120" /></label>
-        <label>Dad Name<input name="dadName" maxlength="120" /></label>
-        <label style="grid-column:1/-1">Address<input name="address" maxlength="180" /></label>
-        <button type="submit">Save Family</button>
-      </form>`)}
-      ${sectionCard('Add Student', `<form method="post" action="/students" class="form-grid cols-2">${csrfInput(csrfToken)}
-        <label>First Name<input name="firstName" required maxlength="80" /></label>
-        <label>Last Name<input name="lastName" required maxlength="80" /></label>
-        <label>Birth Date<input type="date" name="birthDate" /></label>
-        <label>Current Grade<input name="currentGrade" required maxlength="16" /></label>
-        <label style="grid-column:1/-1">Family<select name="familyId" required><option value="">Choose family</option>${familyOptions}</select></label>
-        <button type="submit">Save Student</button>
-      </form>`)}
-      ${sectionCard('Family Directory', familiesTable)}
-      ${sectionCard('Student Directory', studentsTable)}
-      </div>`;
-
-      return sendHtml(res, pageTemplate({ title: 'Families', currentPath: p, content, csrfToken, currentUser }), resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/settings') {
-      return redirect(res, '/settings/users', resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/settings/users') {
-      if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-      const teachers = querySql('SELECT * FROM teachers ORDER BY name');
-      const families = querySql('SELECT * FROM families ORDER BY family_name');
-      const users = querySql('SELECT u.*, t.name as teacher_name, f.family_name FROM users u LEFT JOIN teachers t ON t.id=u.teacher_id LEFT JOIN families f ON f.id=u.family_id ORDER BY u.id DESC');
-      const teacherOptions = teachers.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
-      const familyOptions = families.map((f) => `<option value="${f.id}">${esc(f.family_name)}</option>`).join('');
-      const content = settingsShell(p, 'Settings · Users', 'Manage secure access and role-specific permissions.',
-        `${sectionCard('Create User', `<form method="post" action="/settings/users" class="form-grid cols-2">${csrfInput(csrfToken)}
-          <label>Full Name<input name="name" required maxlength="120" /></label>
-          <label>Username<input name="username" required maxlength="80" /></label>
-          <label>Role<select name="role" required><option value="${ROLE_ADMIN}">Admin</option><option value="${ROLE_TEACHER}">Teacher</option><option value="${ROLE_PARENT}">Parent</option></select></label>
-          <label>Password<input type="password" name="password" required maxlength="120" /></label>
-          <label>Teacher Link (for teacher role)<select name="teacherId"><option value="">Not linked</option>${teacherOptions}</select></label>
-          <label>Family Link (for parent role)<select name="familyId"><option value="">Not linked</option>${familyOptions}</select></label>
-          <button type="submit">Save User</button>
-        </form>`, 'Admins can access all modules. Teachers can enter grades for their own classrooms. Parents can only view scores for their own children.')}
-        ${sectionCard('Users', `<div class="table-wrap"><table><tr><th>ID</th><th>Name</th><th>Username</th><th>Role</th><th>Teacher Link</th><th>Family Link</th></tr>${users.map((u) => `<tr><td>${u.id}</td><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${roleLabel(u.role)}</td><td>${esc(u.teacher_name || '-')}</td><td>${esc(u.family_name || '-')}</td></tr>`).join('')}</table></div>`)}
-        ${sectionCard('Teachers', `<form method="post" action="/settings/teachers" class="form-grid cols-2">${csrfInput(csrfToken)}
-          <label>Name<input name="name" required maxlength="120"/></label>
-          <label>Email<input type="email" name="email" maxlength="160"/></label>
-          <button type="submit">Save Teacher</button>
-        </form><div class="table-wrap"><table><tr><th>ID</th><th>Name</th><th>Email</th></tr>${teachers.map((t) => `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.email)}</td></tr>`).join('')}</table></div>`)}
-        ${sectionCard('Terms & Classrooms', `${(() => {
-          const terms = querySql('SELECT * FROM terms ORDER BY id DESC');
-          const classrooms = querySql('SELECT c.*, t.name as teacher_name, tr.name as term_name FROM classrooms c JOIN teachers t ON t.id=c.teacher_id JOIN terms tr ON tr.id=c.term_id ORDER BY c.id DESC');
-          return `<form method="post" action="/settings/terms" class="form-grid cols-2">${csrfInput(csrfToken)}
-            <label>Name<input name="name" required maxlength="120"/></label>
-            <label>Grades Offered<input name="gradesOffered" placeholder="K,1,2,3" required maxlength="80"/></label>
-            <label>Start Date<input type="date" name="startDate" required/></label>
-            <label>End Date<input type="date" name="endDate" required/></label>
-            <button type="submit">Save Term & Promote Students</button>
-          </form><div class="table-wrap"><table><tr><th>ID</th><th>Name</th><th>Start</th><th>End</th><th>Grades</th></tr>${terms.map((t) => `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.start_date)}</td><td>${esc(t.end_date)}</td><td>${esc(t.grades_offered)}</td></tr>`).join('')}</table></div>
-          <form method="post" action="/settings/classrooms" class="form-grid cols-2" style="margin-top:.8rem;">${csrfInput(csrfToken)}
-            <label>Name<input name="name" required maxlength="120"/></label>
-            <label>Grades<input name="grades" placeholder="3,4" required maxlength="80"/></label>
-            <label>Teacher<select name="teacherId" required><option value="">Choose</option>${teachers.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
-            <label>Term<select name="termId" required><option value="">Choose</option>${terms.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
-            <button type="submit">Save Classroom</button>
-          </form><div class="table-wrap"><table><tr><th>ID</th><th>Name</th><th>Teacher</th><th>Grades</th><th>Term</th></tr>${classrooms.map((c) => `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.teacher_name)}</td><td>${esc(c.grades)}</td><td>${esc(c.term_name)}</td></tr>`).join('')}</table></div>`;
-        })()}`)}
-        `);
-      return sendHtml(res, pageTemplate({ title: 'Settings Users', currentPath: p, content, csrfToken, currentUser }), resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/settings/curriculum') {
-      if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-      const subjects = querySql('SELECT * FROM subjects ORDER BY id DESC');
-      const curriculum = querySql('SELECT c.id, c.grade, s.name as subject_name FROM curriculum_assignments c JOIN subjects s ON s.id=c.subject_id ORDER BY c.id DESC');
-      const weights = querySql('SELECT * FROM grade_weights ORDER BY id DESC');
-      const subjectOptions = subjects.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
-      const content = settingsShell(p, 'Settings · Curriculum', 'Configure subjects, grade-level maps, and grade weight strategy.',
-      `${sectionCard('Curriculum Map', `<form method="post" action="/settings/subjects" class="form-grid cols-2">${csrfInput(csrfToken)}
-          <label>Subject Name<input name="name" required maxlength="120"/></label>
-          <button type="submit">Add Subject</button>
-      </form>
-      <form method="post" action="/settings/curriculum" class="form-grid cols-2" style="margin-top:.8rem;">${csrfInput(csrfToken)}
-          <label>Grade<input name="grade" required maxlength="16"/></label>
-          <label>Subject<select name="subjectId" required><option value="">Choose</option>${subjectOptions}</select></label>
-          <button type="submit">Assign Subject</button>
-      </form>
-      <div class="table-wrap"><table><tr><th>ID</th><th>Grade</th><th>Subject</th></tr>${curriculum.map((c) => `<tr><td>${c.id}</td><td>${esc(c.grade)}</td><td>${esc(c.subject_name)}</td></tr>`).join('')}</table></div>`)}
-      ${sectionCard('Grade Weights', `<form method="post" action="/settings/weights" class="form-grid cols-2">${csrfInput(csrfToken)}
-          <label>Category<input name="category" required maxlength="64"/></label>
-          <label>Weight %<input name="weight" type="number" min="0" max="100" step="0.01" required/></label>
-          <button type="submit">Save Weight</button>
-      </form><div class="table-wrap"><table><tr><th>ID</th><th>Category</th><th>Weight</th></tr>${weights.map((w) => `<tr><td>${w.id}</td><td>${esc(w.category)}</td><td>${w.weight}%</td></tr>`).join('')}</table></div>`)}
-      `);
-      return sendHtml(res, pageTemplate({ title: 'Settings Curriculum', currentPath: p, content, csrfToken, currentUser }), resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/settings/branding') {
-      if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-      const logoAsset = getCurrentLogoAsset();
-      const content = settingsShell(p, 'Settings · Branding', 'Manage your school identity across the application.',
-      `${sectionCard('Branding', `<form method="post" action="/settings/logo" class="form-grid" enctype="multipart/form-data">${csrfInput(csrfToken)}
-          <label>Upload School Logo
-            <input name="logoFile" type="file" accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml" required />
-          </label>
-          <p class="logo-help">Recommended: 1200×400px (3:1 ratio), transparent PNG or SVG, under 2MB. Use strong contrast for light/dark themes.</p>
-          <button type="submit">Upload / Replace Logo</button>
-      </form>
-      <p class="muted">Current source: ${logoAsset.source === 'custom' ? 'Custom upload' : 'Default logo'}</p>
-      <img class="logo-preview" src="${logoAsset.urlPath}" alt="Current app logo preview" />`)}`);
-      return sendHtml(res, pageTemplate({ title: 'Settings Branding', currentPath: p, content, csrfToken, currentUser }), resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/gradebook') {
-      if (!requireRole(currentUser, [ROLE_ADMIN, ROLE_TEACHER, ROLE_PARENT])) return sendText(res, 403, 'Forbidden');
-      const termId = asInt(url.searchParams.get('termId'));
-      const grade = String(url.searchParams.get('grade') || '').slice(0, 16);
-      const subjectId = asInt(url.searchParams.get('subjectId'));
-
-      const teacherFilter = currentUser.role === ROLE_TEACHER ? `WHERE c.teacher_id=${asInt(currentUser.teacher_id)}` : '';
-      const teacherClassrooms = currentUser.role === ROLE_TEACHER
-        ? querySql(`SELECT c.id, c.term_id, c.grades FROM classrooms c ${teacherFilter}`)
-        : [];
-      const teacherTermIds = [...new Set(teacherClassrooms.map((c) => c.term_id))];
-      const teacherGrades = [...new Set(teacherClassrooms.flatMap((c) => String(c.grades || '').split(',').map((g) => g.trim()).filter(Boolean)))];
-      const terms = currentUser.role === ROLE_TEACHER
-        ? (teacherTermIds.length ? querySql(`SELECT id,name FROM terms WHERE id IN (${teacherTermIds.join(',')}) ORDER BY id DESC`) : [])
-        : querySql('SELECT id,name FROM terms ORDER BY id DESC');
-      const subjects = querySql('SELECT id,name FROM subjects ORDER BY id DESC');
-      const students = grade ? querySql(`SELECT id, first_name, last_name, family_id FROM students WHERE current_grade=${sqlValue(grade)} ORDER BY last_name`) : [];
-
-      const allowedGrade = currentUser.role !== ROLE_TEACHER || !grade || teacherGrades.includes(grade);
-      const showTeacherForm = currentUser.role !== ROLE_PARENT;
-      const visibleStudents = currentUser.role === ROLE_PARENT ? students.filter((s) => s.family_id === asInt(currentUser.family_id)) : students;
-      const assessments = currentUser.role === ROLE_PARENT
-        ? querySql(`SELECT a.id, a.title, a.category, a.grade, s.name as subject_name, t.name as term_name,
-            (SELECT GROUP_CONCAT(st.first_name || ' ' || st.last_name || ': ' || sc.score, '; ') FROM scores sc JOIN students st ON st.id=sc.student_id WHERE sc.assessment_id=a.id AND st.family_id=${asInt(currentUser.family_id)}) as family_scores
-            FROM assessments a JOIN subjects s ON s.id=a.subject_id JOIN terms t ON t.id=a.term_id ORDER BY a.id DESC`)
-        : querySql('SELECT a.id, a.title, a.category, a.grade, s.name as subject_name, t.name as term_name, (SELECT COUNT(*) FROM scores sc WHERE sc.assessment_id=a.id) as score_count FROM assessments a JOIN subjects s ON s.id=a.subject_id JOIN terms t ON t.id=a.term_id ORDER BY a.id DESC');
-
-      const teacherGradeNote = currentUser.role === ROLE_TEACHER ? `<p class="muted">You can load only grades assigned to your classrooms: ${esc(teacherGrades.join(', ') || 'No rooms assigned yet')}</p>` : '';
-      const content = `<section class="hero"><h2>Gradebook</h2><p>${currentUser.role === ROLE_PARENT ? 'View grade outcomes for your own children.' : 'Create assessments quickly and score every learner in one flow.'}</p></section><div class="stack">
-      ${sectionCard('Load Gradebook', `<form method="get" action="/gradebook" class="form-grid cols-2">
-        <label>Term<select name="termId" required><option value="">Choose</option>${terms.map((t) => `<option ${termId === t.id ? 'selected' : ''} value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
-        <label>Grade<input name="grade" value="${esc(grade)}" required maxlength="16" ${currentUser.role === ROLE_TEACHER && teacherGrades.length ? `list="teacherGrades"` : ''}/></label>
-        ${currentUser.role === ROLE_TEACHER && teacherGrades.length ? `<datalist id="teacherGrades">${teacherGrades.map((g) => `<option value="${esc(g)}"></option>`).join('')}</datalist>` : ''}
-        <label style="grid-column:1/-1">Subject<select name="subjectId" required><option value="">Choose</option>${subjects.map((s) => `<option ${subjectId === s.id ? 'selected' : ''} value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>
-        <button type="submit">Load Students</button>
-      </form>${teacherGradeNote}`)}
-      ${showTeacherForm ? sectionCard('Create Assessment & Enter Scores', !allowedGrade ? '<p class="muted">This grade is not assigned to your classrooms.</p>' : `<form method="post" action="/gradebook" class="form-grid cols-2">${csrfInput(csrfToken)}
-        <input type="hidden" name="termId" value="${termId || ''}" />
-        <input type="hidden" name="grade" value="${esc(grade)}" />
-        <input type="hidden" name="subjectId" value="${subjectId || ''}" />
-        <label>Assessment Title<input name="title" required maxlength="140" /></label>
-        <label>Category<input name="category" required maxlength="32" placeholder="Quiz" /></label>
-        ${visibleStudents.map((st) => `<label>${esc(`${st.first_name} ${st.last_name}`)}<input type="number" min="0" max="100" step="0.01" name="student_${st.id}" /></label>`).join('') || '<p class="muted">No students match this selection.</p>'}
-        <button type="submit">Save Assessment</button>
-      </form>`) : ''}
-      ${sectionCard(currentUser.role === ROLE_PARENT ? 'Assessment History (Your Children)' : 'Assessment History', `<div class="table-wrap"><table><tr><th>ID</th><th>Title</th><th>Category</th><th>Grade</th><th>Subject</th><th>Term</th><th>${currentUser.role === ROLE_PARENT ? 'Scores' : 'Scores'}</th></tr>${assessments.map((a) => `<tr><td>${a.id}</td><td>${esc(a.title)}</td><td>${esc(a.category)}</td><td>${esc(a.grade)}</td><td>${esc(a.subject_name)}</td><td>${esc(a.term_name)}</td><td>${esc(currentUser.role === ROLE_PARENT ? (a.family_scores || '-') : String(a.score_count))}</td></tr>`).join('')}</table></div>`)}
-      </div>`;
-
-      return sendHtml(res, pageTemplate({ title: 'Gradebook', currentPath: p, content, csrfToken, currentUser }), resHeaders);
-    }
-
-    if (req.method === 'GET' && p === '/reports') {
-      if (!requireRole(currentUser, [ROLE_ADMIN, ROLE_TEACHER, ROLE_PARENT])) return sendText(res, 403, 'Forbidden');
-
-      const allStudents = querySql('SELECT id, first_name, last_name, family_id FROM students ORDER BY last_name, first_name');
-      const students = currentUser.role === ROLE_PARENT
-        ? allStudents.filter((student) => student.family_id === asInt(currentUser.family_id))
-        : allStudents;
-      const selectedStudentId = asInt(url.searchParams.get('studentId')) || students[0]?.id || 0;
-      const selectedStudent = students.find((student) => student.id === selectedStudentId) || null;
-      const scoreRows = selectedStudent
-        ? querySql(`SELECT sc.score, t.name as term_name, t.start_date, s.name as subject_name
-            FROM scores sc
-            JOIN assessments a ON a.id=sc.assessment_id
-            JOIN terms t ON t.id=a.term_id
-            JOIN subjects s ON s.id=a.subject_id
-            WHERE sc.student_id=${selectedStudent.id}
-            ORDER BY t.start_date, a.id`)
-        : [];
-
-      const termMap = new Map();
-      const subjectMap = new Map();
-      scoreRows.forEach((row) => {
-        if (!termMap.has(row.term_name)) termMap.set(row.term_name, []);
-        termMap.get(row.term_name).push(Number(row.score));
-
-        if (!subjectMap.has(row.subject_name)) subjectMap.set(row.subject_name, new Map());
-        const subjectTerms = subjectMap.get(row.subject_name);
-        if (!subjectTerms.has(row.term_name)) subjectTerms.set(row.term_name, []);
-        subjectTerms.get(row.term_name).push(Number(row.score));
+      const logo = logoAsset();
+      if (!fs.existsSync(logo)) return sendText(res, 404, 'Logo not found');
+      res.writeHead(200, {
+        ...securityHeaders(),
+        'Content-Type': 'image/svg+xml',
+        'Cache-Control': 'public, max-age=86400'
       });
-
-      const termAverages = [...termMap.entries()].map(([label, values]) => ({ label, value: average(values) ?? 0 }));
-      const overallAverage = average(termAverages.map((entry) => entry.value));
-      const subjectAverages = [...subjectMap.entries()].map(([subjectName, terms]) => {
-        const points = [...terms.entries()].map(([label, values]) => ({ label, value: average(values) ?? 0 }));
-        return {
-          name: subjectName,
-          average: average(points.map((point) => point.value)),
-          points
-        };
-      }).sort((a, b) => a.name.localeCompare(b.name));
-
-      const studentOptions = students.map((student) => {
-        const fullName = `${student.first_name} ${student.last_name}`;
-        return `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(fullName)}</option>`;
-      }).join('');
-
-      const content = `<section class="hero"><h2>Average Grade Report</h2><p>Track annual performance trends and subject-level progress.</p></section>
-      <div class="stack">
-        ${sectionCard('Filters', `<form method="get" action="/reports" class="form-grid cols-2">
-          <label>Student
-            <select name="studentId" required>${studentOptions}</select>
-          </label>
-          <div class="inline-actions" style="align-self:end;">
-            <button type="submit">Load report</button>
-            <button class="logout-btn" type="button" onclick="window.print()">Print report</button>
-          </div>
-        </form>`, 'Choose a learner to render their yearly averages and subject snapshots.')}
-        ${sectionCard('Yearly Average by Term', `${selectedStudent ? `<p class="muted">Student: <strong>${esc(`${selectedStudent.first_name} ${selectedStudent.last_name}`)}</strong> · Year average: <strong>${formatAverage(overallAverage)}</strong></p>${renderTermChart(termAverages)}` : '<p class="muted">No students available to report on yet.</p>'}`)}
-        ${sectionCard('Subject Breakdown', renderSubjectMiniCharts(subjectAverages), 'Smaller term-by-term charts for each subject taught this year.')}
-      </div>`;
-      return sendHtml(res, pageTemplate({ title: 'Reports', currentPath: p, content, csrfToken, currentUser }), resHeaders);
+      return res.end(fs.readFileSync(logo));
     }
 
     if (req.method === 'POST') {
-      if (p === '/login') {
-        const body = await parseBody(req);
-        if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
-        const username = String(body.username || '').trim().slice(0, 80);
-        const password = String(body.password || '').slice(0, 120);
-        const rows = querySql(`SELECT * FROM users WHERE username=${sqlValue(username)} LIMIT 1`);
-        const user = rows[0];
-        if (!user || !verifyPassword(password, user.password_hash)) {
-          return redirect(res, '/login?error=1', resHeaders);
-        }
-        clearSession(req, resHeaders);
-        createSession(user.id, resHeaders);
-        return redirect(res, '/', resHeaders);
-      }
-      if (p === '/logout') {
-        const body = await parseBody(req);
-        if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
-        clearSession(req, resHeaders);
-        return redirect(res, '/login', resHeaders);
-      }
-
-      if (p === '/settings/logo') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        const { fields, file } = await parseMultipartForm(req);
-        if (!requireCsrf(req, fields)) return sendText(res, 403, 'Invalid CSRF token');
-        if (!file || !file.content?.length) return sendText(res, 400, 'No file uploaded');
-
-        const filenameExt = (path.extname(file.filename || '').replace('.', '').toLowerCase());
-        const fromMime = LOGO_TYPES[file.mimeType];
-        const ext = fromMime || (LOGO_MIME_BY_EXT[filenameExt] ? filenameExt : '');
-        if (!ext) return sendText(res, 415, 'Unsupported image type');
-
-        fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-        clearCustomLogoFiles();
-        fs.writeFileSync(path.join(PUBLIC_DIR, `custom-logo.${ext}`), file.content);
-        return redirect(res, '/settings/branding', resHeaders);
-      }
-
       const body = await parseBody(req);
-      if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
+      return handlePost(req, res, p, body, user, headers);
+    }
 
-      if (p === '/families') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT INTO families (family_name, mom_name, dad_name, phone, address) VALUES (${sqlValue(String(body.familyName || '').slice(0, 120))}, ${sqlValue(String(body.momName || '').slice(0, 120))}, ${sqlValue(String(body.dadName || '').slice(0, 120))}, ${sqlValue(String(body.phone || '').slice(0, 32))}, ${sqlValue(String(body.address || '').slice(0, 180))});`);
-        return redirect(res, '/families', resHeaders);
-      }
-      if (p === '/students') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT INTO students (family_id, first_name, last_name, birth_date, current_grade) VALUES (${asInt(body.familyId)}, ${sqlValue(String(body.firstName || '').slice(0, 80))}, ${sqlValue(String(body.lastName || '').slice(0, 80))}, ${sqlValue(String(body.birthDate || '').slice(0, 12))}, ${sqlValue(String(body.currentGrade || '').slice(0, 16))});`);
-        return redirect(res, '/families', resHeaders);
-      }
-      if (p === '/settings/users') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        const role = String(body.role || '').toLowerCase();
-        if (!ALL_ROLES.includes(role)) return sendText(res, 400, 'Invalid role');
-        const teacherId = role === ROLE_TEACHER ? asInt(body.teacherId) : 0;
-        const familyId = role === ROLE_PARENT ? asInt(body.familyId) : 0;
-        const pwHash = hashPassword(String(body.password || '').slice(0, 120));
-        runSql(`INSERT INTO users (name, username, role, password_hash, teacher_id, family_id) VALUES (${sqlValue(String(body.name || '').slice(0, 120))}, ${sqlValue(String(body.username || '').trim().slice(0, 80).toLowerCase())}, ${sqlValue(role)}, ${sqlValue(pwHash)}, ${teacherId || 'NULL'}, ${familyId || 'NULL'});`);
-        return redirect(res, '/settings/users', resHeaders);
-      }
-      if (p === '/settings/teachers') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT INTO teachers (name, email) VALUES (${sqlValue(String(body.name || '').slice(0, 120))}, ${sqlValue(String(body.email || '').slice(0, 160))});`);
-        return redirect(res, '/settings/users', resHeaders);
-      }
-      if (p === '/settings/terms') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT INTO terms (name, start_date, end_date, grades_offered) VALUES (${sqlValue(String(body.name || '').slice(0, 120))}, ${sqlValue(String(body.startDate || '').slice(0, 12))}, ${sqlValue(String(body.endDate || '').slice(0, 12))}, ${sqlValue(String(body.gradesOffered || '').slice(0, 80))});`);
-        const students = querySql('SELECT id, current_grade FROM students');
-        students.forEach((s) => runSql(`UPDATE students SET current_grade=${sqlValue(promoteGrade(s.current_grade))} WHERE id=${s.id};`));
-        return redirect(res, '/settings/users', resHeaders);
-      }
-      if (p === '/settings/classrooms') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT INTO classrooms (name, teacher_id, term_id, grades) VALUES (${sqlValue(String(body.name || '').slice(0, 120))}, ${asInt(body.teacherId)}, ${asInt(body.termId)}, ${sqlValue(String(body.grades || '').slice(0, 80))});`);
-        return redirect(res, '/settings/users', resHeaders);
-      }
-      if (p === '/settings/subjects') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT OR IGNORE INTO subjects (name) VALUES (${sqlValue(String(body.name || '').slice(0, 120))});`);
-        return redirect(res, '/settings/curriculum', resHeaders);
-      }
-      if (p === '/settings/curriculum') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        runSql(`INSERT INTO curriculum_assignments (grade, subject_id) VALUES (${sqlValue(String(body.grade || '').slice(0, 16))}, ${asInt(body.subjectId)});`);
-        return redirect(res, '/settings/curriculum', resHeaders);
-      }
-      if (p === '/settings/weights') {
-        if (!requireRole(currentUser, [ROLE_ADMIN])) return sendText(res, 403, 'Forbidden');
-        const weight = asScore(body.weight);
-        runSql(`INSERT INTO grade_weights (category, weight) VALUES (${sqlValue(String(body.category || '').slice(0, 64))}, ${weight === null ? 0 : weight});`);
-        return redirect(res, '/settings/curriculum', resHeaders);
-      }
-      if (p === '/gradebook') {
-        if (!requireRole(currentUser, [ROLE_ADMIN, ROLE_TEACHER])) return sendText(res, 403, 'Forbidden');
-        const selectedGrade = String(body.grade || '').slice(0, 16);
-        if (currentUser.role === ROLE_TEACHER) {
-          const assignments = querySql(`SELECT grades, term_id FROM classrooms WHERE teacher_id=${asInt(currentUser.teacher_id)}`);
-          const allowed = assignments.some((room) => {
-            const grades = String(room.grades || '').split(',').map((g) => g.trim());
-            return grades.includes(selectedGrade) && room.term_id === asInt(body.termId);
-          });
-          if (!allowed) return sendText(res, 403, 'Forbidden');
-        }
-        runSql(`INSERT INTO assessments (title, category, term_id, grade, subject_id) VALUES (${sqlValue(String(body.title || '').slice(0, 140))}, ${sqlValue(String(body.category || '').slice(0, 32))}, ${asInt(body.termId)}, ${sqlValue(selectedGrade)}, ${asInt(body.subjectId)});`);
-        const [{ id: assessmentId }] = querySql('SELECT last_insert_rowid() as id');
-        Object.keys(body).forEach((key) => {
-          if (!key.startsWith('student_') || body[key] === '') return;
-          const studentId = asInt(key.replace('student_', ''));
-          const score = asScore(body[key]);
-          if (studentId && score !== null) {
-            runSql(`INSERT INTO scores (assessment_id, student_id, score) VALUES (${assessmentId}, ${studentId}, ${score});`);
-          }
-        });
-        return redirect(res, `/gradebook?termId=${asInt(body.termId)}&grade=${encodeURIComponent(String(body.grade || ''))}&subjectId=${asInt(body.subjectId)}`, resHeaders);
-      }
+    if (req.method !== 'GET') return sendText(res, 405, 'Method Not Allowed');
 
-      return sendText(res, 404, 'Not Found');
+    if (p === '/login') {
+      if (user) return redirect(res, '/', headers);
+      return sendHtml(res, loginPage(csrfToken, url.searchParams.get('error') === '1'), headers);
+    }
+
+    if (!user) return redirect(res, '/login', headers);
+
+    const { years, selected } = getSelectedYear(req, url);
+    if (!selected) return sendText(res, 500, 'No school year configured');
+    const pageArgs = { csrfToken, user, years, selectedYear: selected, currentPath: p };
+
+    if (p === '/') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Dashboard', content: dashboardPage(selected) }), headers);
+    if (p === '/families') {
+      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Families', content: familiesPage(selected, csrfToken) }), headers);
+    }
+    if (p === '/setup') {
+      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken) }), headers);
+    }
+    if (p === '/gradebook') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
+    if (p === '/reports') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Reports', content: reportsPage(url, selected) }), headers);
+    if (p === '/users') {
+      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Users', content: usersPage(csrfToken) }), headers);
     }
 
     return sendText(res, 404, 'Not Found');
   } catch (error) {
-    if (error.message === 'Payload too large') {
-      return sendText(res, 413, 'Payload too large');
-    }
+    if (error.message === 'Payload too large') return sendText(res, 413, 'Payload too large');
     console.error(error);
     return sendText(res, 500, 'Internal Server Error');
   }
