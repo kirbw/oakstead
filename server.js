@@ -18,7 +18,7 @@ const SESSION_HOURS = 12;
 const ROLE_ADMIN = 'admin';
 const ROLE_TEACHER = 'teacher';
 const ROLES = [ROLE_ADMIN, ROLE_TEACHER];
-const CATEGORIES = ['Lesson', 'Quiz', 'Test'];
+const CATEGORIES = ['Lesson / Homework', 'Quiz', 'Test'];
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -60,6 +60,14 @@ function asScore(value) {
   return Math.max(0, Math.min(1000, parsed));
 }
 
+function normalizeCategory(value) {
+  const text = cleanText(value, 40).toLowerCase();
+  if (text === 'lesson' || text === 'homework' || text === 'lesson / homework' || text === 'lesson/homework') return 'Lesson / Homework';
+  if (text === 'quiz' || text === 'quizzes') return 'Quiz';
+  if (text === 'test' || text === 'tests') return 'Test';
+  return cleanText(value, 40) || 'Lesson / Homework';
+}
+
 function runSql(sql) {
   return execFileSync('sqlite3', [DB_FILE, sql], { encoding: 'utf8' });
 }
@@ -72,6 +80,25 @@ function querySql(sql) {
 function insertReturningId(sql) {
   const row = querySql(`${sql} RETURNING id;`)[0];
   return asInt(row?.id);
+}
+
+function ensureColumn(table, column, definition) {
+  const columns = querySql(`PRAGMA table_info(${table});`).map((row) => row.name);
+  if (!columns.includes(column)) runSql(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
+}
+
+function addDays(dateText, days) {
+  const date = new Date(`${dateText}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetween(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  return Math.max(0, Math.round((end - start) / 86400000) + 1);
 }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -335,12 +362,60 @@ CREATE TABLE IF NOT EXISTS os_settings (
   value TEXT,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS os_absences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  student_id INTEGER NOT NULL,
+  absence_date TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  amount REAL NOT NULL DEFAULT 1,
+  unit TEXT NOT NULL DEFAULT 'days',
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES os_students(id)
+);
+CREATE TABLE IF NOT EXISTS os_marking_periods (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  period_number INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  start_date TEXT,
+  end_date TEXT,
+  UNIQUE (school_year_id, period_number),
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_grade_weight_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  min_grade TEXT NOT NULL,
+  max_grade TEXT NOT NULL,
+  subject_id INTEGER,
+  rounding_mode TEXT NOT NULL DEFAULT 'nearest',
+  calculation_mode TEXT NOT NULL DEFAULT 'weighted',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
+);
+CREATE TABLE IF NOT EXISTS os_grade_weight_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  weight REAL NOT NULL,
+  UNIQUE (group_id, category),
+  FOREIGN KEY (group_id) REFERENCES os_grade_weight_groups(id) ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
 CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
 `);
 
+  ensureColumn('os_school_years', 'school_days', 'school_days INTEGER DEFAULT 180');
+  ensureColumn('os_assignments', 'marking_period_id', 'marking_period_id INTEGER');
+
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
+  migrateLessonHomeworkWeights();
 
   const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
   if (!yearCount) {
@@ -354,7 +429,52 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
       VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
   }
 
+  querySql('SELECT id, name, start_date, end_date FROM os_school_years;').forEach((year) => {
+    const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+    if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
+    const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+    if (!weightCount) createDefaultWeightGroups(asInt(year.id));
+  });
+
   runSql("DELETE FROM os_sessions WHERE expires_at <= datetime('now');");
+}
+
+function createMarkingPeriods(yearId, count, startDate = '', endDate = '') {
+  const periods = Math.max(1, Math.min(12, asInt(count) || 6));
+  const span = daysBetween(startDate, endDate);
+  for (let index = 0; index < periods; index += 1) {
+    const periodStart = span ? addDays(startDate, Math.floor((span * index) / periods)) : '';
+    const periodEnd = span ? addDays(startDate, Math.floor((span * (index + 1)) / periods) - 1) : '';
+    runSql(`INSERT OR REPLACE INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
+      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)});`);
+  }
+}
+
+function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
+  const groupId = insertReturningId(`INSERT INTO os_grade_weight_groups (school_year_id, name, min_grade, max_grade)
+    VALUES (${yearId}, ${sqlValue(name)}, ${sqlValue(minGrade)}, ${sqlValue(maxGrade)})`);
+  Object.entries(weights).forEach(([category, weight]) => {
+    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+      VALUES (${groupId}, ${sqlValue(category)}, ${Number(weight) || 0});`);
+  });
+}
+
+function createDefaultWeightGroups(yearId) {
+  createWeightGroup(yearId, 'Grades 1-2', '1', '2', { 'Lesson / Homework': 50, Quiz: 25, Test: 25 });
+  createWeightGroup(yearId, 'Grades 3-9', '3', '9', { 'Lesson / Homework': 25, Quiz: 25, Test: 50 });
+}
+
+function migrateLessonHomeworkWeights() {
+  querySql('SELECT DISTINCT group_id FROM os_grade_weight_items;').forEach((row) => {
+    const groupId = asInt(row.group_id);
+    const legacyItems = querySql(`SELECT category, weight FROM os_grade_weight_items
+      WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
+    if (!legacyItems.length) return;
+    const combinedWeight = Math.min(100, legacyItems.reduce((sum, item) => sum + Number(item.weight || 0), 0));
+    runSql(`DELETE FROM os_grade_weight_items WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
+    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+      VALUES (${groupId}, 'Lesson / Homework', ${combinedWeight});`);
+  });
 }
 
 function createSession(userId, headers) {
@@ -471,15 +591,16 @@ function saveUploadedImage(file, basename) {
   return path.join('uploads', fileName);
 }
 
+function gradeRank(grade) {
+  const text = String(grade);
+  if (/^pre-?k$/i.test(text)) return -2;
+  if (/^k(indergarten)?$/i.test(text)) return -1;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : 100 + text.toLowerCase().charCodeAt(0);
+}
+
 function sortGrades(grades) {
-  const rank = (grade) => {
-    const text = String(grade);
-    if (/^pre-?k$/i.test(text)) return -2;
-    if (/^k(indergarten)?$/i.test(text)) return -1;
-    const number = Number(text);
-    return Number.isFinite(number) ? number : 100 + text.toLowerCase().charCodeAt(0);
-  };
-  return [...new Set(grades.filter(Boolean))].sort((a, b) => rank(a) - rank(b) || String(a).localeCompare(String(b)));
+  return [...new Set(grades.filter(Boolean))].sort((a, b) => gradeRank(a) - gradeRank(b) || String(a).localeCompare(String(b)));
 }
 
 function promoteGrade(grade) {
@@ -529,8 +650,13 @@ function gradeOptions(selected = '') {
   return common.map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
 }
 
-function categoryOptions(selected = 'Lesson') {
-  return CATEGORIES.map((category) => `<option value="${esc(category)}" ${category === selected ? 'selected' : ''}>${esc(category)}</option>`).join('');
+function categoryOptions(selected = 'Lesson / Homework') {
+  const selectedCategory = normalizeCategory(selected);
+  return CATEGORIES.map((category) => `<option value="${esc(category)}" ${category === selectedCategory ? 'selected' : ''}>${esc(category)}</option>`).join('');
+}
+
+function displayCategory(category) {
+  return esc(normalizeCategory(category));
 }
 
 function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
@@ -553,6 +679,8 @@ const NAV_ICONS = {
   families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a5 5 0 0 1 10 0H3Zm8.5 0a6.5 6.5 0 0 0-1.3-3.9A5 5 0 0 1 21 20h-9.5Z"></path></svg>',
   setup: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v3H4V5Zm0 6h10v3H4v-3Zm0 6h16v3H4v-3Zm13.5-6 2.5 1.5-2.5 1.5V11Z"></path></svg>',
   gradebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5V3Zm2 2v14h10V7h-3V5H7Zm2 5h6v2H9v-2Zm0 4h6v2H9v-2Z"></path></svg>',
+  reportcards: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6V3Zm2 2v14h8V5H8Zm1.5 3h5v2h-5V8Zm0 3h5v2h-5v-2Zm0 3h3v2h-3v-2Z"></path></svg>',
+  absences: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10Zm-9 3h2v2H9v-2Zm4 0h2v2h-2v-2Z"></path></svg>',
   reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
 };
 
@@ -631,7 +759,8 @@ body {
   min-height: 100svh;
   background: var(--bg);
   color: var(--ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  font-family: Inter, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
 }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; }
@@ -671,8 +800,8 @@ button, select, input { min-height: 42px; }
 .brand-row { justify-content: space-between; min-width: 0; }
 .brand { display: flex; align-items: center; gap: .65rem; min-width: 0; text-decoration: none; }
 .brand img { width: 50px; height: 38px; object-fit: contain; }
-.brand-text strong { display: block; font-size: 1.05rem; letter-spacing: 0; }
-.brand-text span { display: block; color: var(--muted); font-size: .78rem; margin-top: .05rem; }
+.brand-text strong { display: block; font-size: 1.05rem; font-weight: 760; letter-spacing: 0; line-height: 1.2; }
+.brand-text span { display: block; color: var(--muted); font-size: .82rem; margin-top: .05rem; line-height: 1.35; }
 .top-actions { justify-content: flex-end; flex-wrap: nowrap; margin-left: auto; }
 .year-form { flex: 0 0 auto; }
 .year-form select { width: 190px; border-color: var(--line); background: var(--paper); }
@@ -712,7 +841,7 @@ button, select, input { min-height: 42px; }
   color: var(--muted);
   border-radius: 0;
   padding: .68rem .75rem;
-  font-weight: 700;
+  font-weight: 650;
   font-size: .88rem;
   white-space: nowrap;
   transition: color .18s ease, border-color .18s ease, background .18s ease;
@@ -764,8 +893,9 @@ button, select, input { min-height: 42px; }
 .page-head h1 {
   margin: 0;
   font-size: clamp(1.45rem, 4.5vw, 2.35rem);
-  line-height: 1.05;
+  line-height: 1.12;
   letter-spacing: 0;
+  font-weight: 760;
 }
 .page-head p { margin: 0; color: var(--muted); max-width: 760px; line-height: 1.45; }
 .ledger {
@@ -794,7 +924,7 @@ button, select, input { min-height: 42px; }
 .panel-title { display: grid; gap: .25rem; margin-bottom: .85rem; }
 .grid-2, .grid-3, .grid-4 { display: grid; gap: .7rem; grid-template-columns: 1fr; }
 .form-grid { display: grid; gap: .7rem; grid-template-columns: 1fr; }
-label { display: grid; gap: .32rem; color: var(--muted); font-size: .84rem; font-weight: 700; }
+label { display: grid; gap: .32rem; color: var(--muted); font-size: .86rem; font-weight: 650; }
 input, select, textarea {
   width: 100%;
   border: 1px solid var(--line-strong);
@@ -803,6 +933,7 @@ input, select, textarea {
   color: var(--ink);
   padding: .62rem .68rem;
 }
+input[type="checkbox"] { width: auto; min-height: auto; }
 textarea { min-height: 82px; resize: vertical; }
 input:focus, select:focus, textarea:focus {
   outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
@@ -852,12 +983,12 @@ input:focus, select:focus, textarea:focus {
   border-radius: 12px;
   padding: .85rem;
 }
-.kpi span { display: block; color: var(--muted); font-size: .78rem; font-weight: 800; }
+.kpi span { display: block; color: var(--muted); font-size: .82rem; font-weight: 650; }
 .kpi strong { display: block; margin-top: .18rem; font-size: 1.55rem; line-height: 1; }
 .table-wrap { width: 100%; overflow-x: visible; }
 table { width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed; }
 th, td { padding: .68rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: .9rem; }
-th { color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg)); }
+th { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .025em; font-weight: 700; background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg)); }
 td { overflow-wrap: anywhere; }
 tr:last-child td { border-bottom: 0; }
 .compact-table table { min-width: 0; }
@@ -991,8 +1122,8 @@ tr:last-child td { border-bottom: 0; }
   border-bottom: 1px solid var(--line);
 }
 .setup-link:last-child { border-bottom: 0; }
-.setup-link strong { font-size: .92rem; }
-.setup-link span { color: var(--muted); font-size: .8rem; line-height: 1.35; }
+.setup-link strong { font-size: .94rem; font-weight: 700; }
+.setup-link span { color: var(--muted); font-size: .84rem; line-height: 1.45; }
 .setup-link.active { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-dark); }
 .setup-link:hover { background: var(--accent-soft); color: var(--accent-dark); }
 .family-list {
@@ -1011,19 +1142,19 @@ tr:last-child td { border-bottom: 0; }
   border-bottom: 1px solid var(--line);
 }
 .family-list-head h2, .family-detail-head h2 { margin: 0; font-size: 1rem; }
-.family-count { color: var(--muted); font-size: .8rem; font-weight: 800; }
+.family-count { color: var(--muted); font-size: .84rem; font-weight: 650; }
 .family-link {
   display: grid;
-  gap: .22rem;
-  padding: .8rem .9rem;
+  gap: .28rem;
+  padding: .82rem .9rem;
   text-decoration: none;
   border-bottom: 1px solid var(--line);
   transition: background .16s ease, color .16s ease;
 }
 .family-link:last-child { border-bottom: 0; }
-.family-link strong { font-size: .95rem; }
-.family-link span { color: var(--muted); font-size: .82rem; }
-.family-link small { color: var(--muted); font-size: .78rem; line-height: 1.35; }
+.family-link strong { font-size: .98rem; font-weight: 720; line-height: 1.28; }
+.family-link span { color: var(--muted); font-size: .84rem; line-height: 1.4; }
+.family-link small { color: var(--muted); font-size: .84rem; line-height: 1.4; }
 .family-link.active { background: var(--accent-soft); color: var(--accent-dark); }
 .family-link:hover { background: color-mix(in srgb, var(--accent-soft) 60%, var(--paper)); }
 .family-detail {
@@ -1049,8 +1180,8 @@ tr:last-child td { border-bottom: 0; }
   padding-bottom: .65rem;
   border-bottom: 1px solid var(--line);
 }
-.detail-item span { color: var(--muted); font-size: .76rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
-.detail-item strong { font-size: .95rem; font-weight: 700; }
+.detail-item span { color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .025em; }
+.detail-item strong { font-size: .98rem; font-weight: 680; line-height: 1.35; }
 .asset-preview-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -1171,6 +1302,259 @@ tr:last-child td { border-bottom: 0; }
 }
 .distribution-row b { font-size: .84rem; }
 .distribution-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
+.report-card-actions { display: flex; justify-content: flex-end; gap: .55rem; }
+.report-card-document {
+  display: grid;
+  gap: 1rem;
+  color: #285f56;
+}
+.report-card-spread {
+  width: min(1060px, 100%);
+  min-height: 816px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid #6d7773;
+  box-shadow: var(--shadow);
+  font-family: "Trebuchet MS", Arial, sans-serif;
+}
+.cover-spread {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px minmax(0, 1fr);
+}
+.inside-spread {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2.4rem;
+  padding: 40px 38px 32px;
+}
+.report-page { position: relative; padding: 66px 80px 32px; }
+.report-spine {
+  background: #9fb5ae;
+  border-left: 4px double #275c53;
+  border-right: 4px double #275c53;
+}
+.parent-page .parent-note {
+  margin-top: 4px;
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.signature-line {
+  width: 100%;
+  border-bottom: 1px solid #285f56;
+  text-align: center;
+  margin-top: 50px;
+  padding-bottom: 2px;
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+}
+.generated-note {
+  position: absolute;
+  bottom: 28px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  color: #164c43;
+}
+.cover-page {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  text-align: center;
+}
+.cover-leaf { width: 44px; height: 44px; object-fit: contain; margin-bottom: 6px; }
+.cover-page h2 {
+  margin: 0 0 10px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 36px;
+  color: #1e5048;
+  line-height: 1.1;
+}
+.cover-of {
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  margin-bottom: 24px;
+}
+.script-line {
+  width: 330px;
+  border-bottom: 1px solid #285f56;
+  color: #111827;
+  font-family: "Comic Sans MS", "Bradley Hand", cursive;
+  font-size: 22px;
+  line-height: 1.1;
+  padding-bottom: 2px;
+}
+.cover-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0 26px;
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+}
+.blank-line {
+  display: inline-block;
+  min-width: 62px;
+  border-bottom: 1px solid #285f56;
+  color: #111827;
+  font-family: "Comic Sans MS", "Bradley Hand", cursive;
+  font-size: 20px;
+  line-height: 1;
+}
+.school-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+}
+.school-line .script-line {
+  width: 200px;
+  font-size: 21px;
+}
+.school-name-line {
+  width: 330px;
+  border-bottom: 1px solid #285f56;
+  color: #111827;
+  font-family: "Comic Sans MS", "Bradley Hand", cursive;
+  font-size: 20px;
+  line-height: 1.1;
+  padding-bottom: 2px;
+  white-space: nowrap;
+}
+.book-mark { width: 132px; height: 96px; margin: 2px 0 16px; }
+.verse {
+  max-width: 260px;
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  font-style: italic;
+  line-height: 1.2;
+}
+.parents-copy {
+  max-width: 310px;
+  margin-top: 66px;
+  text-align: left;
+  color: #164c43;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.parents-copy em { display: block; margin-bottom: 8px; }
+.board-signoff { text-align: right; font-style: italic; }
+.period-grid-wrap {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) 180px;
+  gap: 16px;
+  align-items: start;
+}
+.subject-list,
+.conduct-list {
+  color: #2b6b61;
+  font-size: 12px;
+  line-height: 1.32;
+}
+.subject-list span { display: block; }
+.subject-list .sub,
+.conduct-list .sub {
+  display: block;
+  padding-left: 14px;
+  font-size: 12px;
+}
+.period-table,
+.conduct-table,
+.attendance-table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+  border-bottom: 2px solid #2e675d;
+}
+.period-table th,
+.period-table td,
+.conduct-table th,
+.conduct-table td,
+.attendance-table th,
+.attendance-table td {
+  border: 2px solid #2e675d;
+  height: 16px;
+  padding: 0 3px;
+  text-align: center;
+  color: #111827;
+  font-family: "Comic Sans MS", "Bradley Hand", cursive;
+  font-size: 13px;
+  line-height: 1;
+}
+.period-table th,
+.conduct-table th,
+.attendance-table th {
+  background: #638980;
+  color: #fff;
+  font-family: "Trebuchet MS", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+}
+.key-subject {
+  margin-top: 24px;
+  color: #2b6b61;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.key-subject h3,
+.conduct-panel h3,
+.attendance h3 {
+  margin: 0 0 4px;
+  color: #285f56;
+  font-size: 15px;
+}
+.key-row {
+  display: grid;
+  grid-template-columns: 28px 92px 1fr;
+  gap: 12px;
+}
+.conduct-panel {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) 186px;
+  gap: 22px;
+  color: #2b6b61;
+  font-size: 12px;
+  line-height: 1.36;
+}
+.conduct-panel h3 { text-transform: uppercase; letter-spacing: .02em; }
+.conduct-section strong {
+  display: block;
+  color: #2b6b61;
+  font-size: 14px;
+}
+.conduct-section span { display: block; padding-left: 15px; }
+.conduct-table td { height: 17px; font-size: 12px; }
+.conduct-keys {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin-top: 14px;
+  color: #164c43;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.attendance {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 284px;
+  gap: 18px;
+  align-items: start;
+  color: #164c43;
+}
+.attendance-table th,
+.attendance-table td { height: 20px; }
 @media (min-width: 720px) {
   .topbar { top: 0; }
   .top-actions { justify-content: end; }
@@ -1182,7 +1566,7 @@ tr:last-child td { border-bottom: 0; }
   .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; }
+  .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
   .asset-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1221,11 +1605,14 @@ tr:last-child td { border-bottom: 0; }
   .detail-grid { grid-template-columns: 1fr; }
 }
 @media print {
+  @page { size: letter landscape; margin: .18in; }
   body { background: #fff; color: #111; }
-  .topbar, .sidebar, .filters, .inline-actions, .quick-scores { display: none !important; }
+  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
   .panel, .ledger, .kpi { box-shadow: none; break-inside: avoid; }
+  .report-card-spread { width: 10.6in; min-height: 8.16in; box-shadow: none; page-break-after: always; break-after: page; }
+  .report-card-document { gap: 0; }
 }
 </style>
 </head>
@@ -1247,6 +1634,8 @@ tr:last-child td { border-bottom: 0; }
   ${user ? `<nav class="sidebar" aria-label="Primary">
     ${navLink('/', currentPath, 'Dashboard', 'dashboard')}
     ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
+    ${navLink('/report-cards', currentPath, 'Report Cards', 'reportcards')}
+    ${navLink('/absences', currentPath, 'Absences', 'absences')}
     ${navLink('/reports', currentPath, 'Reports', 'reports')}
     ${navLink('/setup', currentPath, 'School Setup', 'setup')}
     <div class="sidebar-utility">
@@ -1273,6 +1662,11 @@ tr:last-child td { border-bottom: 0; }
   document.querySelectorAll('.year-form select').forEach(function(select) {
     select.addEventListener('change', function() {
       select.form.submit();
+    });
+  });
+  document.querySelectorAll('[data-auto-submit]').forEach(function(control) {
+    control.addEventListener('change', function() {
+      control.form.submit();
     });
   });
 
@@ -1333,7 +1727,7 @@ function schoolYearHead(title, description, selectedYear, action = '') {
   return `<header class="page-head">
     <div class="page-head-copy">
       <h1>${esc(title)}</h1>
-      <p>${esc(description)} ${selectedYear ? `Current view: ${selectedYear.name}.` : ''}</p>
+      ${description ? `<p>${esc(description)}</p>` : ''}
     </div>
     ${action}
   </header>`;
@@ -1400,7 +1794,7 @@ function dashboardPage(selectedYear) {
         <div class="ledger-head"><h2>Recent Gradebook Entries</h2><p>Newest lessons, quizzes, and tests in this school year.</p></div>
         <div class="table-wrap compact-table"><table>
           <tr><th>Assignment</th><th>Type</th><th>Grade</th><th>Subject</th><th>Class Avg</th></tr>
-          ${recent.map((row) => `<tr><td>${esc(row.title)}</td><td>${esc(row.category)}</td><td>${esc(row.grade_level)}</td><td>${esc(row.subject_name)}</td><td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No grades have been entered for this year yet.')}</td></tr>`}
+          ${recent.map((row) => `<tr><td>${esc(row.title)}</td><td>${displayCategory(row.category)}</td><td>${esc(row.grade_level)}</td><td>${esc(row.subject_name)}</td><td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No grades have been entered for this year yet.')}</td></tr>`}
         </table></div>
       </section>
     </div>
@@ -1440,8 +1834,10 @@ function familiesPage(selectedYear, csrfToken, url) {
       const active = selectedFamily?.id === family.id ? 'active' : '';
       const childText = `${family.child_count || 0} ${Number(family.child_count) === 1 ? 'child' : 'children'}`;
       const contact = [family.phone, family.email].filter(Boolean).join(' - ');
+      const parents = [family.father_name, family.mother_name].filter(Boolean).join(' & ');
+      const householdLine = parents ? `${family.family_name}, ${parents}` : family.family_name;
       return `<a class="family-link ${active}" href="/families?familyId=${family.id}">
-        <strong>${esc(family.family_name)}</strong>
+        <strong>${esc(householdLine)}</strong>
         <span>${esc(childText)}${contact ? ` / ${esc(contact)}` : ''}</span>
       </a>`;
     }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
@@ -1512,13 +1908,14 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'teachers', 'classrooms', 'subjects', 'years', 'users', 'settings'];
+  const validSections = ['families', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
   const teachers = querySql('SELECT * FROM os_teachers ORDER BY name;');
   const subjects = querySql('SELECT * FROM os_subjects ORDER BY name;');
   const schoolYears = querySql('SELECT * FROM os_school_years ORDER BY is_active DESC, name DESC;');
+  const markingPeriods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
   const classrooms = querySql(`SELECT c.*, t.name AS teacher_name,
       GROUP_CONCAT(cg.grade_level, ', ') AS grades
     FROM os_classrooms c
@@ -1548,6 +1945,14 @@ function setupPage(selectedYear, csrfToken, url) {
     FROM os_users u
     LEFT JOIN os_teachers t ON t.id = u.teacher_id
     ORDER BY u.name;`);
+  const weightGroups = querySql(`SELECT wg.*, s.name AS subject_name
+    FROM os_grade_weight_groups wg
+    LEFT JOIN os_subjects s ON s.id = wg.subject_id
+    WHERE wg.school_year_id=${yearId}
+    ORDER BY CAST(wg.min_grade AS INTEGER), wg.name;`);
+  const weightItems = querySql(`SELECT * FROM os_grade_weight_items
+    WHERE group_id IN (SELECT id FROM os_grade_weight_groups WHERE school_year_id=${yearId})
+    ORDER BY category;`);
   const teacherOptions = (selected = '') => teachers.map((teacher) => `<option value="${teacher.id}" ${selectedAttr(teacher.id, selected)}>${esc(teacher.name)}</option>`).join('');
   const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
@@ -1557,6 +1962,7 @@ function setupPage(selectedYear, csrfToken, url) {
     ['classrooms', 'Classrooms', `${classrooms.length} rooms in ${selectedYear.name}`],
     ['subjects', 'Subjects', `${subjects.length} subjects`],
     ['years', 'School Years', `${schoolYears.length} years`],
+    ['weights', 'Grade Weights', `${weightGroups.length} groups`],
     ['users', 'Users', `${users.length} sign-ins`],
     ['settings', 'System Settings', settings.schoolName]
   ];
@@ -1581,10 +1987,10 @@ function setupPage(selectedYear, csrfToken, url) {
     ${families.map((family) => {
       const active = selectedFamily?.id === family.id && !showFamilyForm ? 'active' : '';
       const childText = `${family.child_count || 0} ${Number(family.child_count) === 1 ? 'child' : 'children'}`;
+      const parents = [family.father_name, family.mother_name].filter(Boolean).join(' & ');
+      const householdLine = parents ? `${family.family_name}, ${parents}` : family.family_name;
       return `<a class="family-link ${active}" href="/setup?section=families&familyId=${family.id}">
-        <strong>${esc(family.family_name)}</strong>
-        <small>Dad: ${esc(family.father_name || 'not listed')}</small>
-        <small>Mom: ${esc(family.mother_name || 'not listed')}</small>
+        <strong>${esc(householdLine)}</strong>
         <span>${esc(childText)}</span>
       </a>`;
     }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
@@ -1752,6 +2158,16 @@ function setupPage(selectedYear, csrfToken, url) {
     <label>Make Active<select name="makeActive"><option value="1">Yes</option><option value="0">No</option></select></label>
     <button type="submit">Promote Students</button>
   </form>`;
+  const periodForm = `<form method="post" action="/marking-periods" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="schoolYearId" value="${yearId}" />
+    <label>School Days<input type="number" name="schoolDays" min="1" max="260" value="${asInt(selectedYear.school_days) || 180}" /></label>
+    <label>Marking Periods<input type="number" name="periodCount" min="1" max="12" value="${markingPeriods.length || 6}" /></label>
+    <label>Term Starts<input type="date" name="startDate" value="${esc(selectedYear.start_date || '')}" /></label>
+    <label>Term Ends<input type="date" name="endDate" value="${esc(selectedYear.end_date || '')}" /></label>
+    <label><input type="checkbox" name="autoCalculate" value="1" checked /> Auto Calculate Marking Period Dates</label>
+    <button type="submit">Save Marking Periods</button>
+  </form>`;
   const yearsModule = `<section class="family-detail">
     <div class="family-detail-head">
       <h2>School Years</h2>
@@ -1766,6 +2182,44 @@ function setupPage(selectedYear, csrfToken, url) {
       <div class="table-wrap compact-table"><table>
         <tr><th>School Year</th><th>Dates</th><th>Status</th><th></th></tr>
         ${schoolYears.map((schoolYear) => `<tr><td>${esc(schoolYear.name)}</td><td>${esc([schoolYear.start_date, schoolYear.end_date].filter(Boolean).join(' to ')) || '&mdash;'}</td><td>${schoolYear.is_active ? '<span class="badge good">Active</span>' : '<span class="badge">Inactive</span>'}</td><td><a class="text-action" href="/setup?section=years&yearId=${schoolYear.id}">Edit</a></td></tr>`).join('')}
+      </table></div>
+      <div class="subhead"><h3>Marking Periods</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
+      ${periodForm}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Period</th><th>Start</th><th>End</th></tr>
+        ${markingPeriods.map((period) => `<tr><td>${esc(period.name)}</td><td>${esc(period.start_date || '') || '&mdash;'}</td><td>${esc(period.end_date || '') || '&mdash;'}</td></tr>`).join('') || `<tr><td colspan="3">${emptyState('No marking periods set yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
+  const weightEdit = weightGroups.find((group) => group.id === asInt(url.searchParams.get('weightGroupId')));
+  const weightsForForm = Object.fromEntries(weightItems.filter((item) => item.group_id === weightEdit?.id).map((item) => [normalizeCategory(item.category), item.weight]));
+  const weightForm = `<form method="post" action="/grade-weights" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="schoolYearId" value="${yearId}" />
+    ${weightEdit ? `<input type="hidden" name="weightGroupId" value="${weightEdit.id}" />` : ''}
+    <label>Group Name<input name="name" required maxlength="120" value="${esc(weightEdit?.name || '')}" placeholder="Grades 1-2" /></label>
+    <label>Subject<select name="subjectId"><option value="">Any subject</option>${subjectOptions(weightEdit?.subject_id || '')}</select></label>
+    <label>Minimum Grade<select name="minGrade">${gradeOptions(weightEdit?.min_grade || '1')}</select></label>
+    <label>Maximum Grade<select name="maxGrade">${gradeOptions(weightEdit?.max_grade || '2')}</select></label>
+    <label>Rounding Mode<select name="roundingMode"><option value="nearest" ${selectedAttr(weightEdit?.rounding_mode || 'nearest', 'nearest')}>Nearest whole percent</option><option value="round-up" ${selectedAttr(weightEdit?.rounding_mode, 'round-up')}>.5 Round Up</option></select></label>
+    <label>Calculation Mode<select name="calculationMode"><option value="weighted" ${selectedAttr(weightEdit?.calculation_mode || 'weighted', 'weighted')}>Weighted</option><option value="straight" ${selectedAttr(weightEdit?.calculation_mode, 'straight')}>Straight Average</option></select></label>
+    ${CATEGORIES.map((category) => `<label>${esc(category)} Weight<input type="number" name="weight_${esc(category)}" min="0" max="100" step="1" value="${esc(weightsForForm[category] ?? '')}" /></label>`).join('')}
+    <button type="submit">${weightEdit ? 'Save Weight Group' : 'Create Weight Group'}</button>
+  </form>`;
+  const weightsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Grade Weights</h2>
+      <div class="module-actions"><span class="family-count">${weightGroups.length}</span><a class="page-action compact-action" href="/setup?section=weights&action=add-weight">Add Weight Group</a></div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-weight' || weightEdit) ? `<div class="subhead"><h3>${weightEdit ? 'Edit Weight Group' : 'Add Weight Group'}</h3><a class="secondary-btn compact-action" href="/setup?section=weights">Cancel</a></div>${weightForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Group</th><th>Grades</th><th>Subject</th><th>Weights</th><th></th></tr>
+        ${weightGroups.map((group) => {
+          const items = weightItems.filter((item) => item.group_id === group.id);
+          return `<tr><td>${esc(group.name)}</td><td>${esc(group.min_grade)}-${esc(group.max_grade)}</td><td>${esc(group.subject_name || 'Any')}</td><td>${items.map((item) => `<span class="badge">${displayCategory(item.category)} ${Number(item.weight)}%</span>`).join('')}</td><td><a class="text-action" href="/setup?section=weights&weightGroupId=${group.id}">Edit</a></td></tr>`;
+        }).join('') || `<tr><td colspan="5">${emptyState('No grade weights yet.')}</td></tr>`}
       </table></div>
     </div>
   </section>`;
@@ -1828,6 +2282,7 @@ function setupPage(selectedYear, csrfToken, url) {
     classrooms: classroomsModule,
     subjects: subjectsModule,
     years: yearsModule,
+    weights: weightsModule,
     users: usersModule,
     settings: settingsModule
   };
@@ -1846,6 +2301,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedSubjectId = asInt(url.searchParams.get('subjectId'));
   const selectedClassroomId = asInt(url.searchParams.get('classroomId'));
+  const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
   const allGrades = sortGrades([
     ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level),
     ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((row) => row.grade_level)
@@ -1864,6 +2320,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
         WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)}
         ORDER BY s.name;`)
     : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
+  const markingPeriods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
   const subject = subjects.find((row) => row.id === selectedSubjectId);
   const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, selectedClassroomId);
   const classroomClause = selectedClassroomId ? `AND sy.classroom_id=${selectedClassroomId}` : '';
@@ -1888,6 +2345,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
       AND a.grade_level=${sqlValue(selectedGrade)}
       AND a.subject_id=${selectedSubjectId}
       ${selectedClassroomId ? `AND COALESCE(a.classroom_id, 0)=${selectedClassroomId}` : ''}
+      ${selectedPeriodId ? `AND COALESCE(a.marking_period_id, 0)=${selectedPeriodId}` : ''}
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC
     LIMIT 18;`) : [];
@@ -1895,6 +2353,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
   const gradeSelect = `<select name="grade" required><option value="">Grade</option>${allGrades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
   const subjectSelect = `<select name="subjectId" required><option value="">Subject</option>${subjects.map((subj) => `<option value="${subj.id}" ${subj.id === selectedSubjectId ? 'selected' : ''}>${esc(subj.name)}</option>`).join('')}</select>`;
   const classroomSelect = `<select name="classroomId"><option value="">All classrooms</option>${classrooms.map((room) => `<option value="${room.id}" ${room.id === selectedClassroomId ? 'selected' : ''}>${esc(room.name)}${room.grades ? ` - ${esc(room.grades)}` : ''}</option>`).join('')}</select>`;
+  const periodSelect = `<select name="markingPeriodId"><option value="">All periods</option>${markingPeriods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
 
   return `<div class="workspace">
     ${schoolYearHead('Gradebook', 'Choose a year, grade, subject, and lesson; then enter the whole class at once.', selectedYear)}
@@ -1904,6 +2363,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
         <label>Grade${gradeSelect}</label>
         <label>Subject${subjectSelect}</label>
         <label>Classroom${classroomSelect}</label>
+        <label>Marking Period${periodSelect}</label>
         <button type="submit">Load Class</button>
       </form>
     </section>
@@ -1916,6 +2376,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
             <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
             <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
             <input type="hidden" name="classroomId" value="${selectedClassroomId || ''}" />
+            <input type="hidden" name="markingPeriodId" value="${selectedPeriodId || ''}" />
             <div class="form-grid three">
               <label>Lesson / Assignment<input name="title" placeholder="Lesson 24" required maxlength="140" /></label>
               <label>Type<select name="category">${categoryOptions()}</select></label>
@@ -1937,7 +2398,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
         <div class="ledger-head"><h2>Assignment History</h2><p>Recent entries for the loaded grade and subject.</p></div>
         <div class="table-wrap compact-table"><table>
           <tr><th>Date</th><th>Assignment</th><th>Type</th><th>Scores</th><th>Average</th></tr>
-          ${assignments.map((assignment) => `<tr><td>${esc(assignment.assignment_date || '') || '&mdash;'}</td><td>${esc(assignment.title)}</td><td>${esc(assignment.category)}</td><td>${assignment.score_count}</td><td><span class="badge ${gradeTone(assignment.avg_score)}">${formatPercent(assignment.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No assignment history for this selection yet.')}</td></tr>`}
+          ${assignments.map((assignment) => `<tr><td>${esc(assignment.assignment_date || '') || '&mdash;'}</td><td>${esc(assignment.title)}</td><td>${displayCategory(assignment.category)}</td><td>${assignment.score_count}</td><td><span class="badge ${gradeTone(assignment.avg_score)}">${formatPercent(assignment.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No assignment history for this selection yet.')}</td></tr>`}
         </table></div>
       </section>
     </div>
@@ -2034,6 +2495,294 @@ function reportsPage(url, selectedYear) {
         </table></div>
       </section>
     </div>
+  </div>`;
+}
+
+function reportLetter(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return '';
+  if (score >= 94) return 'A';
+  if (score >= 86) return 'B';
+  if (score >= 76) return 'C';
+  if (score >= 70) return 'D';
+  if (score >= 63) return 'E';
+  return 'F';
+}
+
+function matchingWeightGroup(groups, grade, subjectId) {
+  const rank = gradeRank(grade);
+  return groups.find((group) => group.subject_id === subjectId && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
+    || groups.find((group) => !group.subject_id && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
+    || null;
+}
+
+function calculateWeightedAverage(scores, group, allItems) {
+  const percentages = scores.map((row) => Number(row.percent)).filter(Number.isFinite);
+  if (!percentages.length) return { average: null, breakdown: [] };
+  const straight = average(percentages);
+  if (!group || group.calculation_mode === 'straight') return { average: Math.round(straight), breakdown: [] };
+  const items = allItems.filter((item) => item.group_id === group.id);
+  let weightedTotal = 0;
+  let usedWeight = 0;
+  const breakdown = [];
+  items.forEach((item) => {
+    const categoryScores = scores.filter((row) => normalizeCategory(row.category) === normalizeCategory(item.category)).map((row) => Number(row.percent)).filter(Number.isFinite);
+    if (!categoryScores.length) return;
+    const categoryAverage = average(categoryScores);
+    const weight = Number(item.weight) || 0;
+    weightedTotal += categoryAverage * weight;
+    usedWeight += weight;
+    breakdown.push(`${normalizeCategory(item.category)} ${Math.round(categoryAverage)}% x ${weight}%`);
+  });
+  if (!usedWeight) return { average: Math.round(straight), breakdown: [] };
+  const raw = weightedTotal / usedWeight;
+  return { average: group.rounding_mode === 'round-up' ? Math.floor(raw + 0.5) : Math.round(raw), breakdown };
+}
+
+function absenceUnitsToDays(row) {
+  const amount = Number(row.amount) || 0;
+  return row.unit === 'hours' ? amount / 6 : amount;
+}
+
+function periodAbsenceTotal(rows, period) {
+  return rows.filter((row) => {
+    if (!period.start_date || !period.end_date) return false;
+    return row.absence_date >= period.start_date && row.absence_date <= period.end_date;
+  }).reduce((sum, row) => sum + absenceUnitsToDays(row), 0);
+}
+
+function formatAbsence(value) {
+  const number = Number(value) || 0;
+  return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, '');
+}
+
+function reportCardBooksSvg() {
+  return `<svg class="book-mark" viewBox="0 0 160 112" aria-hidden="true">
+    <g fill="none" stroke="#2d6a60" stroke-width="2">
+      <path d="M35 86 51 34l18 5-15 52z" fill="#e9f0ed"/>
+      <path d="M55 88V28h17v60z" fill="#d7e4df"/>
+      <path d="M76 89V22h16v67z" fill="#edf4f1"/>
+      <path d="M96 86V30h17v56z" fill="#d7e4df"/>
+      <path d="M118 85V38h15v47z" fill="#edf4f1"/>
+      <path d="M28 91h112" />
+      <path d="M58 39h10M58 47h10M99 42h10M121 50h9" />
+      <circle cx="84" cy="49" r="4" fill="#9fb5ae"/>
+      <circle cx="126" cy="60" r="4" fill="#9fb5ae"/>
+    </g>
+  </svg>`;
+}
+
+function rowInPeriod(row, period) {
+  if (!period) return true;
+  if (asInt(row.marking_period_id) === asInt(period.id)) return true;
+  if (!row.marking_period_id && period.start_date && period.end_date && row.assignment_date) {
+    return row.assignment_date >= period.start_date && row.assignment_date <= period.end_date;
+  }
+  return false;
+}
+
+function reportCardsPage(url, selectedYear) {
+  const yearId = asInt(selectedYear.id);
+  const settings = appSettings();
+  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  const selectedStudentId = asInt(url.searchParams.get('studentId'));
+  const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
+  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
+  const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+  const selectedPeriod = periods.find((period) => period.id === selectedPeriodId) || null;
+  const students = selectedGrade ? querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND sy.grade_level=${sqlValue(selectedGrade)}
+    ORDER BY st.last_name, st.first_name;`) : [];
+  const selectedStudent = students.find((student) => student.id === selectedStudentId) || null;
+  const subjects = selectedGrade ? querySql(`SELECT s.id, s.name
+    FROM os_grade_subjects gs
+    JOIN os_subjects s ON s.id = gs.subject_id
+    WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)}
+    ORDER BY s.name;`) : [];
+  const weightGroups = querySql(`SELECT * FROM os_grade_weight_groups WHERE school_year_id=${yearId};`);
+  const weightItems = querySql(`SELECT wi.* FROM os_grade_weight_items wi
+    JOIN os_grade_weight_groups wg ON wg.id = wi.group_id
+    WHERE wg.school_year_id=${yearId};`);
+  const scoreRows = selectedStudent ? querySql(`SELECT a.subject_id, s.name AS subject_name, a.category, a.assignment_date, a.marking_period_id,
+      ROUND((sc.score / a.max_score) * 100, 1) AS percent
+    FROM os_scores sc
+    JOIN os_assignments a ON a.id = sc.assignment_id
+    JOIN os_subjects s ON s.id = a.subject_id
+    WHERE a.school_year_id=${yearId}
+      AND a.grade_level=${sqlValue(selectedGrade)}
+      AND sc.student_id=${selectedStudent.id};`) : [];
+  const absenceRows = selectedStudent ? querySql(`SELECT * FROM os_absences
+    WHERE school_year_id=${yearId}
+      AND student_id=${selectedStudent.id}
+      AND kind='absence'
+    ORDER BY absence_date;`) : [];
+  const subjectRows = subjects.map((subject) => {
+    const rows = scoreRows.filter((row) => row.subject_id === subject.id && rowInPeriod(row, selectedPeriod));
+    const group = matchingWeightGroup(weightGroups, selectedGrade, subject.id);
+    const result = calculateWeightedAverage(rows, group, weightItems);
+    return {
+      subject,
+      average: result.average,
+      breakdown: result.breakdown,
+      groupName: group?.name || 'Straight average'
+    };
+  });
+  const subjectPeriodRows = subjects.map((subject) => {
+    const group = matchingWeightGroup(weightGroups, selectedGrade, subject.id);
+    const periodScores = periods.map((period) => {
+      const rows = scoreRows.filter((row) => row.subject_id === subject.id && rowInPeriod(row, period));
+      return calculateWeightedAverage(rows, group, weightItems).average;
+    });
+    return { subject, periodScores };
+  });
+  const gradeSelect = `<select name="grade" data-auto-submit required><option value="">Grade</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
+  const studentSelect = `<select name="studentId" required><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
+  const periodSelect = `<select name="markingPeriodId" required><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
+  const periodHeaders = periods.map((period) => `<th>${esc(period.period_number)}</th>`).join('');
+  const conductRows = Array.from({ length: 28 }, () => `<tr>${periods.map(() => '<td></td>').join('')}</tr>`).join('');
+  const subjectTableRows = subjectPeriodRows.map((row) => `<tr>${row.periodScores.map((score) => `<td>${score === null || score === undefined ? '' : Math.round(Number(score))}</td>`).join('')}</tr>`).join('');
+  const subjectLabels = subjectPeriodRows.map((row) => `<span>${esc(row.subject.name)}</span>`).join('') || '<span>No subjects</span>';
+  const absenceByPeriod = periods.map((period) => periodAbsenceTotal(absenceRows, period));
+  const absenceTotal = absenceByPeriod.reduce((sum, value) => sum + value, 0);
+  const presentDays = Math.max(0, (asInt(selectedYear.school_days) || 180) - absenceTotal);
+  const preview = selectedStudent && selectedPeriod ? `<div class="report-card-document">
+    <section class="report-card-spread cover-spread">
+      <div class="report-page parent-page">
+        <p class="parent-note"><em>To the parent:</em></p>
+        <p class="parent-note">Please sign your name to show that you have read this report and return the report to school promptly.</p>
+        <div class="signature-line">Signature</div>
+        <div class="generated-note">Generated by<br>Oakstead</div>
+      </div>
+      <div class="report-spine"></div>
+      <div class="report-page cover-page">
+        <img class="cover-leaf" src="${settings.logoUrl}" alt="${esc(settings.schoolName)}" />
+        <h2>Report Card</h2>
+        <div class="cover-of">of</div>
+        <div class="script-line">${esc(selectedStudent.first_name)} ${esc(selectedStudent.last_name)}</div>
+        <div class="cover-meta">Grade <span class="blank-line">${esc(selectedGrade)}</span> <span>School Year ${esc(selectedYear.name)}</span></div>
+        <div class="school-name-line">${esc(settings.schoolName)}</div>
+        ${reportCardBooksSvg()}
+        <div class="verse">"The fear of the Lord is the beginning<br>of wisdom." Psalm 111:10</div>
+        <div class="parents-copy">
+          <em>To the Parents:</em>
+          <p>This report is to inform you of your child's performance in his studies and conduct at school. Please read it carefully and discuss it with your child.</p>
+          <p>The school requests your support so that your child does his best at school. We invite you to visit school and observe your child at work. We also encourage you to discuss your child's progress with his teacher.</p>
+          <p class="board-signoff">The School Board and Teachers</p>
+        </div>
+      </div>
+    </section>
+    <section class="report-card-spread inside-spread">
+      <div>
+        <div class="period-grid-wrap">
+          <div class="subject-list"><strong>REPORT PERIODS</strong>${subjectLabels}</div>
+          <table class="period-table">
+            <tr>${periodHeaders}</tr>
+            ${subjectTableRows || `<tr>${periods.map(() => '<td></td>').join('')}</tr>`}
+          </table>
+        </div>
+        <div class="key-subject">
+          <h3>Key to Subject Grades</h3>
+          <div class="key-row"><span>A</span><span>(94-100)</span><span>Excellent Work</span></div>
+          <div class="key-row"><span>B</span><span>(86-93)</span><span>Good Work</span></div>
+          <div class="key-row"><span>C</span><span>(76-85)</span><span>Fair Work</span></div>
+          <div class="key-row"><span>D</span><span>(70-75)</span><span>Poor Work</span></div>
+          <div class="key-row"><span>E</span><span>(63-69)</span><span>Failing Work--Needs Improvement to Pass</span></div>
+          <div class="key-row"><span>F</span><span>(62 and below)</span><span>Failing Work--Needs Great Improvement to Pass</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="conduct-panel">
+          <div class="conduct-list">
+            <h3>Conduct Grades</h3>
+            <div class="conduct-section"><strong>Classroom Behaviour</strong><span>Avoids disturbing others</span><span>Has good posture</span><span>Pays attention in class</span><span>Speaks with good volume and enunciation</span></div>
+            <div class="conduct-section"><strong>Interpersonal Relationships</strong><span>Is mannerly</span><span>Is thoughtful and gracious</span><span>Respects others' feelings</span><span>Respects others' property</span><span>Works and plays well with others</span></div>
+            <div class="conduct-section"><strong>Spiritual & Moral Traits</strong><span>Accepts direction cheerfully</span><span>Is honest & trustworthy</span><span>Is respectful</span><span>Obeys school rules</span><span>Shows interest in spiritual matters</span><span>Shows self-control</span><span>Uses wholesome speech</span></div>
+            <div class="conduct-section"><strong>Stewardship</strong><span>Cares for school property</span><span>Keeps desk and books tidy</span></div>
+            <div class="conduct-section"><strong>Work Habits</strong><span>Enjoys study</span><span>Follows directions</span><span>Shows effort and perseverance</span><span>Stays current with assignments</span><span>Uses time well</span><span>Works carefully</span></div>
+          </div>
+          <table class="conduct-table"><tr>${periodHeaders}</tr>${conductRows}</table>
+        </div>
+        <div class="conduct-keys">
+          <div><strong>Key to Conduct Grades<br>(and First Grades Subjects)</strong><br>S &nbsp;&nbsp; Satisfactory<br>N &nbsp;&nbsp; Needs Improvement<br>U &nbsp;&nbsp; Unsatisfactory</div>
+          <div><strong>Key to Subheading Marks</strong><br>(+) &nbsp;&nbsp; Commendable<br>(no mark) &nbsp;&nbsp; Satisfactory<br>(-) &nbsp;&nbsp; Needs Improvement</div>
+        </div>
+        <div class="attendance">
+          <div><h3>ATTENDANCE</h3><div>Absence</div><strong>Total Days Present</strong></div>
+          <table class="attendance-table">
+            <tr>${periodHeaders}<th>Total</th></tr>
+            <tr>${absenceByPeriod.map((value) => `<td>${formatAbsence(value)}</td>`).join('')}<td>${formatAbsence(absenceTotal)}</td></tr>
+            <tr>${periods.map(() => '<td></td>').join('')}<td>${formatAbsence(presentDays)}</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>` : emptyState('Select a grade, student, and marking period to build a report card.');
+
+  return `<div class="workspace">
+    ${schoolYearHead('Report Cards', 'Generate printable report cards from marking periods and grade weights.', selectedYear)}
+    <section class="panel">
+      <form method="get" action="/report-cards" class="filters">
+        <input type="hidden" name="yearId" value="${yearId}" />
+        <label>Grade${gradeSelect}</label>
+        <label>Student${studentSelect}</label>
+        <label>Marking Period${periodSelect}</label>
+        <button type="submit">Load Report Card</button>
+      </form>
+    </section>
+    <div class="report-card-actions"><button class="secondary-btn" type="button" onclick="window.print()">Print</button></div>
+    ${preview}
+  </div>`;
+}
+
+function absencesPage(url, selectedYear, csrfToken) {
+  const yearId = asInt(selectedYear.id);
+  const action = cleanText(url.searchParams.get('action'), 40);
+  const students = querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+    ORDER BY sy.grade_level, st.last_name, st.first_name;`);
+  const absences = querySql(`SELECT a.*, st.first_name, st.last_name, sy.grade_level
+    FROM os_absences a
+    JOIN os_students st ON st.id = a.student_id
+    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id
+    WHERE a.school_year_id=${yearId}
+    ORDER BY a.absence_date DESC, st.last_name, st.first_name
+    LIMIT 80;`);
+  const studentOptions = students.map((student) => `<option value="${student.id}">${esc(student.last_name)}, ${esc(student.first_name)} - Grade ${esc(student.grade_level)}</option>`).join('');
+  const addForm = `<section class="family-detail">
+    <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="/absences">Cancel</a></div>
+    <div class="family-detail-body">
+      <form method="post" action="/absences" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <input type="hidden" name="schoolYearId" value="${yearId}" />
+        <label>Date<input type="date" name="absenceDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
+        <label>Student<select name="studentId" required><option value="">Choose student</option>${studentOptions}</select></label>
+        <label>Type<select name="kind"><option value="absence">Absence</option><option value="tardy">Tardy</option></select></label>
+        <label>Amount<input type="number" name="amount" min="0" max="30" step="0.25" value="1" required /></label>
+        <label>Unit<select name="unit"><option value="days">Days</option><option value="hours">Hours</option></select></label>
+        <label>Notes<textarea name="notes" maxlength="400"></textarea></label>
+        <button type="submit">Save Absence</button>
+      </form>
+    </div>
+  </section>`;
+  const list = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Absences</h2>
+      <div class="module-actions"><span class="family-count">${absences.length}</span><a class="page-action compact-action" href="/absences?action=add">Add</a></div>
+    </div>
+    <div class="family-detail-body">
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Date</th><th>Student</th><th>Type</th><th>Amount</th><th>Notes</th></tr>
+        ${absences.map((row) => `<tr><td>${esc(row.absence_date)}</td><td>${esc(row.last_name)}, ${esc(row.first_name)}<br><small>Grade ${esc(row.grade_level || '')}</small></td><td>${esc(row.kind)}</td><td>${formatAbsence(row.amount)} ${esc(row.unit)}</td><td>${esc(row.notes || '') || '&mdash;'}</td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No absences recorded for this school year.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+  return `<div class="workspace">
+    ${schoolYearHead('Absences', 'Record absences and tardies for report card attendance.', selectedYear)}
+    ${action === 'add' ? addForm : list}
   </div>`;
 }
 
@@ -2134,6 +2883,16 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, `/setup?section=families&familyId=${asInt(family?.family_id)}`, headers);
   }
 
+  if (p === '/absences') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const kind = cleanText(body.kind, 20).toLowerCase() === 'tardy' ? 'tardy' : 'absence';
+    const unit = cleanText(body.unit, 20).toLowerCase() === 'hours' ? 'hours' : 'days';
+    const amount = Math.max(0, Math.min(30, Number(body.amount) || 0));
+    runSql(`INSERT INTO os_absences (school_year_id, student_id, absence_date, kind, amount, unit, notes)
+      VALUES (${asInt(body.schoolYearId)}, ${asInt(body.studentId)}, ${sqlValue(cleanDate(body.absenceDate))}, ${sqlValue(kind)}, ${amount}, ${sqlValue(unit)}, ${sqlValue(cleanText(body.notes, 400))});`);
+    return redirect(res, '/absences', headers);
+  }
+
   if (p === '/teachers') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     const teacherId = asInt(body.teacherId);
@@ -2205,7 +2964,22 @@ function handlePost(req, res, p, body, user, headers) {
     }
     const yearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
       VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
+    createMarkingPeriods(yearId, 6, cleanDate(body.startDate), cleanDate(body.endDate));
+    createDefaultWeightGroups(yearId);
     appendSetCookie(headers, `selectedYearId=${cookieValue(yearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    return redirect(res, '/setup?section=years', headers);
+  }
+
+  if (p === '/marking-periods') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const schoolYearId = asInt(body.schoolYearId);
+    const schoolDays = Math.max(1, Math.min(260, asInt(body.schoolDays) || 180));
+    const periodCount = Math.max(1, Math.min(12, asInt(body.periodCount) || 6));
+    const startDate = cleanDate(body.startDate);
+    const endDate = cleanDate(body.endDate);
+    runSql(`UPDATE os_school_years SET school_days=${schoolDays}, start_date=${sqlValue(startDate)}, end_date=${sqlValue(endDate)} WHERE id=${schoolYearId};`);
+    runSql(`DELETE FROM os_marking_periods WHERE school_year_id=${schoolYearId};`);
+    createMarkingPeriods(schoolYearId, periodCount, startDate, endDate);
     return redirect(res, '/setup?section=years', headers);
   }
 
@@ -2215,6 +2989,8 @@ function handlePost(req, res, p, body, user, headers) {
     if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
     const newYearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
       VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
+    createMarkingPeriods(newYearId, 6, cleanDate(body.startDate), cleanDate(body.endDate));
+    createDefaultWeightGroups(newYearId);
     const enrollments = querySql(`SELECT student_id, grade_level FROM os_student_years WHERE school_year_id=${fromYearId} AND status='enrolled';`);
     enrollments.forEach((enrollment) => {
       runSql(`INSERT OR IGNORE INTO os_student_years (student_id, school_year_id, grade_level, status)
@@ -2246,6 +3022,38 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=users', headers);
   }
 
+  if (p === '/grade-weights') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const schoolYearId = asInt(body.schoolYearId);
+    const groupId = asInt(body.weightGroupId);
+    const name = cleanText(body.name, 120) || 'Grade Weight Group';
+    const minGrade = cleanGrade(body.minGrade);
+    const maxGrade = cleanGrade(body.maxGrade);
+    const subjectId = asInt(body.subjectId);
+    const roundingMode = cleanText(body.roundingMode, 40) || 'nearest';
+    const calculationMode = cleanText(body.calculationMode, 40) || 'weighted';
+    const savedGroupId = groupId || insertReturningId(`INSERT INTO os_grade_weight_groups (school_year_id, name, min_grade, max_grade, subject_id, rounding_mode, calculation_mode)
+      VALUES (${schoolYearId}, ${sqlValue(name)}, ${sqlValue(minGrade)}, ${sqlValue(maxGrade)}, ${subjectId || 'NULL'}, ${sqlValue(roundingMode)}, ${sqlValue(calculationMode)})`);
+    if (groupId) {
+      runSql(`UPDATE os_grade_weight_groups
+        SET name=${sqlValue(name)},
+            min_grade=${sqlValue(minGrade)},
+            max_grade=${sqlValue(maxGrade)},
+            subject_id=${subjectId || 'NULL'},
+            rounding_mode=${sqlValue(roundingMode)},
+            calculation_mode=${sqlValue(calculationMode)}
+        WHERE id=${groupId};`);
+      runSql(`DELETE FROM os_grade_weight_items WHERE group_id=${groupId};`);
+    }
+    CATEGORIES.forEach((category) => {
+      const weight = Number(body[`weight_${category}`]);
+      if (!Number.isFinite(weight) || weight <= 0) return;
+      runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+        VALUES (${savedGroupId}, ${sqlValue(category)}, ${Math.max(0, Math.min(100, weight))});`);
+    });
+    return redirect(res, '/setup?section=weights', headers);
+  }
+
   if (p === '/system-settings') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     const schoolName = cleanText(body.schoolName, 120) || DEFAULT_SCHOOL_NAME;
@@ -2262,11 +3070,12 @@ function handlePost(req, res, p, body, user, headers) {
     const gradeLevel = cleanGrade(body.gradeLevel);
     const subjectId = asInt(body.subjectId);
     const classroomId = asInt(body.classroomId);
+    const markingPeriodId = asInt(body.markingPeriodId);
     if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel, classroomId)) return sendText(res, 403, 'Forbidden');
     const maxScore = Math.max(1, asScore(body.maxScore) || 100);
     const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
-    const assignmentId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, classroom_id, title, category, assignment_date, max_score, teacher_id)
-      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${classroomId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(cleanText(body.category, 24) || 'Lesson')}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+    const assignmentId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, classroom_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
+      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${classroomId || 'NULL'}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
     Object.keys(body).forEach((key) => {
       if (!key.startsWith('score_')) return;
       const score = asScore(body[key]);
@@ -2274,7 +3083,7 @@ function handlePost(req, res, p, body, user, headers) {
       runSql(`INSERT INTO os_scores (assignment_id, student_id, score)
         VALUES (${assignmentId}, ${asInt(key.replace('score_', ''))}, ${score});`);
     });
-    return redirect(res, `/gradebook?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&classroomId=${classroomId || ''}`, headers);
+    return redirect(res, `/gradebook?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&classroomId=${classroomId || ''}&markingPeriodId=${markingPeriodId || ''}`, headers);
   }
 
   return sendText(res, 404, 'Not Found');
@@ -2341,6 +3150,11 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url) }), headers);
     }
     if (p === '/gradebook') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
+    if (p === '/report-cards') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Report Cards', content: reportCardsPage(url, selected) }), headers);
+    if (p === '/absences') {
+      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Absences', content: absencesPage(url, selected, csrfToken) }), headers);
+    }
     if (p === '/reports') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Reports', content: reportsPage(url, selected) }), headers);
     if (p === '/users') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
