@@ -302,32 +302,81 @@ CREATE TABLE IF NOT EXISTS os_school_years (
   is_active INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS os_school_districts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS os_families (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   family_name TEXT NOT NULL,
+  school_district_id INTEGER,
   father_name TEXT,
   mother_name TEXT,
+  father_phone TEXT,
+  mother_phone TEXT,
   phone TEXT,
   email TEXT,
   address TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_district_id) REFERENCES os_school_districts(id)
 );
 CREATE TABLE IF NOT EXISTS os_students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   family_id INTEGER NOT NULL,
   first_name TEXT NOT NULL,
+  middle_name TEXT,
   last_name TEXT NOT NULL,
   birth_date TEXT,
+  gender TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (family_id) REFERENCES os_families(id)
+);
+CREATE TABLE IF NOT EXISTS os_emergency_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_id INTEGER NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 1,
+  name TEXT NOT NULL,
+  relationship TEXT,
+  phone TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (family_id) REFERENCES os_families(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS os_teachers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   email TEXT,
   phone TEXT,
+  mobile_phone TEXT,
+  address TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_role_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_role_types (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  UNIQUE (group_id, name),
+  FOREIGN KEY (group_id) REFERENCES os_role_groups(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_person_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_type TEXT NOT NULL,
+  person_id INTEGER NOT NULL,
+  group_id INTEGER NOT NULL,
+  role_type_id INTEGER NOT NULL,
+  is_assistant INTEGER NOT NULL DEFAULT 0,
+  term_start TEXT,
+  term_end TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (group_id) REFERENCES os_role_groups(id),
+  FOREIGN KEY (role_type_id) REFERENCES os_role_types(id)
 );
 CREATE TABLE IF NOT EXISTS os_classrooms (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -473,8 +522,16 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
 
   ensureColumn('os_school_years', 'school_days', 'school_days INTEGER DEFAULT 180');
   ensureColumn('os_assignments', 'marking_period_id', 'marking_period_id INTEGER');
+  ensureColumn('os_families', 'school_district_id', 'school_district_id INTEGER');
+  ensureColumn('os_families', 'father_phone', 'father_phone TEXT');
+  ensureColumn('os_families', 'mother_phone', 'mother_phone TEXT');
+  ensureColumn('os_students', 'middle_name', 'middle_name TEXT');
+  ensureColumn('os_students', 'gender', 'gender TEXT');
+  ensureColumn('os_teachers', 'mobile_phone', 'mobile_phone TEXT');
+  ensureColumn('os_teachers', 'address', 'address TEXT');
 
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
+  createDefaultRoleGroups();
   migrateLessonHomeworkWeights();
 
   const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
@@ -522,6 +579,20 @@ function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
 function createDefaultWeightGroups(yearId) {
   createWeightGroup(yearId, 'Grades 1-2', '1', '2', { 'Lesson / Homework': 50, Quiz: 25, Test: 25 });
   createWeightGroup(yearId, 'Grades 3-9', '3', '9', { 'Lesson / Homework': 25, Quiz: 25, Test: 50 });
+}
+
+function createDefaultRoleGroups() {
+  const defaults = {
+    'Board Members': ['Chairman', 'Secretary', 'Treasurer'],
+    'Faculty Team': ['Teacher', 'Principal', 'Librarian', 'Nurse']
+  };
+  Object.entries(defaults).forEach(([groupName, roles]) => {
+    const groupId = insertReturningId(`INSERT INTO os_role_groups (name) VALUES (${sqlValue(groupName)})
+      ON CONFLICT(name) DO UPDATE SET name=excluded.name`);
+    roles.forEach((roleName) => {
+      runSql(`INSERT OR IGNORE INTO os_role_types (group_id, name) VALUES (${groupId}, ${sqlValue(roleName)});`);
+    });
+  });
 }
 
 function migrateLessonHomeworkWeights() {
@@ -706,8 +777,36 @@ function scoreBand(value) {
 }
 
 function gradeOptions(selected = '') {
-  const common = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'Graduated'];
-  return common.map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
+  return gradeChoices().map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
+}
+
+function gradeChoices() {
+  return ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'Graduated'];
+}
+
+function cleanGender(value) {
+  const gender = cleanText(value, 12).toLowerCase();
+  return gender === 'female' || gender === 'male' ? gender : '';
+}
+
+function cleanPersonRoleType(value) {
+  const type = cleanText(value, 20).toLowerCase();
+  return ['teacher', 'father', 'mother'].includes(type) ? type : '';
+}
+
+function genderOptions(selected = '') {
+  const gender = cleanGender(selected);
+  return `<option value="">Not set</option><option value="female" ${selectedAttr(gender, 'female')}>Girl</option><option value="male" ${selectedAttr(gender, 'male')}>Boy</option>`;
+}
+
+function studentDisplayName(student) {
+  return [student.first_name, student.middle_name, student.last_name].filter(Boolean).join(' ');
+}
+
+function genderIcon(gender) {
+  const clean = cleanGender(gender);
+  if (!clean) return '<span class="student-icon neutral" aria-hidden="true">-</span>';
+  return `<span class="student-icon ${clean === 'female' ? 'girl' : 'boy'}" aria-label="${clean === 'female' ? 'Girl' : 'Boy'}">${clean === 'female' ? 'G' : 'B'}</span>`;
 }
 
 function categoryOptions(selected = 'Lesson / Homework') {
@@ -1008,6 +1107,16 @@ input, select, textarea {
   padding: .62rem .68rem;
 }
 input[type="checkbox"] { width: auto; min-height: auto; }
+.check-row {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .62rem .68rem;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-strong);
+  color: var(--ink);
+}
 textarea { min-height: 82px; resize: vertical; }
 input:focus, select:focus, textarea:focus {
   outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
@@ -1249,6 +1358,14 @@ tr:last-child td { border-bottom: 0; }
   gap: 1rem;
   grid-template-columns: 1fr;
 }
+.assignments-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.assignment-editor {
+  align-self: start;
+}
 .module-actions {
   display: flex;
   align-items: center;
@@ -1369,7 +1486,9 @@ tr:last-child td { border-bottom: 0; }
 }
 .child-row {
   display: grid;
-  gap: .25rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .65rem;
+  align-items: center;
   padding: .75rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1377,6 +1496,53 @@ tr:last-child td { border-bottom: 0; }
 }
 .child-row b { font-size: .95rem; }
 .child-row span { color: var(--muted); font-size: .84rem; }
+.child-row-main { display: grid; gap: .25rem; min-width: 0; }
+.child-name-line {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-width: 0;
+}
+.student-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 900;
+}
+.student-icon.girl {
+  color: #be185d;
+  background: #fdf2f8;
+  border-color: #fbcfe8;
+}
+.student-icon.boy {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.grade-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: .45rem;
+}
+.grade-checkbox {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .48rem .55rem;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+  color: var(--ink);
+  font-size: .84rem;
+  font-weight: 700;
+}
 .subhead {
   display: flex;
   align-items: center;
@@ -1502,10 +1668,10 @@ tr:last-child td { border-bottom: 0; }
 }
 .signature-line {
   width: 100%;
-  border-bottom: 1px solid #285f56;
+  border-top: 1px solid #285f56;
   text-align: center;
   margin-top: 50px;
-  padding-bottom: 2px;
+  padding-top: 2px;
   color: #164c43;
   font-family: Georgia, "Times New Roman", serif;
 }
@@ -1726,6 +1892,7 @@ tr:last-child td { border-bottom: 0; }
   .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .form-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
@@ -1752,6 +1919,7 @@ tr:last-child td { border-bottom: 0; }
   .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
   .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .family-layout { grid-template-columns: 320px minmax(0, 1fr); align-items: start; }
+  .assignments-layout { grid-template-columns: minmax(460px, 1fr) minmax(300px, 420px); align-items: start; }
   .family-module-grid { grid-template-columns: 300px minmax(0, 1fr); align-items: start; }
   .setup-layout { grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
   .sidebar-utility { margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--line); }
@@ -1794,11 +1962,11 @@ tr:last-child td { border-bottom: 0; }
   </header>
   ${user ? `<nav class="sidebar" aria-label="Primary">
     ${navLink('/', currentPath, 'Dashboard', 'dashboard')}
-    ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
     ${navLink('/assignments', currentPath, 'Assignments', 'assignments')}
-    ${navLink('/report-cards', currentPath, 'Report Cards', 'reportcards')}
+    ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
     ${navLink('/absences', currentPath, 'Absences', 'absences')}
     ${navLink('/reports', currentPath, 'Reports', 'reports')}
+    ${navLink('/report-cards', currentPath, 'Report Card', 'reportcards')}
     ${navLink('/setup', currentPath, 'School Setup', 'setup')}
     <div class="sidebar-utility">
       <button id="themeToggle" class="theme-icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
@@ -1856,7 +2024,7 @@ tr:last-child td { border-bottom: 0; }
 
   function formatScorePreviewNumber(value) {
     if (!Number.isFinite(value)) return '';
-    return value.toFixed(1).replace(/\.0$/, '');
+    return value.toFixed(1).replace(/\\.0$/, '');
   }
 
   function updateScorePreview(input) {
@@ -1896,6 +2064,24 @@ tr:last-child td { border-bottom: 0; }
     pointsInput.addEventListener('input', function() {
       pointsInput.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
     });
+  });
+
+  document.querySelectorAll('form[action="/person-roles"]').forEach(function(form) {
+    const groupSelect = form.querySelector('select[name="groupId"]');
+    const roleSelect = form.querySelector('select[name="roleTypeId"]');
+    if (!groupSelect || !roleSelect) return;
+    function syncRoleOptions() {
+      const groupId = groupSelect.value;
+      Array.from(roleSelect.options).forEach(function(option) {
+        if (!option.value) return;
+        const matches = !groupId || option.dataset.roleGroup === groupId;
+        option.disabled = !matches;
+        option.hidden = !matches;
+      });
+      if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
+    }
+    groupSelect.addEventListener('change', syncRoleOptions);
+    syncRoleOptions();
   });
 
   document.querySelectorAll('[data-score-chip]').forEach(function(button) {
@@ -2099,7 +2285,7 @@ function familiesPage(selectedYear, csrfToken, url) {
     LEFT JOIN os_students st ON st.family_id = f.id
     GROUP BY f.id
     ORDER BY f.family_name;`);
-  const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, c.name AS classroom_name
+  const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, sy.classroom_id, c.name AS classroom_name
     FROM os_students st
     JOIN os_families f ON f.id = st.family_id
     LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
@@ -2161,6 +2347,35 @@ function familiesPage(selectedYear, csrfToken, url) {
         <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
         <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
       </div>
+      <div class="subhead"><h3>Parent Groups and Roles</h3></div>
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Parent</th><th>Group</th><th>Role</th><th>Term Starts</th><th>Term Ends</th><th></th></tr>
+        ${['father', 'mother'].map((parentType) => {
+          const label = parentType === 'father' ? (selectedFamily.father_name || 'Father') : (selectedFamily.mother_name || 'Mother');
+          const rows = personRoles.filter((role) => role.person_type === parentType && asInt(role.person_id) === asInt(selectedFamily.id));
+          return rows.map((role) => `<tr>
+            <td>${esc(label)}</td>
+            <td>${esc(role.group_name)}</td>
+            <td>${role.is_assistant ? 'Assistant ' : ''}${esc(role.role_name)}</td>
+            <td>${esc(role.term_start || '') || '&mdash;'}</td>
+            <td>${esc(role.term_end || '') || '&mdash;'}</td>
+            <td>
+              <form method="post" action="/person-roles" style="margin:0">
+                ${csrfInput(csrfToken)}
+                <input type="hidden" name="action" value="delete" />
+                <input type="hidden" name="roleAssignmentId" value="${role.id}" />
+                <input type="hidden" name="redirectTo" value="${esc(`/setup?section=families&familyId=${selectedFamily.id}`)}" />
+                <button class="secondary-btn compact-action" type="submit">Remove</button>
+              </form>
+            </td>
+          </tr>`).join('');
+        }).join('') || `<tr><td colspan="6">${emptyState('No parent roles assigned yet.')}</td></tr>`}
+      </table></div>
+      <div class="inline-actions">
+        <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-father-role">Add Father Role</a>
+        <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-mother-role">Add Mother Role</a>
+      </div>
+      ${(action === 'add-father-role' || action === 'add-mother-role') ? `<div class="subhead"><h3>${action === 'add-father-role' ? 'Add Father Role' : 'Add Mother Role'}</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>${roleAssignmentForm({ csrfToken, redirectTo: `/setup?section=families&familyId=${selectedFamily.id}`, personType: action === 'add-father-role' ? 'father' : 'mother', personId: selectedFamily.id, roleGroups, roleTypes })}` : ''}
       <div class="subhead"><h3>Children</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
       <div class="child-list">
         ${selectedChildren.map((student) => `<div class="child-row">
@@ -2198,12 +2413,20 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings'];
+  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
   const teachers = querySql('SELECT * FROM os_teachers ORDER BY name;');
   const subjects = querySql('SELECT * FROM os_subjects ORDER BY name;');
+  const districts = querySql('SELECT * FROM os_school_districts ORDER BY name;');
+  const roleGroups = querySql('SELECT * FROM os_role_groups ORDER BY name;');
+  const roleTypes = querySql('SELECT rt.*, rg.name AS group_name FROM os_role_types rt JOIN os_role_groups rg ON rg.id = rt.group_id ORDER BY rg.name, rt.name;');
+  const personRoles = querySql(`SELECT pr.*, rg.name AS group_name, rt.name AS role_name
+    FROM os_person_roles pr
+    JOIN os_role_groups rg ON rg.id = pr.group_id
+    JOIN os_role_types rt ON rt.id = pr.role_type_id
+    ORDER BY pr.term_start DESC, rg.name, rt.name;`);
   const schoolYears = querySql('SELECT * FROM os_school_years ORDER BY is_active DESC, name DESC;');
   const markingPeriods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
   const classrooms = querySql(`SELECT c.*, t.name AS teacher_name,
@@ -2214,18 +2437,19 @@ function setupPage(selectedYear, csrfToken, url) {
     WHERE c.school_year_id=${yearId}
     GROUP BY c.id
     ORDER BY c.name;`);
-  const gradeSubjects = querySql(`SELECT gs.grade_level, s.name AS subject_name
+  const gradeSubjects = querySql(`SELECT gs.grade_level, gs.subject_id, s.name AS subject_name
     FROM os_grade_subjects gs
     JOIN os_subjects s ON s.id = gs.subject_id
     WHERE gs.school_year_id=${yearId}
     ORDER BY gs.grade_level, s.name;`);
-  const families = querySql(`SELECT f.*,
+  const families = querySql(`SELECT f.*, sd.name AS school_district_name,
       COUNT(st.id) AS child_count
     FROM os_families f
+    LEFT JOIN os_school_districts sd ON sd.id = f.school_district_id
     LEFT JOIN os_students st ON st.family_id = f.id
     GROUP BY f.id
     ORDER BY f.family_name;`);
-  const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, c.name AS classroom_name
+  const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, sy.classroom_id, c.name AS classroom_name
     FROM os_students st
     JOIN os_families f ON f.id = st.family_id
     LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
@@ -2246,8 +2470,10 @@ function setupPage(selectedYear, csrfToken, url) {
   const teacherOptions = (selected = '') => teachers.map((teacher) => `<option value="${teacher.id}" ${selectedAttr(teacher.id, selected)}>${esc(teacher.name)}</option>`).join('');
   const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
+  const districtOptions = (selected = '') => districts.map((district) => `<option value="${district.id}" ${selectedAttr(district.id, selected)}>${esc(district.name)}</option>`).join('');
   const setupLinks = [
     ['families', 'Families', `${families.length} households`],
+    ['districts', 'School Districts', `${districts.length} districts`],
     ['teachers', 'Teachers', `${teachers.length} records`],
     ['classrooms', 'Classrooms', `${classrooms.length} rooms in ${selectedYear.name}`],
     ['subjects', 'Subjects', `${subjects.length} subjects`],
@@ -2269,6 +2495,9 @@ function setupPage(selectedYear, csrfToken, url) {
   const showFamilyForm = action === 'add-family' || action === 'edit-family' || families.length === 0;
   const familyForForm = action === 'edit-family' ? selectedFamily : null;
   const selectedChildren = selectedFamily ? students.filter((student) => student.family_id === selectedFamily.id) : [];
+  const childEdit = selectedChildren.find((student) => student.id === asInt(url.searchParams.get('studentId')));
+  const emergencyContacts = selectedFamily ? querySql(`SELECT * FROM os_emergency_contacts WHERE family_id=${selectedFamily.id} ORDER BY priority, name;`) : [];
+  const emergencyEdit = emergencyContacts.find((contact) => contact.id === asInt(url.searchParams.get('contactId')));
   const familyList = `<section class="family-list">
     <div class="family-list-head">
       <h2>Families</h2>
@@ -2279,9 +2508,10 @@ function setupPage(selectedYear, csrfToken, url) {
       const childText = `${family.child_count || 0} ${Number(family.child_count) === 1 ? 'child' : 'children'}`;
       const parents = [family.father_name, family.mother_name].filter(Boolean).join(' & ');
       const householdLine = parents ? `${family.family_name}, ${parents}` : family.family_name;
+      const contact = [family.father_phone || family.phone, family.mother_phone].filter(Boolean).join(' / ');
       return `<a class="family-link ${active}" href="/setup?section=families&familyId=${family.id}">
         <strong>${esc(householdLine)}</strong>
-        <span>${esc(childText)}</span>
+        <span>${esc(childText)}${family.school_district_name ? ` / ${esc(family.school_district_name)}` : ''}${contact ? ` / ${esc(contact)}` : ''}</span>
       </a>`;
     }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
   </section>`;
@@ -2295,9 +2525,11 @@ function setupPage(selectedYear, csrfToken, url) {
         ${csrfInput(csrfToken)}
         ${familyForForm ? `<input type="hidden" name="familyId" value="${familyForForm.id}" />` : ''}
         <label>Last Name<input name="familyName" required maxlength="120" value="${esc(familyForForm?.family_name || '')}" /></label>
-        <label>Phone<input name="phone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.phone || '')}" /></label>
+        <label>School District<select name="schoolDistrictId"><option value="">Not selected</option>${districtOptions(familyForForm?.school_district_id || '')}</select></label>
         <label>Father<input name="fatherName" maxlength="120" value="${esc(familyForForm?.father_name || '')}" /></label>
+        <label>Father Phone<input name="fatherPhone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.father_phone || familyForForm?.phone || '')}" /></label>
         <label>Mother<input name="motherName" maxlength="120" value="${esc(familyForForm?.mother_name || '')}" /></label>
+        <label>Mother Phone<input name="motherPhone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.mother_phone || '')}" /></label>
         <label>Email<input name="email" type="email" maxlength="160" value="${esc(familyForForm?.email || '')}" /></label>
         <label>Address<input name="address" maxlength="220" value="${esc(familyForForm?.address || '')}" /></label>
         <button type="submit">${familyForForm ? 'Save Changes' : 'Save Family'}</button>
@@ -2308,12 +2540,15 @@ function setupPage(selectedYear, csrfToken, url) {
     ${csrfInput(csrfToken)}
     <input type="hidden" name="schoolYearId" value="${yearId}" />
     <input type="hidden" name="familyId" value="${selectedFamily.id}" />
-    <label>First Name<input name="firstName" required maxlength="80" /></label>
-    <label>Last Name<input name="lastName" required maxlength="80" value="${esc(selectedFamily.family_name)}" /></label>
-    <label>Birthday<input type="date" name="birthDate" /></label>
-    <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
-    <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions()}</select></label>
-    <button type="submit">Save Child</button>
+    ${childEdit ? `<input type="hidden" name="studentId" value="${childEdit.id}" />` : ''}
+    <label>First Name<input name="firstName" required maxlength="80" value="${esc(childEdit?.first_name || '')}" /></label>
+    <label>Middle Name<input name="middleName" maxlength="80" value="${esc(childEdit?.middle_name || '')}" /></label>
+    <label>Last Name<input name="lastName" required maxlength="80" value="${esc(childEdit?.last_name || selectedFamily.family_name)}" /></label>
+    <label>Gender<select name="gender">${genderOptions(childEdit?.gender || '')}</select></label>
+    <label>Birthday<input type="date" name="birthDate" value="${esc(childEdit?.birth_date || '')}" /></label>
+    ${childEdit ? `<label>Grade<input value="${esc(childEdit.grade_level || 'Not enrolled')}" disabled /></label>` : `<label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>`}
+    <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions(childEdit?.classroom_id || '')}</select></label>
+    <button type="submit">${childEdit ? 'Save Child' : 'Add Child'}</button>
   </form>` : '';
   const familyDetail = selectedFamily ? `<section class="family-detail">
     <div class="family-detail-head">
@@ -2324,21 +2559,79 @@ function setupPage(selectedYear, csrfToken, url) {
       </div>
     </div>
     <div class="family-detail-body">
-      <div class="detail-grid">
-        <div class="detail-item"><span>Father</span><strong>${esc(selectedFamily.father_name || '') || '&mdash;'}</strong></div>
-        <div class="detail-item"><span>Mother</span><strong>${esc(selectedFamily.mother_name || '') || '&mdash;'}</strong></div>
-        <div class="detail-item"><span>Phone</span><strong>${esc(selectedFamily.phone || '') || '&mdash;'}</strong></div>
-        <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
-        <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
-      </div>
-      <div class="subhead"><h3>Children</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
+	      <div class="detail-grid">
+	        <div class="detail-item"><span>Father</span><strong>${esc(selectedFamily.father_name || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Father Phone</span><strong>${esc(selectedFamily.father_phone || selectedFamily.phone || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Mother</span><strong>${esc(selectedFamily.mother_name || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Mother Phone</span><strong>${esc(selectedFamily.mother_phone || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>School District</span><strong>${esc(selectedFamily.school_district_name || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
+	      </div>
+	      <div class="subhead"><h3>Parent Groups and Roles</h3></div>
+	      <div class="table-wrap compact-table"><table>
+	        <tr><th>Parent</th><th>Group</th><th>Role</th><th>Term Starts</th><th>Term Ends</th><th></th></tr>
+	        ${['father', 'mother'].map((parentType) => {
+	          const label = parentType === 'father' ? (selectedFamily.father_name || 'Father') : (selectedFamily.mother_name || 'Mother');
+	          const rows = personRoles.filter((role) => role.person_type === parentType && asInt(role.person_id) === asInt(selectedFamily.id));
+	          return rows.map((role) => `<tr>
+	            <td>${esc(label)}</td>
+	            <td>${esc(role.group_name)}</td>
+	            <td>${role.is_assistant ? 'Assistant ' : ''}${esc(role.role_name)}</td>
+	            <td>${esc(role.term_start || '') || '&mdash;'}</td>
+	            <td>${esc(role.term_end || '') || '&mdash;'}</td>
+	            <td>
+	              <form method="post" action="/person-roles" style="margin:0">
+	                ${csrfInput(csrfToken)}
+	                <input type="hidden" name="action" value="delete" />
+	                <input type="hidden" name="roleAssignmentId" value="${role.id}" />
+	                <input type="hidden" name="redirectTo" value="${esc(`/setup?section=families&familyId=${selectedFamily.id}`)}" />
+	                <button class="secondary-btn compact-action" type="submit">Remove</button>
+	              </form>
+	            </td>
+	          </tr>`).join('');
+	        }).join('') || `<tr><td colspan="6">${emptyState('No parent roles assigned yet.')}</td></tr>`}
+	      </table></div>
+	      <div class="inline-actions">
+	        <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-father-role">Add Father Role</a>
+	        <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-mother-role">Add Mother Role</a>
+	      </div>
+	      ${(action === 'add-father-role' || action === 'add-mother-role') ? `<div class="subhead"><h3>${action === 'add-father-role' ? 'Add Father Role' : 'Add Mother Role'}</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>${roleAssignmentForm({ csrfToken, redirectTo: `/setup?section=families&familyId=${selectedFamily.id}`, personType: action === 'add-father-role' ? 'father' : 'mother', personId: selectedFamily.id, roleGroups, roleTypes })}` : ''}
+	      <div class="subhead"><h3>Children</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
       <div class="child-list">
         ${selectedChildren.map((student) => `<div class="child-row">
-          <b>${esc(student.first_name)} ${esc(student.last_name)}</b>
-          <span>${student.birth_date ? `Birthday ${esc(student.birth_date)} / ` : ''}Grade ${esc(student.grade_level || 'not enrolled')}${student.classroom_name ? ` / ${esc(student.classroom_name)}` : ''}</span>
+          <div class="child-row-main">
+            <div class="child-name-line">${genderIcon(student.gender)}<b>${esc(studentDisplayName(student))}</b></div>
+            <span>${student.birth_date ? `Birthday ${esc(student.birth_date)} / ` : ''}Grade ${esc(student.grade_level || 'not enrolled')}${student.classroom_name ? ` / ${esc(student.classroom_name)}` : ''}</span>
+          </div>
+          <a class="text-action" href="/setup?section=families&familyId=${selectedFamily.id}&studentId=${student.id}&action=edit-child">Edit</a>
         </div>`).join('') || emptyState('No children are listed for this family yet.')}
       </div>
-      ${action === 'add-child' ? `<div class="subhead"><h3>Add Child</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>${childForm}` : ''}
+      ${(action === 'add-child' || childEdit) ? `<div class="subhead"><h3>${childEdit ? 'Edit Child' : 'Add Child'}</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>${childForm}` : ''}
+      <div class="subhead"><h3>Emergency Contacts</h3><a class="page-action compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-emergency">Add Contact</a></div>
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Priority</th><th>Name</th><th>Relationship</th><th>Number</th><th>Notes</th><th></th></tr>
+        ${emergencyContacts.map((contact) => `<tr>
+          <td>${esc(contact.priority)}</td>
+          <td>${esc(contact.name)}</td>
+          <td>${esc(contact.relationship || '') || '&mdash;'}</td>
+          <td>${esc(contact.phone || '') || '&mdash;'}</td>
+          <td>${esc(contact.notes || '') || '&mdash;'}</td>
+          <td><a class="text-action" href="/setup?section=families&familyId=${selectedFamily.id}&contactId=${contact.id}&action=edit-emergency">Edit</a></td>
+        </tr>`).join('') || `<tr><td colspan="6">${emptyState('No emergency contacts listed yet.')}</td></tr>`}
+      </table></div>
+      ${(action === 'add-emergency' || emergencyEdit) ? `<div class="subhead"><h3>${emergencyEdit ? 'Edit Emergency Contact' : 'Add Emergency Contact'}</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>
+        <form method="post" action="/emergency-contacts" class="form-grid two">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="familyId" value="${selectedFamily.id}" />
+          ${emergencyEdit ? `<input type="hidden" name="contactId" value="${emergencyEdit.id}" />` : ''}
+          <label>Priority<input type="number" name="priority" min="1" max="20" value="${esc(emergencyEdit?.priority || emergencyContacts.length + 1 || 1)}" required /></label>
+          <label>Name<input name="name" required maxlength="120" value="${esc(emergencyEdit?.name || '')}" /></label>
+          <label>Relationship<input name="relationship" maxlength="80" value="${esc(emergencyEdit?.relationship || '')}" /></label>
+          <label>Number<input name="phone" inputmode="tel" maxlength="40" value="${esc(emergencyEdit?.phone || '')}" /></label>
+          <label>Notes<textarea name="notes" maxlength="400">${esc(emergencyEdit?.notes || '')}</textarea></label>
+          <button type="submit">${emergencyEdit ? 'Save Contact' : 'Add Contact'}</button>
+        </form>` : ''}
     </div>
   </section>` : familyForm;
   const familiesModule = `<div class="family-module-grid">
@@ -2346,28 +2639,79 @@ function setupPage(selectedYear, csrfToken, url) {
     ${showFamilyForm ? familyForm : familyDetail}
   </div>`;
 
-  const teacherEdit = teachers.find((teacher) => teacher.id === asInt(url.searchParams.get('teacherId')));
-  const teacherForm = `<form method="post" action="/teachers" class="form-grid three">
+  const districtEdit = districts.find((district) => district.id === asInt(url.searchParams.get('districtId')));
+  const districtForm = `<form method="post" action="/school-districts" class="form-grid two">
     ${csrfInput(csrfToken)}
-    ${teacherEdit ? `<input type="hidden" name="teacherId" value="${teacherEdit.id}" />` : ''}
-    <label>Name<input name="name" required maxlength="120" value="${esc(teacherEdit?.name || '')}" /></label>
-    <label>Email<input name="email" type="email" maxlength="160" value="${esc(teacherEdit?.email || '')}" /></label>
-    <label>Phone<input name="phone" inputmode="tel" maxlength="40" value="${esc(teacherEdit?.phone || '')}" /></label>
-    <button type="submit">${teacherEdit ? 'Save Changes' : 'Save Teacher'}</button>
+    ${districtEdit ? `<input type="hidden" name="districtId" value="${districtEdit.id}" />` : ''}
+    <label>District Name<input name="name" required maxlength="140" value="${esc(districtEdit?.name || '')}" /></label>
+    <button type="submit">${districtEdit ? 'Save District' : 'Add District'}</button>
   </form>`;
-  const teachersModule = `<section class="family-detail">
+  const districtsModule = `<section class="family-detail">
     <div class="family-detail-head">
-      <h2>Teachers</h2>
-      <div class="module-actions"><span class="family-count">${teachers.length}</span><a class="page-action compact-action" href="/setup?section=teachers&action=add-teacher">Add Teacher</a></div>
+      <h2>School Districts</h2>
+      <div class="module-actions"><span class="family-count">${districts.length}</span><a class="page-action compact-action" href="/setup?section=districts&action=add-district">Add District</a></div>
     </div>
     <div class="family-detail-body">
-      ${(action === 'add-teacher' || teacherEdit) ? `<div class="subhead"><h3>${teacherEdit ? 'Edit Teacher' : 'Add Teacher'}</h3><a class="secondary-btn compact-action" href="/setup?section=teachers">Cancel</a></div>${teacherForm}` : ''}
+      ${(action === 'add-district' || districtEdit) ? `<div class="subhead"><h3>${districtEdit ? 'Edit District' : 'Add District'}</h3><a class="secondary-btn compact-action" href="/setup?section=districts">Cancel</a></div>${districtForm}` : ''}
       <div class="table-wrap compact-table"><table>
-        <tr><th>Name</th><th>Email</th><th>Phone</th><th></th></tr>
-        ${teachers.map((teacher) => `<tr><td>${esc(teacher.name)}</td><td>${esc(teacher.email || '') || '&mdash;'}</td><td>${esc(teacher.phone || '') || '&mdash;'}</td><td><a class="text-action" href="/setup?section=teachers&teacherId=${teacher.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="4">${emptyState('No teachers yet.')}</td></tr>`}
+        <tr><th>District</th><th>Families</th><th></th></tr>
+        ${districts.map((district) => {
+          const count = families.filter((family) => asInt(family.school_district_id) === asInt(district.id)).length;
+          return `<tr><td>${esc(district.name)}</td><td>${count}</td><td><a class="text-action" href="/setup?section=districts&districtId=${district.id}">Edit</a></td></tr>`;
+        }).join('') || `<tr><td colspan="3">${emptyState('No school districts yet.')}</td></tr>`}
       </table></div>
     </div>
   </section>`;
+
+  const selectedTeacherId = asInt(url.searchParams.get('teacherId'));
+  const selectedTeacher = teachers.find((teacher) => teacher.id === selectedTeacherId) || teachers[0] || null;
+  const teacherEdit = action === 'edit-teacher' ? selectedTeacher : null;
+  const showTeacherForm = action === 'add-teacher' || action === 'edit-teacher' || teachers.length === 0;
+  const teacherForm = `<form method="post" action="/teachers" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    ${teacherEdit ? `<input type="hidden" name="teacherId" value="${teacherEdit.id}" />` : ''}
+    <label>Name<input name="name" required maxlength="120" value="${esc(teacherEdit?.name || '')}" /></label>
+    <label>Email Address<input name="email" type="email" maxlength="160" value="${esc(teacherEdit?.email || '')}" /></label>
+    <label>Mobile Number<input name="mobilePhone" inputmode="tel" maxlength="40" value="${esc(teacherEdit?.mobile_phone || teacherEdit?.phone || '')}" /></label>
+    <label>Address<input name="address" maxlength="220" value="${esc(teacherEdit?.address || '')}" /></label>
+    <button type="submit">${teacherEdit ? 'Save Changes' : 'Save Teacher'}</button>
+  </form>`;
+  const teacherList = `<section class="family-list">
+    <div class="family-list-head">
+      <h2>Teachers</h2>
+      <div class="module-actions"><span class="family-count">${teachers.length}</span><a class="page-action compact-action" href="/setup?section=teachers&action=add-teacher">Add Teacher</a></div>
+    </div>
+    ${teachers.map((teacher) => `<a class="family-link ${selectedTeacher?.id === teacher.id && !showTeacherForm ? 'active' : ''}" href="/setup?section=teachers&teacherId=${teacher.id}">
+      <strong>${esc(teacher.name)}</strong>
+      <span>${esc([teacher.mobile_phone || teacher.phone, teacher.email].filter(Boolean).join(' / ')) || 'No contact details'}</span>
+    </a>`).join('') || `<div style="padding:.9rem">${emptyState('No teachers yet.')}</div>`}
+  </section>`;
+  const teacherDetail = selectedTeacher ? `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>${esc(selectedTeacher.name)}</h2>
+      <div class="module-actions">
+        <a class="secondary-btn compact-action" href="/setup?section=teachers&teacherId=${selectedTeacher.id}&action=edit-teacher">Edit</a>
+        <a class="page-action compact-action" href="/setup?section=teachers&teacherId=${selectedTeacher.id}&action=add-role">Add Role</a>
+      </div>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Mobile Number</span><strong>${esc(selectedTeacher.mobile_phone || selectedTeacher.phone || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Email Address</span><strong>${esc(selectedTeacher.email || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Address</span><strong>${esc(selectedTeacher.address || '') || '&mdash;'}</strong></div>
+      </div>
+      <div class="subhead"><h3>Groups and Roles</h3><span class="family-count">${roleAssignmentRows(personRoles, 'teacher', selectedTeacher.id, csrfToken, `/setup?section=teachers&teacherId=${selectedTeacher.id}`).split('<tr>').length - 1}</span></div>
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Group</th><th>Role</th><th>Term Starts</th><th>Term Ends</th><th></th></tr>
+        ${roleAssignmentRows(personRoles, 'teacher', selectedTeacher.id, csrfToken, `/setup?section=teachers&teacherId=${selectedTeacher.id}`) || `<tr><td colspan="5">${emptyState('No roles assigned yet.')}</td></tr>`}
+      </table></div>
+      ${action === 'add-role' ? `<div class="subhead"><h3>Add Role</h3><a class="secondary-btn compact-action" href="/setup?section=teachers&teacherId=${selectedTeacher.id}">Cancel</a></div>${roleAssignmentForm({ csrfToken, redirectTo: `/setup?section=teachers&teacherId=${selectedTeacher.id}`, personType: 'teacher', personId: selectedTeacher.id, roleGroups, roleTypes })}` : ''}
+    </div>
+  </section>` : `<section class="family-detail"><div class="family-detail-body">${emptyState('Add a teacher to begin.')}</div></section>`;
+  const teachersModule = `<div class="family-module-grid">
+    ${teacherList}
+    ${showTeacherForm ? `<section class="family-detail"><div class="family-detail-head"><h2>${teacherEdit ? 'Edit Teacher' : 'Add Teacher'}</h2><a class="secondary-btn compact-action" href="/setup?section=teachers${selectedTeacher ? `&teacherId=${selectedTeacher.id}` : ''}">Cancel</a></div><div class="family-detail-body">${teacherForm}</div></section>` : teacherDetail}
+  </div>`;
 
   const classroomEdit = classrooms.find((room) => room.id === asInt(url.searchParams.get('classroomId')));
   const classroomForm = `<form method="post" action="/classrooms" class="form-grid three">
@@ -2394,33 +2738,33 @@ function setupPage(selectedYear, csrfToken, url) {
   </section>`;
 
   const subjectEdit = subjects.find((subject) => subject.id === asInt(url.searchParams.get('subjectId')));
-  const subjectForm = `<form method="post" action="/subjects" class="form-grid two">
-    ${csrfInput(csrfToken)}
-    ${subjectEdit ? `<input type="hidden" name="subjectId" value="${subjectEdit.id}" />` : ''}
-    <label>Subject Name<input name="name" required maxlength="120" value="${esc(subjectEdit?.name || '')}" /></label>
-    <button type="submit">${subjectEdit ? 'Save Changes' : 'Save Subject'}</button>
-  </form>`;
-  const assignSubjectForm = `<form method="post" action="/grade-subjects" class="form-grid three">
+  const subjectAssignedGrades = subjectEdit ? gradeSubjects.filter((row) => row.subject_id === subjectEdit.id).map((row) => row.grade_level) : [];
+  const subjectGradeChecks = `<div class="grade-checkbox-grid">
+    ${gradeChoices().filter((grade) => grade !== 'Graduated').map((grade) => `<label class="grade-checkbox"><input type="checkbox" name="grades" value="${esc(grade)}" ${subjectAssignedGrades.includes(grade) ? 'checked' : ''} /> ${esc(grade)}</label>`).join('')}
+  </div>`;
+  const subjectForm = `<form method="post" action="/subjects" class="form-grid">
     ${csrfInput(csrfToken)}
     <input type="hidden" name="schoolYearId" value="${yearId}" />
-    <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
-    <label>Subject<select name="subjectId" required><option value="">Choose subject</option>${subjectOptions()}</select></label>
-    <button type="submit">Assign Subject</button>
+    ${subjectEdit ? `<input type="hidden" name="subjectId" value="${subjectEdit.id}" />` : ''}
+    <label>Subject Name<input name="name" required maxlength="120" value="${esc(subjectEdit?.name || '')}" /></label>
+    <label>Grades using this subject${subjectGradeChecks}</label>
+    <button type="submit">${subjectEdit ? 'Save Changes' : 'Save Subject'}</button>
   </form>`;
   const subjectsModule = `<section class="family-detail">
     <div class="family-detail-head">
       <h2>Subjects</h2>
       <div class="module-actions">
-        <a class="secondary-btn compact-action" href="/setup?section=subjects&action=assign-subject">Assign to Grade</a>
         <a class="page-action compact-action" href="/setup?section=subjects&action=add-subject">Add Subject</a>
       </div>
     </div>
     <div class="family-detail-body">
       ${(action === 'add-subject' || subjectEdit) ? `<div class="subhead"><h3>${subjectEdit ? 'Edit Subject' : 'Add Subject'}</h3><a class="secondary-btn compact-action" href="/setup?section=subjects">Cancel</a></div>${subjectForm}` : ''}
-      ${action === 'assign-subject' ? `<div class="subhead"><h3>Assign Subject to Grade</h3><a class="secondary-btn compact-action" href="/setup?section=subjects">Cancel</a></div>${assignSubjectForm}` : ''}
       <div class="table-wrap compact-table"><table>
-        <tr><th>Subject</th><th></th></tr>
-        ${subjects.map((subject) => `<tr><td>${esc(subject.name)}</td><td><a class="text-action" href="/setup?section=subjects&subjectId=${subject.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="2">${emptyState('No subjects yet.')}</td></tr>`}
+        <tr><th>Subject</th><th>Grades</th><th></th></tr>
+        ${subjects.map((subject) => {
+          const assigned = sortGrades(gradeSubjects.filter((row) => row.subject_id === subject.id).map((row) => row.grade_level));
+          return `<tr><td>${esc(subject.name)}</td><td>${assigned.map((grade) => `<span class="badge">${esc(grade)}</span>`).join('') || '&mdash;'}</td><td><a class="text-action" href="/setup?section=subjects&subjectId=${subject.id}">Edit</a></td></tr>`;
+        }).join('') || `<tr><td colspan="3">${emptyState('No subjects yet.')}</td></tr>`}
       </table></div>
       <div class="table-wrap compact-table"><table>
         <tr><th>Grade</th><th>Subjects</th></tr>
@@ -2568,6 +2912,7 @@ function setupPage(selectedYear, csrfToken, url) {
 
   const modules = {
     families: familiesModule,
+    districts: districtsModule,
     teachers: teachersModule,
     classrooms: classroomsModule,
     subjects: subjectsModule,
@@ -2794,7 +3139,7 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
       </div>`;
     }).join('') || emptyState('No enrolled students in this grade.');
 
-    rightPanel = `<section class="family-detail">
+    rightPanel = `<section class="family-detail assignment-editor">
       <div class="family-detail-head">
         <h2>${esc(selectedAssignment.title)}</h2>
         <a class="secondary-btn compact-action" href="/assignments?${baseParams}&action=add">+ New</a>
@@ -2835,7 +3180,7 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
     </section>`;
   } else {
     const placeholder = subject ? `e.g. Lesson 24 – ${subject.name}` : 'e.g. Lesson 24';
-    rightPanel = `<section class="family-detail">
+    rightPanel = `<section class="family-detail assignment-editor">
       <div class="family-detail-head"><h2>Add Assignment</h2></div>
       <div class="family-detail-body">
         ${selectedGrade && selectedSubjectId ? `<form method="post" action="/assignments" class="form-grid">
@@ -2862,10 +3207,9 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
         <input type="hidden" name="mode" value="${scoreMode}" />
         <label>Grade${gradeSelect}</label>
         <label>Subject${subjectSelect}</label>
-        ${selectedGrade && selectedSubjectId ? `<a class="page-action compact-action" href="/assignments?${baseParams}&action=add">Add Assignment</a>` : ''}
       </form>
     </section>
-    <div class="family-layout">
+    <div class="assignments-layout">
       <section class="family-list">
         <div class="family-list-head">
           <h2>Assignments</h2>
@@ -3060,6 +3404,7 @@ function reportCardsPage(url, selectedYear) {
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedStudentId = asInt(url.searchParams.get('studentId'));
   const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
+  const autoPrint = url.searchParams.get('pdf') === '1';
   const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
   const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
   const selectedPeriod = periods.find((period) => period.id === selectedPeriodId) || null;
@@ -3113,6 +3458,7 @@ function reportCardsPage(url, selectedYear) {
   const gradeSelect = `<select name="grade" data-auto-submit required><option value="">Grade</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
   const studentSelect = `<select name="studentId" required><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
   const periodSelect = `<select name="markingPeriodId" required><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
+  const pdfUrl = `/report-cards?yearId=${yearId}&grade=${encodeURIComponent(selectedGrade)}&studentId=${selectedStudentId}&markingPeriodId=${selectedPeriodId}&pdf=1`;
   const periodHeaders = periods.map((period) => `<th>${esc(period.period_number)}</th>`).join('');
   const conductRows = Array.from({ length: 28 }, () => `<tr>${periods.map(() => '<td></td>').join('')}</tr>`).join('');
   const subjectTableRows = subjectPeriodRows.map((row) => `<tr>${row.periodScores.map((score) => `<td>${score === null || score === undefined ? '' : Math.round(Number(score))}</td>`).join('')}</tr>`).join('');
@@ -3204,8 +3550,9 @@ function reportCardsPage(url, selectedYear) {
         <button type="submit">Load Report Card</button>
       </form>
     </section>
-    <div class="report-card-actions"><button class="secondary-btn" type="button" onclick="window.print()">Print</button></div>
+    ${selectedStudent && selectedPeriod ? `<div class="report-card-actions"><a class="page-action compact-action" href="${pdfUrl}">Generate PDF</a></div>` : ''}
     ${preview}
+    ${autoPrint && selectedStudent && selectedPeriod ? `<script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 250); });</script>` : ''}
   </div>`;
 }
 
@@ -3293,6 +3640,56 @@ function parseGrades(value) {
   return sortGrades(String(value || '').split(',').map((grade) => cleanGrade(grade)).filter(Boolean));
 }
 
+function formArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null || value === '') return [];
+  return [value];
+}
+
+function roleAssignmentRows(roles, personType, personId, csrfToken, redirectTo) {
+  const rows = roles.filter((role) => role.person_type === personType && asInt(role.person_id) === asInt(personId));
+  return rows.map((role) => `<tr>
+    <td>${esc(role.group_name)}</td>
+    <td>${role.is_assistant ? 'Assistant ' : ''}${esc(role.role_name)}</td>
+    <td>${esc(role.term_start || '') || '&mdash;'}</td>
+    <td>${esc(role.term_end || '') || '&mdash;'}</td>
+    <td>
+      <form method="post" action="/person-roles" style="margin:0">
+        ${csrfInput(csrfToken)}
+        <input type="hidden" name="action" value="delete" />
+        <input type="hidden" name="roleAssignmentId" value="${role.id}" />
+        <input type="hidden" name="redirectTo" value="${esc(redirectTo)}" />
+        <button class="secondary-btn compact-action" type="submit">Remove</button>
+      </form>
+    </td>
+  </tr>`).join('');
+}
+
+function roleOptionsByGroup(roleGroups, roleTypes, selected = '') {
+  return roleGroups.map((group) => {
+    const options = roleTypes
+      .filter((role) => asInt(role.group_id) === asInt(group.id))
+      .map((role) => `<option value="${role.id}" data-role-group="${group.id}" ${selectedAttr(role.id, selected)}>${esc(role.name)}</option>`)
+      .join('');
+    return `<optgroup label="${esc(group.name)}">${options}</optgroup>`;
+  }).join('');
+}
+
+function roleAssignmentForm({ csrfToken, redirectTo, personType, personId, roleGroups, roleTypes }) {
+  return `<form method="post" action="/person-roles" class="form-grid five">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="redirectTo" value="${esc(redirectTo)}" />
+    <input type="hidden" name="personType" value="${esc(personType)}" />
+    <input type="hidden" name="personId" value="${asInt(personId)}" />
+    <label>Group<select name="groupId" required><option value="">Group</option>${roleGroups.map((group) => `<option value="${group.id}">${esc(group.name)}</option>`).join('')}</select></label>
+    <label>Role<select name="roleTypeId" required><option value="">Role</option>${roleOptionsByGroup(roleGroups, roleTypes)}</select></label>
+    <label>Assistant<span class="check-row"><input type="checkbox" name="isAssistant" value="1" /> Assistant</span></label>
+    <label>Term Starts<input type="date" name="termStart" /></label>
+    <label>Term Ends<input type="date" name="termEnd" /></label>
+    <button type="submit">Add Role</button>
+  </form>`;
+}
+
 function handlePost(req, res, p, body, user, headers) {
   if (p === '/login') {
     if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
@@ -3325,27 +3722,75 @@ function handlePost(req, res, p, body, user, headers) {
     if (familyId) {
       runSql(`UPDATE os_families
         SET family_name=${sqlValue(cleanText(body.familyName, 120))},
+            school_district_id=${asInt(body.schoolDistrictId) || 'NULL'},
             father_name=${sqlValue(cleanText(body.fatherName, 120))},
             mother_name=${sqlValue(cleanText(body.motherName, 120))},
-            phone=${sqlValue(cleanText(body.phone, 40))},
+            father_phone=${sqlValue(cleanText(body.fatherPhone, 40))},
+            mother_phone=${sqlValue(cleanText(body.motherPhone, 40))},
+            phone=${sqlValue(cleanText(body.fatherPhone, 40))},
             email=${sqlValue(cleanText(body.email, 160))},
             address=${sqlValue(cleanText(body.address, 220))}
         WHERE id=${familyId};`);
       return redirect(res, `/setup?section=families&familyId=${familyId}`, headers);
     }
-    const newFamilyId = insertReturningId(`INSERT INTO os_families (family_name, father_name, mother_name, phone, email, address)
-      VALUES (${sqlValue(cleanText(body.familyName, 120))}, ${sqlValue(cleanText(body.fatherName, 120))}, ${sqlValue(cleanText(body.motherName, 120))}, ${sqlValue(cleanText(body.phone, 40))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.address, 220))})`);
+    const newFamilyId = insertReturningId(`INSERT INTO os_families (family_name, school_district_id, father_name, mother_name, father_phone, mother_phone, phone, email, address)
+      VALUES (${sqlValue(cleanText(body.familyName, 120))}, ${asInt(body.schoolDistrictId) || 'NULL'}, ${sqlValue(cleanText(body.fatherName, 120))}, ${sqlValue(cleanText(body.motherName, 120))}, ${sqlValue(cleanText(body.fatherPhone, 40))}, ${sqlValue(cleanText(body.motherPhone, 40))}, ${sqlValue(cleanText(body.fatherPhone, 40))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.address, 220))})`);
     return redirect(res, `/setup?section=families&familyId=${newFamilyId}`, headers);
+  }
+
+  if (p === '/school-districts') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const districtId = asInt(body.districtId);
+    if (districtId) {
+      runSql(`UPDATE os_school_districts SET name=${sqlValue(cleanText(body.name, 140))} WHERE id=${districtId};`);
+      return redirect(res, '/setup?section=districts', headers);
+    }
+    runSql(`INSERT OR IGNORE INTO os_school_districts (name) VALUES (${sqlValue(cleanText(body.name, 140))});`);
+    return redirect(res, '/setup?section=districts', headers);
   }
 
   if (p === '/students') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
-    const studentId = insertReturningId(`INSERT INTO os_students (family_id, first_name, last_name, birth_date)
-      VALUES (${asInt(body.familyId)}, ${sqlValue(cleanText(body.firstName, 80))}, ${sqlValue(cleanText(body.lastName, 80))}, ${sqlValue(cleanDate(body.birthDate))})`);
+    const existingStudentId = asInt(body.studentId);
+    if (existingStudentId) {
+      runSql(`UPDATE os_students
+        SET first_name=${sqlValue(cleanText(body.firstName, 80))},
+            middle_name=${sqlValue(cleanText(body.middleName, 80))},
+            last_name=${sqlValue(cleanText(body.lastName, 80))},
+            birth_date=${sqlValue(cleanDate(body.birthDate))},
+            gender=${sqlValue(cleanGender(body.gender))}
+        WHERE id=${existingStudentId} AND family_id=${asInt(body.familyId)};`);
+      runSql(`UPDATE os_student_years
+        SET classroom_id=${asInt(body.classroomId) || 'NULL'}
+        WHERE student_id=${existingStudentId} AND school_year_id=${schoolYearId};`);
+      return redirect(res, `/setup?section=families&familyId=${asInt(body.familyId)}`, headers);
+    }
+    const studentId = insertReturningId(`INSERT INTO os_students (family_id, first_name, middle_name, last_name, birth_date, gender)
+      VALUES (${asInt(body.familyId)}, ${sqlValue(cleanText(body.firstName, 80))}, ${sqlValue(cleanText(body.middleName, 80))}, ${sqlValue(cleanText(body.lastName, 80))}, ${sqlValue(cleanDate(body.birthDate))}, ${sqlValue(cleanGender(body.gender))})`);
     runSql(`INSERT INTO os_student_years (student_id, school_year_id, grade_level, classroom_id)
       VALUES (${studentId}, ${schoolYearId}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'});`);
     return redirect(res, `/setup?section=families&familyId=${asInt(body.familyId)}`, headers);
+  }
+
+  if (p === '/emergency-contacts') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const familyId = asInt(body.familyId);
+    const contactId = asInt(body.contactId);
+    const priority = Math.max(1, Math.min(20, asInt(body.priority) || 1));
+    if (contactId) {
+      runSql(`UPDATE os_emergency_contacts
+        SET priority=${priority},
+            name=${sqlValue(cleanText(body.name, 120))},
+            relationship=${sqlValue(cleanText(body.relationship, 80))},
+            phone=${sqlValue(cleanText(body.phone, 40))},
+            notes=${sqlValue(cleanText(body.notes, 400))}
+        WHERE id=${contactId} AND family_id=${familyId};`);
+      return redirect(res, `/setup?section=families&familyId=${familyId}`, headers);
+    }
+    runSql(`INSERT INTO os_emergency_contacts (family_id, priority, name, relationship, phone, notes)
+      VALUES (${familyId}, ${priority}, ${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.relationship, 80))}, ${sqlValue(cleanText(body.phone, 40))}, ${sqlValue(cleanText(body.notes, 400))});`);
+    return redirect(res, `/setup?section=families&familyId=${familyId}`, headers);
   }
 
   if (p === '/enrollments') {
@@ -3373,13 +3818,33 @@ function handlePost(req, res, p, body, user, headers) {
       runSql(`UPDATE os_teachers
         SET name=${sqlValue(cleanText(body.name, 120))},
             email=${sqlValue(cleanText(body.email, 160))},
-            phone=${sqlValue(cleanText(body.phone, 40))}
+            mobile_phone=${sqlValue(cleanText(body.mobilePhone, 40))},
+            phone=${sqlValue(cleanText(body.mobilePhone, 40))},
+            address=${sqlValue(cleanText(body.address, 220))}
         WHERE id=${teacherId};`);
-      return redirect(res, '/setup?section=teachers', headers);
+      return redirect(res, `/setup?section=teachers&teacherId=${teacherId}`, headers);
     }
-    runSql(`INSERT INTO os_teachers (name, email, phone)
-      VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.phone, 40))});`);
-    return redirect(res, '/setup?section=teachers', headers);
+    const newTeacherId = insertReturningId(`INSERT INTO os_teachers (name, email, mobile_phone, phone, address)
+      VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.mobilePhone, 40))}, ${sqlValue(cleanText(body.mobilePhone, 40))}, ${sqlValue(cleanText(body.address, 220))})`);
+    return redirect(res, `/setup?section=teachers&teacherId=${newTeacherId}`, headers);
+  }
+
+  if (p === '/person-roles') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const redirectRaw = cleanText(body.redirectTo, 240);
+    const redirectTo = redirectRaw.startsWith('/') && !redirectRaw.startsWith('//') ? redirectRaw : '/setup';
+    if (body.action === 'delete') {
+      runSql(`DELETE FROM os_person_roles WHERE id=${asInt(body.roleAssignmentId)};`);
+      return redirect(res, redirectTo, headers);
+    }
+    const personType = cleanPersonRoleType(body.personType);
+    const personId = asInt(body.personId);
+    const roleTypeId = asInt(body.roleTypeId);
+    const roleType = querySql(`SELECT id, group_id FROM os_role_types WHERE id=${roleTypeId} LIMIT 1;`)[0];
+    if (!personType || !personId || !roleType) return sendText(res, 400, 'Bad Request');
+    runSql(`INSERT INTO os_person_roles (person_type, person_id, group_id, role_type_id, is_assistant, term_start, term_end)
+      VALUES (${sqlValue(personType)}, ${personId}, ${asInt(roleType.group_id)}, ${roleTypeId}, ${body.isAssistant ? 1 : 0}, ${sqlValue(cleanDate(body.termStart))}, ${sqlValue(cleanDate(body.termEnd))});`);
+    return redirect(res, redirectTo, headers);
   }
 
   if (p === '/classrooms') {
@@ -3403,12 +3868,22 @@ function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/subjects') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-    const subjectId = asInt(body.subjectId);
+    let subjectId = asInt(body.subjectId);
+    const schoolYearId = asInt(body.schoolYearId);
+    const subjectName = cleanText(body.name, 120);
     if (subjectId) {
-      runSql(`UPDATE os_subjects SET name=${sqlValue(cleanText(body.name, 120))} WHERE id=${subjectId};`);
-      return redirect(res, '/setup?section=subjects', headers);
+      runSql(`UPDATE os_subjects SET name=${sqlValue(subjectName)} WHERE id=${subjectId};`);
+    } else {
+      subjectId = insertReturningId(`INSERT INTO os_subjects (name) VALUES (${sqlValue(subjectName)})
+        ON CONFLICT(name) DO UPDATE SET name=excluded.name`);
     }
-    runSql(`INSERT OR IGNORE INTO os_subjects (name) VALUES (${sqlValue(cleanText(body.name, 120))});`);
+    if (schoolYearId && subjectId) {
+      runSql(`DELETE FROM os_grade_subjects WHERE school_year_id=${schoolYearId} AND subject_id=${subjectId};`);
+      formArray(body.grades).map(cleanGrade).filter(Boolean).forEach((grade) => {
+        runSql(`INSERT OR IGNORE INTO os_grade_subjects (school_year_id, grade_level, subject_id)
+          VALUES (${schoolYearId}, ${sqlValue(grade)}, ${subjectId});`);
+      });
+    }
     return redirect(res, '/setup?section=subjects', headers);
   }
 
