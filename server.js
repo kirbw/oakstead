@@ -9,8 +9,10 @@ const { URL } = require('url');
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const UPLOAD_DIR = path.join(PUBLIC_DIR, 'uploads');
 const DEFAULT_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
-const MAX_BODY_SIZE = 1_000_000;
+const DEFAULT_SCHOOL_NAME = 'Oakstead';
+const MAX_BODY_SIZE = 4_000_000;
 const SESSION_HOURS = 12;
 
 const ROLE_ADMIN = 'admin';
@@ -130,17 +132,51 @@ function requireCsrf(req, body) {
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
-    let body = '';
+    const contentType = String(req.headers['content-type'] || '');
+    const chunks = [];
+    let size = 0;
     req.on('data', (chunk) => {
-      body += chunk.toString();
-      if (body.length > MAX_BODY_SIZE) {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
         reject(new Error('Payload too large'));
         req.destroy();
       }
     });
-    req.on('end', () => resolve(querystring.parse(body)));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      if (contentType.includes('multipart/form-data')) return resolve(parseMultipart(buffer, contentType));
+      return resolve(querystring.parse(buffer.toString()));
+    });
     req.on('error', reject);
   });
+}
+
+function parseMultipart(buffer, contentType) {
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return {};
+  const boundary = `--${boundaryMatch[1] || boundaryMatch[2]}`;
+  const parts = buffer.toString('latin1').split(boundary).slice(1, -1);
+  return parts.reduce((body, rawPart) => {
+    const part = rawPart.replace(/^\r\n/, '').replace(/\r\n$/, '');
+    const splitAt = part.indexOf('\r\n\r\n');
+    if (splitAt < 0) return body;
+    const headerText = part.slice(0, splitAt);
+    const valueText = part.slice(splitAt + 4);
+    const name = headerText.match(/name="([^"]+)"/i)?.[1];
+    if (!name) return body;
+    const filename = headerText.match(/filename="([^"]*)"/i)?.[1];
+    if (filename !== undefined) {
+      body[name] = {
+        filename,
+        contentType: headerText.match(/Content-Type:\s*([^\r\n]+)/i)?.[1] || 'application/octet-stream',
+        data: Buffer.from(valueText, 'latin1')
+      };
+      return body;
+    }
+    body[name] = valueText;
+    return body;
+  }, {});
 }
 
 function securityHeaders() {
@@ -294,10 +330,17 @@ CREATE TABLE IF NOT EXISTS os_sessions (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES os_users(id)
 );
+CREATE TABLE IF NOT EXISTS os_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
 CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
 `);
+
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
 
   const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
   if (!yearCount) {
@@ -361,6 +404,73 @@ function getSelectedYear(req, url) {
   return { years, selected };
 }
 
+function getSetting(key, fallback = '') {
+  const row = querySql(`SELECT value FROM os_settings WHERE key=${sqlValue(key)} LIMIT 1;`)[0];
+  return row?.value || fallback;
+}
+
+function setSetting(key, value) {
+  runSql(`INSERT INTO os_settings (key, value, updated_at)
+    VALUES (${sqlValue(key)}, ${sqlValue(value)}, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;`);
+}
+
+function appSettings() {
+  const rows = querySql('SELECT key, value, updated_at FROM os_settings;');
+  const byKey = rows.reduce((settings, row) => {
+    settings[row.key] = row;
+    return settings;
+  }, {});
+  const schoolName = byKey.school_name?.value || DEFAULT_SCHOOL_NAME;
+  const logoPath = byKey.logo_path?.value || '';
+  const faviconPath = byKey.favicon_path?.value || '';
+  const logoVersion = encodeURIComponent(byKey.logo_path?.updated_at || 'default');
+  const faviconVersion = encodeURIComponent(byKey.favicon_path?.updated_at || logoVersion);
+  return {
+    schoolName,
+    logoPath,
+    faviconPath,
+    logoUrl: `/assets/logo?v=${logoVersion}`,
+    faviconUrl: `/assets/favicon?v=${faviconVersion}`,
+    hasCustomLogo: Boolean(logoPath),
+    hasCustomFavicon: Boolean(faviconPath)
+  };
+}
+
+function contentTypeFor(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.svg') return 'image/svg+xml';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.ico') return 'image/x-icon';
+  return 'application/octet-stream';
+}
+
+function uploadExtension(file) {
+  const type = String(file?.contentType || '').toLowerCase();
+  const nameExt = path.extname(String(file?.filename || '')).toLowerCase();
+  const allowedExts = new Set(['.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico']);
+  if (allowedExts.has(nameExt)) return nameExt;
+  if (type.includes('svg')) return '.svg';
+  if (type.includes('png')) return '.png';
+  if (type.includes('jpeg')) return '.jpg';
+  if (type.includes('webp')) return '.webp';
+  if (type.includes('icon') || type.includes('ico')) return '.ico';
+  return '';
+}
+
+function saveUploadedImage(file, basename) {
+  if (!file?.data?.length) return '';
+  const ext = uploadExtension(file);
+  if (!ext) return '';
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const fileName = `${basename}${ext}`;
+  const target = path.join(UPLOAD_DIR, fileName);
+  fs.writeFileSync(target, file.data);
+  return path.join('uploads', fileName);
+}
+
 function sortGrades(grades) {
   const rank = (grade) => {
     const text = String(grade);
@@ -399,6 +509,21 @@ function gradeTone(value) {
   return 'low';
 }
 
+function clampPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, number));
+}
+
+function scoreBand(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 'No score';
+  if (score >= 90) return '90-100';
+  if (score >= 80) return '80-89';
+  if (score >= 70) return '70-79';
+  return 'Below 70';
+}
+
 function gradeOptions(selected = '') {
   const common = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'Graduated'];
   return common.map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
@@ -423,9 +548,17 @@ function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
   return Boolean(rows.length);
 }
 
-function navLink(pathname, currentPath, label) {
+const NAV_ICONS = {
+  dashboard: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-11h6V4h-6v5Z"></path></svg>',
+  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a5 5 0 0 1 10 0H3Zm8.5 0a6.5 6.5 0 0 0-1.3-3.9A5 5 0 0 1 21 20h-9.5Z"></path></svg>',
+  setup: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v3H4V5Zm0 6h10v3H4v-3Zm0 6h16v3H4v-3Zm13.5-6 2.5 1.5-2.5 1.5V11Z"></path></svg>',
+  gradebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5V3Zm2 2v14h10V7h-3V5H7Zm2 5h6v2H9v-2Zm0 4h6v2H9v-2Z"></path></svg>',
+  reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
+};
+
+function navLink(pathname, currentPath, label, iconKey) {
   const active = currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
-  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${esc(label)}</a>`;
+  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
 }
 
 function actionPanel(title, body, meta = '') {
@@ -440,68 +573,80 @@ function emptyState(text) {
 }
 
 function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
+  const settings = appSettings();
   const yearSwitcher = user && selectedYear ? `<form class="year-form" method="post" action="/switch-year">
       ${csrfInput(csrfToken)}
       <select name="yearId" aria-label="School year">
         ${years.map((year) => `<option value="${year.id}" ${year.id === selectedYear.id ? 'selected' : ''}>${esc(year.name)}</option>`).join('')}
       </select>
-      <button type="submit" title="Switch school year">Go</button>
+      <button class="sr-only" type="submit">Switch school year</button>
     </form>` : '';
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>${esc(title)} &middot; Oakstead</title>
+<title>${esc(title)} &middot; ${esc(settings.schoolName)}</title>
+<link rel="icon" href="${settings.faviconUrl}" />
 <style>
 :root {
   color-scheme: light;
-  --bg: #f6f3ea;
-  --paper: #fffdf7;
+  --bg: #f7f8fb;
+  --paper: #ffffff;
   --paper-strong: #ffffff;
-  --ink: #1d211b;
-  --muted: #667062;
-  --line: #ded8c9;
-  --line-strong: #c8c0ae;
-  --accent: #2f6f4e;
-  --accent-dark: #205039;
-  --gold: #b97924;
-  --red: #a64233;
-  --blue: #345c8c;
-  --shadow: 0 18px 50px rgba(58, 47, 31, .09);
-  --radius: 8px;
+  --ink: #101828;
+  --muted: #667085;
+  --line: #e4e7ec;
+  --line-strong: #cfd4dc;
+  --accent: #2563eb;
+  --accent-dark: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --gold: #b54708;
+  --red: #b42318;
+  --blue: #2563eb;
+  --shadow: 0 18px 48px rgba(16, 24, 40, .07);
+  --radius: 4px;
 }
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #151712;
-  --paper: #20231d;
-  --paper-strong: #282c24;
-  --ink: #f5f1e5;
-  --muted: #b7b19f;
-  --line: #3a3d33;
-  --line-strong: #555847;
-  --accent: #8cc79f;
-  --accent-dark: #b4deb9;
-  --gold: #d6a34e;
-  --red: #e28a7d;
-  --blue: #97b7df;
-  --shadow: 0 18px 60px rgba(0, 0, 0, .35);
+  --bg: #0f172a;
+  --paper: #111827;
+  --paper-strong: #172033;
+  --ink: #f8fafc;
+  --muted: #a8b3c7;
+  --line: #253047;
+  --line-strong: #35415c;
+  --accent: #60a5fa;
+  --accent-dark: #93c5fd;
+  --accent-soft: #172b4f;
+  --gold: #f6b95f;
+  --red: #fb7185;
+  --blue: #93c5fd;
+  --shadow: 0 18px 60px rgba(0, 0, 0, .34);
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   min-height: 100svh;
-  background:
-    linear-gradient(90deg, rgba(47,111,78,.04) 1px, transparent 1px) 0 0 / 28px 28px,
-    linear-gradient(0deg, rgba(47,111,78,.035) 1px, transparent 1px) 0 0 / 28px 28px,
-    var(--bg);
+  background: var(--bg);
   color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
 }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; }
 button, select, input { min-height: 42px; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .app {
   width: min(1440px, 100%);
   margin: 0 auto;
@@ -512,23 +657,25 @@ button, select, input { min-height: 42px; }
   position: sticky;
   top: 0;
   z-index: 20;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: .7rem;
-  padding: .75rem max(.85rem, env(safe-area-inset-left)) .65rem max(.85rem, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 76px;
+  padding: .75rem max(1rem, env(safe-area-inset-left)) .75rem max(1rem, env(safe-area-inset-right));
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
   backdrop-filter: blur(16px);
 }
 .brand-row, .top-actions, .year-form, .user-chip { display: flex; align-items: center; gap: .6rem; }
 .brand-row { justify-content: space-between; min-width: 0; }
 .brand { display: flex; align-items: center; gap: .65rem; min-width: 0; text-decoration: none; }
-.brand img { width: 44px; height: 44px; object-fit: contain; }
+.brand img { width: 50px; height: 38px; object-fit: contain; }
 .brand-text strong { display: block; font-size: 1.05rem; letter-spacing: 0; }
 .brand-text span { display: block; color: var(--muted); font-size: .78rem; margin-top: .05rem; }
-.top-actions { justify-content: space-between; flex-wrap: wrap; }
-.year-form { flex: 1 1 210px; }
-.year-form select { max-width: 220px; }
+.top-actions { justify-content: flex-end; flex-wrap: nowrap; margin-left: auto; }
+.year-form { flex: 0 0 auto; }
+.year-form select { width: 190px; border-color: var(--line); background: var(--paper); }
 .year-form button, .icon-btn, .logout-btn {
   border: 1px solid var(--line);
   background: var(--paper-strong);
@@ -555,20 +702,50 @@ button, select, input { min-height: 42px; }
 }
 .sidebar::-webkit-scrollbar { display: none; }
 .nav-link {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
   text-decoration: none;
-  border: 1px solid var(--line);
-  background: var(--paper-strong);
+  border: 0;
+  border-left: 3px solid transparent;
+  background: transparent;
   color: var(--muted);
-  border-radius: 999px;
-  padding: .58rem .78rem;
+  border-radius: 0;
+  padding: .68rem .75rem;
   font-weight: 700;
   font-size: .88rem;
   white-space: nowrap;
-  transition: color .18s ease, border-color .18s ease, transform .18s ease;
+  transition: color .18s ease, border-color .18s ease, background .18s ease;
 }
-.nav-link.active { color: var(--paper-strong); background: var(--accent); border-color: var(--accent); }
-.nav-link:hover { transform: translateY(-1px); border-color: var(--accent); color: var(--accent-dark); }
-.nav-link.active:hover { color: var(--paper-strong); }
+.nav-link svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: currentColor;
+  opacity: .88;
+}
+.nav-link.active { color: var(--accent-dark); background: var(--accent-soft); border-left-color: var(--accent); }
+.nav-link:hover { color: var(--accent-dark); background: var(--accent-soft); }
+.nav-link.active:hover { color: var(--accent-dark); }
+.sidebar-utility {
+  display: block;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.theme-icon-btn {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.theme-icon-btn:hover { color: var(--accent-dark); background: var(--accent-soft); }
+.theme-icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .main {
   padding: 1rem .85rem 3.5rem;
 }
@@ -577,10 +754,13 @@ button, select, input { min-height: 42px; }
   gap: 1rem;
 }
 .page-head {
-  display: grid;
-  gap: .35rem;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
   padding: .35rem 0 .1rem;
 }
+.page-head-copy { display: grid; gap: .35rem; min-width: 0; }
 .page-head h1 {
   margin: 0;
   font-size: clamp(1.45rem, 4.5vw, 2.35rem);
@@ -628,7 +808,7 @@ input:focus, select:focus, textarea:focus {
   outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
   border-color: var(--accent);
 }
-.primary-btn, button[type="submit"] {
+.primary-btn, .main button[type="submit"], .login button[type="submit"] {
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   background: var(--accent);
@@ -649,6 +829,17 @@ input:focus, select:focus, textarea:focus {
   font-weight: 800;
   padding: .62rem .85rem;
 }
+.text-action {
+  color: var(--accent-dark);
+  font-weight: 800;
+  text-decoration: none;
+}
+.text-action:hover { text-decoration: underline; }
+.compact-action {
+  min-height: 34px;
+  padding: .38rem .58rem;
+  font-size: .82rem;
+}
 .inline-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .55rem; }
 .kpis {
   display: grid;
@@ -663,19 +854,20 @@ input:focus, select:focus, textarea:focus {
 }
 .kpi span { display: block; color: var(--muted); font-size: .78rem; font-weight: 800; }
 .kpi strong { display: block; margin-top: .18rem; font-size: 1.55rem; line-height: 1; }
-.table-wrap { width: 100%; overflow-x: auto; }
-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.table-wrap { width: 100%; overflow-x: visible; }
+table { width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed; }
 th, td { padding: .68rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: .9rem; }
 th { color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg)); }
+td { overflow-wrap: anywhere; }
 tr:last-child td { border-bottom: 0; }
-.compact-table table { min-width: 560px; }
+.compact-table table { min-width: 0; }
 .badge {
   display: inline-flex;
   align-items: center;
   min-height: 25px;
   padding: .18rem .5rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius);
   color: var(--muted);
   background: var(--paper-strong);
   font-size: .78rem;
@@ -721,11 +913,13 @@ tr:last-child td { border-bottom: 0; }
   overflow-x: auto;
   padding: .55rem 0 .2rem;
   background: linear-gradient(180deg, transparent, var(--paper) 24%);
+  scrollbar-width: none;
 }
+.quick-scores::-webkit-scrollbar { display: none; }
 .quick-scores button {
   flex: 0 0 auto;
   border: 1px solid var(--line-strong);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--paper-strong);
   color: var(--ink);
   font-weight: 900;
@@ -740,6 +934,166 @@ tr:last-child td { border-bottom: 0; }
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--paper-strong) 65%, transparent);
 }
+.page-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  padding: .6rem .85rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.family-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.family-module-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.module-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.setup-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+.setup-nav {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.setup-nav-head {
+  padding: .9rem;
+  border-bottom: 1px solid var(--line);
+}
+.setup-nav-head h2 { margin: 0; font-size: 1rem; }
+.setup-link {
+  display: grid;
+  gap: .2rem;
+  padding: .82rem .9rem;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--line);
+}
+.setup-link:last-child { border-bottom: 0; }
+.setup-link strong { font-size: .92rem; }
+.setup-link span { color: var(--muted); font-size: .8rem; line-height: 1.35; }
+.setup-link.active { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-dark); }
+.setup-link:hover { background: var(--accent-soft); color: var(--accent-dark); }
+.family-list {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.family-list-head, .family-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .9rem;
+  border-bottom: 1px solid var(--line);
+}
+.family-list-head h2, .family-detail-head h2 { margin: 0; font-size: 1rem; }
+.family-count { color: var(--muted); font-size: .8rem; font-weight: 800; }
+.family-link {
+  display: grid;
+  gap: .22rem;
+  padding: .8rem .9rem;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  transition: background .16s ease, color .16s ease;
+}
+.family-link:last-child { border-bottom: 0; }
+.family-link strong { font-size: .95rem; }
+.family-link span { color: var(--muted); font-size: .82rem; }
+.family-link small { color: var(--muted); font-size: .78rem; line-height: 1.35; }
+.family-link.active { background: var(--accent-soft); color: var(--accent-dark); }
+.family-link:hover { background: color-mix(in srgb, var(--accent-soft) 60%, var(--paper)); }
+.family-detail {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.family-detail-body {
+  display: grid;
+  gap: 1rem;
+  padding: .95rem;
+}
+.detail-grid {
+  display: grid;
+  gap: .7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.detail-item {
+  display: grid;
+  gap: .15rem;
+  padding-bottom: .65rem;
+  border-bottom: 1px solid var(--line);
+}
+.detail-item span { color: var(--muted); font-size: .76rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.detail-item strong { font-size: .95rem; font-weight: 700; }
+.asset-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .75rem;
+}
+.asset-preview {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: .8rem;
+  padding: .75rem;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+.asset-preview img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+.asset-preview strong { display: block; font-size: .9rem; }
+.asset-preview span { color: var(--muted); font-size: .8rem; }
+.child-list {
+  display: grid;
+  gap: .55rem;
+}
+.child-row {
+  display: grid;
+  gap: .25rem;
+  padding: .75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+}
+.child-row b { font-size: .95rem; }
+.child-row span { color: var(--muted); font-size: .84rem; }
+.subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-top: .2rem;
+}
+.subhead h3 { margin: 0; font-size: .95rem; }
 .login {
   min-height: 100svh;
   display: grid;
@@ -761,8 +1115,64 @@ tr:last-child td { border-bottom: 0; }
 .login-logo p { margin: .1rem 0 0; color: var(--muted); }
 .notice { color: var(--muted); font-size: .86rem; line-height: 1.4; }
 .danger { color: var(--red); font-weight: 800; }
+.report-summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .75rem;
+}
+.chart-panel {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: .95rem;
+  box-shadow: var(--shadow);
+}
+.chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: .8rem;
+}
+.chart-head h2 { margin: 0; font-size: 1rem; }
+.chart-head span { color: var(--muted); font-size: .8rem; font-weight: 800; }
+.bar-list { display: grid; gap: .7rem; }
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(92px, .45fr) minmax(0, 1fr) 58px;
+  align-items: center;
+  gap: .65rem;
+}
+.bar-row b { font-size: .84rem; overflow-wrap: anywhere; }
+.bar-track {
+  height: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+.bar-fill {
+  height: 100%;
+  width: var(--bar-value);
+  background: var(--accent);
+}
+.bar-fill.good { background: var(--accent); }
+.bar-fill.watch { background: var(--gold); }
+.bar-fill.low { background: var(--red); }
+.bar-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
+.distribution {
+  display: grid;
+  gap: .65rem;
+}
+.distribution-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 38px;
+  gap: .65rem;
+  align-items: center;
+}
+.distribution-row b { font-size: .84rem; }
+.distribution-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
 @media (min-width: 720px) {
-  .topbar { grid-template-columns: 1fr auto; align-items: center; top: 0; }
+  .topbar { top: 0; }
   .top-actions { justify-content: end; }
   .sidebar { top: 70px; padding-inline: 1rem; }
   .main { padding: 1.2rem 1rem 4rem; }
@@ -774,9 +1184,11 @@ tr:last-child td { border-bottom: 0; }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
+  .asset-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (min-width: 1040px) {
-  .app { grid-template-columns: 230px 1fr; }
+  .app { grid-template-columns: 168px 1fr; max-width: none; }
   .topbar { grid-column: 1 / -1; }
   .sidebar {
     position: sticky;
@@ -788,12 +1200,25 @@ tr:last-child td { border-bottom: 0; }
     align-content: start;
     border-right: 1px solid var(--line);
     border-bottom: 0;
-    padding: 1rem;
+    padding: .8rem .65rem;
   }
   .nav-link { border-radius: var(--radius); }
   .main { padding: 1.35rem 1.35rem 4rem; }
   .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
   .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .family-layout { grid-template-columns: 320px minmax(0, 1fr); align-items: start; }
+  .family-module-grid { grid-template-columns: 300px minmax(0, 1fr); align-items: start; }
+  .setup-layout { grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
+  .sidebar-utility { margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--line); }
+}
+@media (max-width: 820px) {
+  .topbar { align-items: stretch; flex-direction: column; }
+  .top-actions { justify-content: stretch; flex-wrap: wrap; margin-left: 0; }
+  .year-form { flex: 1 1 100%; }
+  .year-form select { width: 100%; max-width: none; }
+  .user-chip { white-space: normal; }
+  .page-head { align-items: stretch; flex-direction: column; }
+  .detail-grid { grid-template-columns: 1fr; }
 }
 @media print {
   body { background: #fff; color: #111; }
@@ -809,10 +1234,9 @@ tr:last-child td { border-bottom: 0; }
   <header class="topbar">
     <div class="brand-row">
       <a class="brand" href="/">
-        <img src="/assets/logo" alt="Oakstead" />
-        <span class="brand-text"><strong>Oakstead</strong><span>School records and gradebook</span></span>
+        <img src="${settings.logoUrl}" alt="${esc(settings.schoolName)}" />
+        <span class="brand-text"><strong>${esc(settings.schoolName)}</strong><span>Rooted Records for Growing Minds</span></span>
       </a>
-      <button id="themeToggle" class="icon-btn" type="button" title="Toggle theme">Theme</button>
     </div>
     <div class="top-actions">
       ${yearSwitcher}
@@ -821,12 +1245,15 @@ tr:last-child td { border-bottom: 0; }
     </div>
   </header>
   ${user ? `<nav class="sidebar" aria-label="Primary">
-    ${navLink('/', currentPath, 'Dashboard')}
-    ${navLink('/families', currentPath, 'Families')}
-    ${navLink('/setup', currentPath, 'School Setup')}
-    ${navLink('/gradebook', currentPath, 'Gradebook')}
-    ${navLink('/reports', currentPath, 'Reports')}
-    ${navLink('/users', currentPath, 'Users')}
+    ${navLink('/', currentPath, 'Dashboard', 'dashboard')}
+    ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
+    ${navLink('/reports', currentPath, 'Reports', 'reports')}
+    ${navLink('/setup', currentPath, 'School Setup', 'setup')}
+    <div class="sidebar-utility">
+      <button id="themeToggle" class="theme-icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg>
+      </button>
+    </div>
   </nav>` : ''}
   <main class="main">${content}</main>
 </div>
@@ -843,6 +1270,11 @@ tr:last-child td { border-bottom: 0; }
       localStorage.setItem('oakstead-theme', next);
     });
   }
+  document.querySelectorAll('.year-form select').forEach(function(select) {
+    select.addEventListener('change', function() {
+      select.form.submit();
+    });
+  });
 
   let activeScoreInput = null;
   document.addEventListener('focusin', function(event) {
@@ -867,20 +1299,22 @@ tr:last-child td { border-bottom: 0; }
 }
 
 function loginPage(csrfToken, hasError) {
+  const settings = appSettings();
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sign in &middot; Oakstead</title>
+<title>Sign in &middot; ${esc(settings.schoolName)}</title>
+<link rel="icon" href="${settings.faviconUrl}" />
 <style>${pageTemplate({ title: 'x', currentPath: '', content: '', csrfToken, user: null }).match(/<style>([\s\S]*?)<\/style>/)[1]}</style>
 </head>
 <body>
 <main class="login">
   <section class="login-panel">
     <div class="login-logo">
-      <img src="/assets/logo" alt="Oakstead" />
-      <div><h1>Oakstead</h1><p>School records and gradebook</p></div>
+      <img src="${settings.logoUrl}" alt="${esc(settings.schoolName)}" />
+      <div><h1>${esc(settings.schoolName)}</h1><p>Rooted Records for Growing Minds</p></div>
     </div>
     <form method="post" action="/login" class="form-grid">
       ${csrfInput(csrfToken)}
@@ -895,15 +1329,32 @@ function loginPage(csrfToken, hasError) {
 </html>`;
 }
 
-function schoolYearHead(title, description, selectedYear) {
+function schoolYearHead(title, description, selectedYear, action = '') {
   return `<header class="page-head">
-    <h1>${esc(title)}</h1>
-    <p>${esc(description)} ${selectedYear ? `Current view: ${selectedYear.name}.` : ''}</p>
+    <div class="page-head-copy">
+      <h1>${esc(title)}</h1>
+      <p>${esc(description)} ${selectedYear ? `Current view: ${selectedYear.name}.` : ''}</p>
+    </div>
+    ${action}
   </header>`;
 }
 
 function logoAsset() {
+  const custom = getSetting('logo_path', '');
+  if (custom) {
+    const customPath = path.join(PUBLIC_DIR, custom);
+    if (fs.existsSync(customPath)) return customPath;
+  }
   return fs.existsSync(DEFAULT_LOGO_FILE) ? DEFAULT_LOGO_FILE : path.join(__dirname, 'assets', 'oakstead-logo.svg');
+}
+
+function faviconAsset() {
+  const custom = getSetting('favicon_path', '');
+  if (custom) {
+    const customPath = path.join(PUBLIC_DIR, custom);
+    if (fs.existsSync(customPath)) return customPath;
+  }
+  return logoAsset();
 }
 
 function dashboardPage(selectedYear) {
@@ -956,7 +1407,7 @@ function dashboardPage(selectedYear) {
   </div>`;
 }
 
-function familiesPage(selectedYear, csrfToken) {
+function familiesPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
   const families = querySql(`SELECT f.*,
       COUNT(st.id) AS child_count
@@ -971,65 +1422,103 @@ function familiesPage(selectedYear, csrfToken) {
     LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
     ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`);
   const classrooms = querySql(`SELECT id, name FROM os_classrooms WHERE school_year_id=${yearId} ORDER BY name;`);
-  const familyOptions = families.map((family) => `<option value="${family.id}">${esc(family.family_name)}</option>`).join('');
   const classroomOptions = classrooms.map((room) => `<option value="${room.id}">${esc(room.name)}</option>`).join('');
-  const unenrolledOptions = students.filter((student) => !student.grade_level)
-    .map((student) => `<option value="${student.id}">${esc(`${student.first_name} ${student.last_name} - ${student.family_name}`)}</option>`).join('');
+  const showAddFamily = url.searchParams.get('action') === 'add-family' || families.length === 0;
+  const requestedFamilyId = asInt(url.searchParams.get('familyId'));
+  const selectedFamily = !showAddFamily
+    ? (families.find((family) => family.id === requestedFamilyId) || families[0] || null)
+    : null;
+  const selectedChildren = selectedFamily ? students.filter((student) => student.family_id === selectedFamily.id) : [];
+  const addFamilyAction = `<a class="page-action" href="/families?action=add-family">Add Family</a>`;
+
+  const familyList = `<section class="family-list">
+    <div class="family-list-head">
+      <h2>Families</h2>
+      <div class="module-actions"><span class="family-count">${families.length}</span><a class="page-action compact-action" href="/setup?section=families&action=add-family">Add Family</a></div>
+    </div>
+    ${families.map((family) => {
+      const active = selectedFamily?.id === family.id ? 'active' : '';
+      const childText = `${family.child_count || 0} ${Number(family.child_count) === 1 ? 'child' : 'children'}`;
+      const contact = [family.phone, family.email].filter(Boolean).join(' - ');
+      return `<a class="family-link ${active}" href="/families?familyId=${family.id}">
+        <strong>${esc(family.family_name)}</strong>
+        <span>${esc(childText)}${contact ? ` / ${esc(contact)}` : ''}</span>
+      </a>`;
+    }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
+  </section>`;
+
+  const addFamilyPanel = `<section class="family-detail">
+    <div class="family-detail-head"><h2>Add Family</h2><a class="secondary-btn" href="/families">Cancel</a></div>
+    <div class="family-detail-body">
+      <form method="post" action="/families" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>Family Name<input name="familyName" required maxlength="120" /></label>
+        <label>Phone<input name="phone" inputmode="tel" maxlength="40" /></label>
+        <label>Father<input name="fatherName" maxlength="120" /></label>
+        <label>Mother<input name="motherName" maxlength="120" /></label>
+        <label>Email<input name="email" type="email" maxlength="160" /></label>
+        <label>Address<input name="address" maxlength="220" /></label>
+        <button type="submit">Save Family</button>
+      </form>
+    </div>
+  </section>`;
+
+  const detailPanel = selectedFamily ? `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>${esc(selectedFamily.family_name)}</h2>
+      <span class="family-count">${selectedChildren.length} ${selectedChildren.length === 1 ? 'child' : 'children'}</span>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Parents</span><strong>${esc([selectedFamily.father_name, selectedFamily.mother_name].filter(Boolean).join(' / ')) || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Phone</span><strong>${esc(selectedFamily.phone || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
+      </div>
+      <div class="subhead"><h3>Children</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
+      <div class="child-list">
+        ${selectedChildren.map((student) => `<div class="child-row">
+          <b>${esc(student.first_name)} ${esc(student.last_name)}</b>
+          <span>${student.birth_date ? `Birthday ${esc(student.birth_date)} / ` : ''}Grade ${esc(student.grade_level || 'not enrolled')}${student.classroom_name ? ` / ${esc(student.classroom_name)}` : ''}</span>
+        </div>`).join('') || emptyState('No children are listed for this family yet.')}
+      </div>
+      <div class="subhead"><h3>Add Child</h3></div>
+      <form method="post" action="/students" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <input type="hidden" name="schoolYearId" value="${yearId}" />
+        <input type="hidden" name="familyId" value="${selectedFamily.id}" />
+        <label>First Name<input name="firstName" required maxlength="80" /></label>
+        <label>Last Name<input name="lastName" required maxlength="80" /></label>
+        <label>Birthday<input type="date" name="birthDate" /></label>
+        <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
+        <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions}</select></label>
+        <button type="submit">Save Child</button>
+      </form>
+    </div>
+  </section>` : addFamilyPanel;
 
   return `<div class="workspace">
-    ${schoolYearHead('Families', "Enter households, children, birthdays, and each child's school-year placement.", selectedYear)}
-    <div class="split">
-      <div class="workspace">
-        ${actionPanel('Add Family', `<form method="post" action="/families" class="form-grid two">
-          ${csrfInput(csrfToken)}
-          <label>Family Name<input name="familyName" required maxlength="120" /></label>
-          <label>Phone<input name="phone" inputmode="tel" maxlength="40" /></label>
-          <label>Father<input name="fatherName" maxlength="120" /></label>
-          <label>Mother<input name="motherName" maxlength="120" /></label>
-          <label>Email<input name="email" type="email" maxlength="160" /></label>
-          <label>Address<input name="address" maxlength="220" /></label>
-          <button type="submit">Save Family</button>
-        </form>`)}
-        ${actionPanel('Add Child', `<form method="post" action="/students" class="form-grid two">
-          ${csrfInput(csrfToken)}
-          <input type="hidden" name="schoolYearId" value="${yearId}" />
-          <label>First Name<input name="firstName" required maxlength="80" /></label>
-          <label>Last Name<input name="lastName" required maxlength="80" /></label>
-          <label>Birthday<input type="date" name="birthDate" /></label>
-          <label>Family<select name="familyId" required><option value="">Choose family</option>${familyOptions}</select></label>
-          <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
-          <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions}</select></label>
-          <button type="submit">Save Child</button>
-        </form>`)}
-        ${actionPanel('Enroll Existing Child', `<form method="post" action="/enrollments" class="form-grid two">
-          ${csrfInput(csrfToken)}
-          <input type="hidden" name="schoolYearId" value="${yearId}" />
-          <label>Child<select name="studentId" required><option value="">Choose child</option>${unenrolledOptions}</select></label>
-          <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
-          <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions}</select></label>
-          <button type="submit">Enroll in ${esc(selectedYear.name)}</button>
-        </form>`, 'Use this when a child exists from a prior school year but is not enrolled in the selected year.')}
-      </div>
-      <section class="ledger">
-        <div class="ledger-head"><h2>Family Directory</h2><p>Households and enrolled children for the selected school year.</p></div>
-        <div class="table-wrap"><table>
-          <tr><th>Family</th><th>Parents</th><th>Contact</th><th>Children</th></tr>
-          ${families.map((family) => {
-            const kids = students.filter((student) => student.family_id === family.id)
-              .map((student) => `<span class="badge">${esc(student.first_name)} ${esc(student.last_name)} &middot; ${esc(student.grade_level || 'not enrolled')}${student.classroom_name ? ` &middot; ${esc(student.classroom_name)}` : ''}</span>`)
-              .join('');
-            return `<tr><td><strong>${esc(family.family_name)}</strong></td><td>${esc([family.father_name, family.mother_name].filter(Boolean).join(' / ')) || '&mdash;'}</td><td>${esc([family.phone, family.email].filter(Boolean).join(' - ')) || '&mdash;'}<br>${esc(family.address || '')}</td><td>${kids || '&mdash;'}</td></tr>`;
-          }).join('') || `<tr><td colspan="4">${emptyState('No families have been entered yet.')}</td></tr>`}
-        </table></div>
-      </section>
+    ${schoolYearHead('Families', 'Select a household to manage its children and yearly placement.', selectedYear, addFamilyAction)}
+    <div class="family-layout">
+      ${familyList}
+      ${showAddFamily ? addFamilyPanel : detailPanel}
     </div>
   </div>`;
 }
 
-function setupPage(selectedYear, csrfToken) {
+function selectedAttr(value, selected) {
+  return String(value || '') === String(selected || '') ? 'selected' : '';
+}
+
+function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
+  const validSections = ['families', 'teachers', 'classrooms', 'subjects', 'years', 'users', 'settings'];
+  const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
+  const action = cleanText(url.searchParams.get('action'), 40);
+  const settings = appSettings();
   const teachers = querySql('SELECT * FROM os_teachers ORDER BY name;');
   const subjects = querySql('SELECT * FROM os_subjects ORDER BY name;');
+  const schoolYears = querySql('SELECT * FROM os_school_years ORDER BY is_active DESC, name DESC;');
   const classrooms = querySql(`SELECT c.*, t.name AS teacher_name,
       GROUP_CONCAT(cg.grade_level, ', ') AS grades
     FROM os_classrooms c
@@ -1043,72 +1532,311 @@ function setupPage(selectedYear, csrfToken) {
     JOIN os_subjects s ON s.id = gs.subject_id
     WHERE gs.school_year_id=${yearId}
     ORDER BY gs.grade_level, s.name;`);
-  const teacherOptions = teachers.map((teacher) => `<option value="${teacher.id}">${esc(teacher.name)}</option>`).join('');
-  const subjectOptions = subjects.map((subject) => `<option value="${subject.id}">${esc(subject.name)}</option>`).join('');
+  const families = querySql(`SELECT f.*,
+      COUNT(st.id) AS child_count
+    FROM os_families f
+    LEFT JOIN os_students st ON st.family_id = f.id
+    GROUP BY f.id
+    ORDER BY f.family_name;`);
+  const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, c.name AS classroom_name
+    FROM os_students st
+    JOIN os_families f ON f.id = st.family_id
+    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
+    LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
+    ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`);
+  const users = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, t.name AS teacher_name
+    FROM os_users u
+    LEFT JOIN os_teachers t ON t.id = u.teacher_id
+    ORDER BY u.name;`);
+  const teacherOptions = (selected = '') => teachers.map((teacher) => `<option value="${teacher.id}" ${selectedAttr(teacher.id, selected)}>${esc(teacher.name)}</option>`).join('');
+  const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
+  const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
+  const setupLinks = [
+    ['families', 'Families', `${families.length} households`],
+    ['teachers', 'Teachers', `${teachers.length} records`],
+    ['classrooms', 'Classrooms', `${classrooms.length} rooms in ${selectedYear.name}`],
+    ['subjects', 'Subjects', `${subjects.length} subjects`],
+    ['years', 'School Years', `${schoolYears.length} years`],
+    ['users', 'Users', `${users.length} sign-ins`],
+    ['settings', 'System Settings', settings.schoolName]
+  ];
+  const setupNav = `<aside class="setup-nav" aria-label="School setup modules">
+    <div class="setup-nav-head"><h2>Setup</h2></div>
+    ${setupLinks.map(([key, label, meta]) => `<a class="setup-link ${section === key ? 'active' : ''}" href="/setup?section=${key}">
+      <strong>${esc(label)}</strong>
+      <span>${esc(meta)}</span>
+    </a>`).join('')}
+  </aside>`;
+
+  const requestedFamilyId = asInt(url.searchParams.get('familyId'));
+  const selectedFamily = families.find((family) => family.id === requestedFamilyId) || families[0] || null;
+  const showFamilyForm = action === 'add-family' || action === 'edit-family' || families.length === 0;
+  const familyForForm = action === 'edit-family' ? selectedFamily : null;
+  const selectedChildren = selectedFamily ? students.filter((student) => student.family_id === selectedFamily.id) : [];
+  const familyList = `<section class="family-list">
+    <div class="family-list-head">
+      <h2>Families</h2>
+      <div class="module-actions"><span class="family-count">${families.length}</span><a class="page-action compact-action" href="/setup?section=families&action=add-family">Add Family</a></div>
+    </div>
+    ${families.map((family) => {
+      const active = selectedFamily?.id === family.id && !showFamilyForm ? 'active' : '';
+      const childText = `${family.child_count || 0} ${Number(family.child_count) === 1 ? 'child' : 'children'}`;
+      return `<a class="family-link ${active}" href="/setup?section=families&familyId=${family.id}">
+        <strong>${esc(family.family_name)}</strong>
+        <small>Dad: ${esc(family.father_name || 'not listed')}</small>
+        <small>Mom: ${esc(family.mother_name || 'not listed')}</small>
+        <span>${esc(childText)}</span>
+      </a>`;
+    }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
+  </section>`;
+  const familyForm = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>${familyForForm ? 'Edit Family' : 'Add Family'}</h2>
+      <a class="secondary-btn compact-action" href="/setup?section=families${selectedFamily ? `&familyId=${selectedFamily.id}` : ''}">Cancel</a>
+    </div>
+    <div class="family-detail-body">
+      <form method="post" action="/families" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        ${familyForForm ? `<input type="hidden" name="familyId" value="${familyForForm.id}" />` : ''}
+        <label>Last Name<input name="familyName" required maxlength="120" value="${esc(familyForForm?.family_name || '')}" /></label>
+        <label>Phone<input name="phone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.phone || '')}" /></label>
+        <label>Father<input name="fatherName" maxlength="120" value="${esc(familyForForm?.father_name || '')}" /></label>
+        <label>Mother<input name="motherName" maxlength="120" value="${esc(familyForForm?.mother_name || '')}" /></label>
+        <label>Email<input name="email" type="email" maxlength="160" value="${esc(familyForForm?.email || '')}" /></label>
+        <label>Address<input name="address" maxlength="220" value="${esc(familyForForm?.address || '')}" /></label>
+        <button type="submit">${familyForForm ? 'Save Changes' : 'Save Family'}</button>
+      </form>
+    </div>
+  </section>`;
+  const childForm = selectedFamily ? `<form method="post" action="/students" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="schoolYearId" value="${yearId}" />
+    <input type="hidden" name="familyId" value="${selectedFamily.id}" />
+    <label>First Name<input name="firstName" required maxlength="80" /></label>
+    <label>Last Name<input name="lastName" required maxlength="80" value="${esc(selectedFamily.family_name)}" /></label>
+    <label>Birthday<input type="date" name="birthDate" /></label>
+    <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
+    <label>Classroom<select name="classroomId"><option value="">Not assigned yet</option>${classroomOptions()}</select></label>
+    <button type="submit">Save Child</button>
+  </form>` : '';
+  const familyDetail = selectedFamily ? `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>${esc(selectedFamily.family_name)}</h2>
+      <div class="module-actions">
+        <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=edit-family">Edit</a>
+        <a class="page-action compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-child">Add Child</a>
+      </div>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Father</span><strong>${esc(selectedFamily.father_name || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Mother</span><strong>${esc(selectedFamily.mother_name || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Phone</span><strong>${esc(selectedFamily.phone || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
+      </div>
+      <div class="subhead"><h3>Children</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
+      <div class="child-list">
+        ${selectedChildren.map((student) => `<div class="child-row">
+          <b>${esc(student.first_name)} ${esc(student.last_name)}</b>
+          <span>${student.birth_date ? `Birthday ${esc(student.birth_date)} / ` : ''}Grade ${esc(student.grade_level || 'not enrolled')}${student.classroom_name ? ` / ${esc(student.classroom_name)}` : ''}</span>
+        </div>`).join('') || emptyState('No children are listed for this family yet.')}
+      </div>
+      ${action === 'add-child' ? `<div class="subhead"><h3>Add Child</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>${childForm}` : ''}
+    </div>
+  </section>` : familyForm;
+  const familiesModule = `<div class="family-module-grid">
+    ${familyList}
+    ${showFamilyForm ? familyForm : familyDetail}
+  </div>`;
+
+  const teacherEdit = teachers.find((teacher) => teacher.id === asInt(url.searchParams.get('teacherId')));
+  const teacherForm = `<form method="post" action="/teachers" class="form-grid three">
+    ${csrfInput(csrfToken)}
+    ${teacherEdit ? `<input type="hidden" name="teacherId" value="${teacherEdit.id}" />` : ''}
+    <label>Name<input name="name" required maxlength="120" value="${esc(teacherEdit?.name || '')}" /></label>
+    <label>Email<input name="email" type="email" maxlength="160" value="${esc(teacherEdit?.email || '')}" /></label>
+    <label>Phone<input name="phone" inputmode="tel" maxlength="40" value="${esc(teacherEdit?.phone || '')}" /></label>
+    <button type="submit">${teacherEdit ? 'Save Changes' : 'Save Teacher'}</button>
+  </form>`;
+  const teachersModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Teachers</h2>
+      <div class="module-actions"><span class="family-count">${teachers.length}</span><a class="page-action compact-action" href="/setup?section=teachers&action=add-teacher">Add Teacher</a></div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-teacher' || teacherEdit) ? `<div class="subhead"><h3>${teacherEdit ? 'Edit Teacher' : 'Add Teacher'}</h3><a class="secondary-btn compact-action" href="/setup?section=teachers">Cancel</a></div>${teacherForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Name</th><th>Email</th><th>Phone</th><th></th></tr>
+        ${teachers.map((teacher) => `<tr><td>${esc(teacher.name)}</td><td>${esc(teacher.email || '') || '&mdash;'}</td><td>${esc(teacher.phone || '') || '&mdash;'}</td><td><a class="text-action" href="/setup?section=teachers&teacherId=${teacher.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="4">${emptyState('No teachers yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
+  const classroomEdit = classrooms.find((room) => room.id === asInt(url.searchParams.get('classroomId')));
+  const classroomForm = `<form method="post" action="/classrooms" class="form-grid three">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="schoolYearId" value="${yearId}" />
+    ${classroomEdit ? `<input type="hidden" name="classroomId" value="${classroomEdit.id}" />` : ''}
+    <label>Room Name<input name="name" required maxlength="120" value="${esc(classroomEdit?.name || '')}" /></label>
+    <label>Teacher<select name="teacherId"><option value="">Unassigned</option>${teacherOptions(classroomEdit?.teacher_id || '')}</select></label>
+    <label>Grades in Room<input name="grades" placeholder="3, 4" required maxlength="120" value="${esc(classroomEdit?.grades || '')}" /></label>
+    <button type="submit">${classroomEdit ? 'Save Changes' : 'Save Classroom'}</button>
+  </form>`;
+  const classroomsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Classrooms</h2>
+      <div class="module-actions"><span class="family-count">${esc(selectedYear.name)}</span><a class="page-action compact-action" href="/setup?section=classrooms&action=add-classroom">Add Classroom</a></div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-classroom' || classroomEdit) ? `<div class="subhead"><h3>${classroomEdit ? 'Edit Classroom' : 'Add Classroom'}</h3><a class="secondary-btn compact-action" href="/setup?section=classrooms">Cancel</a></div>${classroomForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Classroom</th><th>Teacher</th><th>Grades</th><th></th></tr>
+        ${classrooms.map((room) => `<tr><td>${esc(room.name)}</td><td>${esc(room.teacher_name || 'Unassigned')}</td><td>${String(room.grades || '').split(',').filter(Boolean).map((grade) => `<span class="badge">${esc(grade.trim())}</span>`).join('')}</td><td><a class="text-action" href="/setup?section=classrooms&classroomId=${room.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="4">${emptyState('No classrooms for this year yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
+  const subjectEdit = subjects.find((subject) => subject.id === asInt(url.searchParams.get('subjectId')));
+  const subjectForm = `<form method="post" action="/subjects" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    ${subjectEdit ? `<input type="hidden" name="subjectId" value="${subjectEdit.id}" />` : ''}
+    <label>Subject Name<input name="name" required maxlength="120" value="${esc(subjectEdit?.name || '')}" /></label>
+    <button type="submit">${subjectEdit ? 'Save Changes' : 'Save Subject'}</button>
+  </form>`;
+  const assignSubjectForm = `<form method="post" action="/grade-subjects" class="form-grid three">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="schoolYearId" value="${yearId}" />
+    <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
+    <label>Subject<select name="subjectId" required><option value="">Choose subject</option>${subjectOptions()}</select></label>
+    <button type="submit">Assign Subject</button>
+  </form>`;
+  const subjectsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Subjects</h2>
+      <div class="module-actions">
+        <a class="secondary-btn compact-action" href="/setup?section=subjects&action=assign-subject">Assign to Grade</a>
+        <a class="page-action compact-action" href="/setup?section=subjects&action=add-subject">Add Subject</a>
+      </div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-subject' || subjectEdit) ? `<div class="subhead"><h3>${subjectEdit ? 'Edit Subject' : 'Add Subject'}</h3><a class="secondary-btn compact-action" href="/setup?section=subjects">Cancel</a></div>${subjectForm}` : ''}
+      ${action === 'assign-subject' ? `<div class="subhead"><h3>Assign Subject to Grade</h3><a class="secondary-btn compact-action" href="/setup?section=subjects">Cancel</a></div>${assignSubjectForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Subject</th><th></th></tr>
+        ${subjects.map((subject) => `<tr><td>${esc(subject.name)}</td><td><a class="text-action" href="/setup?section=subjects&subjectId=${subject.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="2">${emptyState('No subjects yet.')}</td></tr>`}
+      </table></div>
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Grade</th><th>Subjects</th></tr>
+        ${sortGrades(gradeSubjects.map((row) => row.grade_level)).map((grade) => `<tr><td>${esc(grade)}</td><td>${gradeSubjects.filter((row) => row.grade_level === grade).map((row) => `<span class="badge">${esc(row.subject_name)}</span>`).join('')}</td></tr>`).join('') || `<tr><td colspan="2">${emptyState('No subjects have been assigned to grades yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
+  const yearEdit = schoolYears.find((schoolYear) => schoolYear.id === asInt(url.searchParams.get('yearId')));
+  const yearForm = `<form method="post" action="/school-years" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    ${yearEdit ? `<input type="hidden" name="yearId" value="${yearEdit.id}" />` : ''}
+    <label>Name<input name="name" required maxlength="40" value="${esc(yearEdit?.name || '')}" /></label>
+    <label>Start Date<input type="date" name="startDate" value="${esc(yearEdit?.start_date || '')}" /></label>
+    <label>End Date<input type="date" name="endDate" value="${esc(yearEdit?.end_date || '')}" /></label>
+    <label>Make Active<select name="makeActive"><option value="1" ${selectedAttr(yearEdit?.is_active ? '1' : '', '1')}>Yes</option><option value="0" ${selectedAttr(yearEdit && !yearEdit.is_active ? '0' : '', '0')}>No</option></select></label>
+    <button type="submit">${yearEdit ? 'Save Changes' : 'Create Year'}</button>
+  </form>`;
+  const promoteForm = `<form method="post" action="/promote-year" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="fromYearId" value="${yearId}" />
+    <label>Next Year Name<input name="name" placeholder="2026-2027" required maxlength="40" /></label>
+    <label>Start Date<input type="date" name="startDate" /></label>
+    <label>End Date<input type="date" name="endDate" /></label>
+    <label>Make Active<select name="makeActive"><option value="1">Yes</option><option value="0">No</option></select></label>
+    <button type="submit">Promote Students</button>
+  </form>`;
+  const yearsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>School Years</h2>
+      <div class="module-actions">
+        <a class="secondary-btn compact-action" href="/setup?section=years&action=promote-year">Promote Year</a>
+        <a class="page-action compact-action" href="/setup?section=years&action=add-year">Create Year</a>
+      </div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-year' || yearEdit) ? `<div class="subhead"><h3>${yearEdit ? 'Edit School Year' : 'Create School Year'}</h3><a class="secondary-btn compact-action" href="/setup?section=years">Cancel</a></div>${yearForm}` : ''}
+      ${action === 'promote-year' ? `<div class="subhead"><h3>Promote Current Year</h3><a class="secondary-btn compact-action" href="/setup?section=years">Cancel</a></div><p class="notice">Promotion creates new year-specific enrollment records and leaves prior grades untouched.</p>${promoteForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>School Year</th><th>Dates</th><th>Status</th><th></th></tr>
+        ${schoolYears.map((schoolYear) => `<tr><td>${esc(schoolYear.name)}</td><td>${esc([schoolYear.start_date, schoolYear.end_date].filter(Boolean).join(' to ')) || '&mdash;'}</td><td>${schoolYear.is_active ? '<span class="badge good">Active</span>' : '<span class="badge">Inactive</span>'}</td><td><a class="text-action" href="/setup?section=years&yearId=${schoolYear.id}">Edit</a></td></tr>`).join('')}
+      </table></div>
+    </div>
+  </section>`;
+
+  const userEdit = users.find((setupUser) => setupUser.id === asInt(url.searchParams.get('userId')));
+  const roleValue = userEdit?.role || ROLE_ADMIN;
+  const userForm = `<form method="post" action="/users" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    ${userEdit ? `<input type="hidden" name="userId" value="${userEdit.id}" />` : ''}
+    <label>Name<input name="name" required maxlength="120" value="${esc(userEdit?.name || '')}" /></label>
+    <label>Username<input name="username" required maxlength="80" value="${esc(userEdit?.username || '')}" /></label>
+    <label>Role<select name="role"><option value="${ROLE_ADMIN}" ${selectedAttr(roleValue, ROLE_ADMIN)}>Admin</option><option value="${ROLE_TEACHER}" ${selectedAttr(roleValue, ROLE_TEACHER)}>Teacher</option></select></label>
+    <label>Teacher Link<select name="teacherId"><option value="">None</option>${teacherOptions(userEdit?.teacher_id || '')}</select></label>
+    <label>Password<input type="password" name="password" ${userEdit ? '' : 'required'} maxlength="120" autocomplete="new-password" /></label>
+    <button type="submit">${userEdit ? 'Save Changes' : 'Create User'}</button>
+  </form>`;
+  const usersModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Users</h2>
+      <div class="module-actions"><span class="family-count">${users.length}</span><a class="page-action compact-action" href="/setup?section=users&action=add-user">Add User</a></div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-user' || userEdit) ? `<div class="subhead"><h3>${userEdit ? 'Edit User' : 'Add User'}</h3><a class="secondary-btn compact-action" href="/setup?section=users">Cancel</a></div>${userForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Name</th><th>Username</th><th>Role</th><th>Teacher</th><th></th></tr>
+        ${users.map((setupUser) => `<tr><td>${esc(setupUser.name)}</td><td>${esc(setupUser.username)}</td><td>${roleLabel(setupUser.role)}</td><td>${esc(setupUser.teacher_name || '') || '&mdash;'}</td><td><a class="text-action" href="/setup?section=users&userId=${setupUser.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No users yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
+  const settingsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>System Settings</h2>
+      <span class="family-count">${esc(settings.schoolName)}</span>
+    </div>
+    <div class="family-detail-body">
+      <div class="asset-preview-grid">
+        <div class="asset-preview">
+          <img src="${settings.logoUrl}" alt="${esc(settings.schoolName)} logo" />
+          <div><strong>Software Logo</strong><span>${settings.hasCustomLogo ? 'Custom logo loaded' : 'Default logo'}</span></div>
+        </div>
+        <div class="asset-preview">
+          <img src="${settings.faviconUrl}" alt="${esc(settings.schoolName)} favicon" />
+          <div><strong>Favicon</strong><span>${settings.hasCustomFavicon ? 'Custom favicon loaded' : 'Using logo as favicon'}</span></div>
+        </div>
+      </div>
+      <form method="post" action="/system-settings" enctype="multipart/form-data" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>School Name<input name="schoolName" required maxlength="120" value="${esc(settings.schoolName)}" /></label>
+        <label>Logo<input type="file" name="logo" accept=".svg,.png,.jpg,.jpeg,.webp,image/svg+xml,image/png,image/jpeg,image/webp" /></label>
+        <label>Favicon<input type="file" name="favicon" accept=".ico,.svg,.png,.jpg,.jpeg,.webp,image/x-icon,image/svg+xml,image/png,image/jpeg,image/webp" /></label>
+        <button type="submit">Save Settings</button>
+      </form>
+    </div>
+  </section>`;
+
+  const modules = {
+    families: familiesModule,
+    teachers: teachersModule,
+    classrooms: classroomsModule,
+    subjects: subjectsModule,
+    years: yearsModule,
+    users: usersModule,
+    settings: settingsModule
+  };
 
   return `<div class="workspace">
-    ${schoolYearHead('School Setup', 'Set school years, teachers, classrooms, grades, and grade-level subjects.', selectedYear)}
-    <div class="split">
-      <div class="workspace">
-        ${actionPanel('Teachers', `<form method="post" action="/teachers" class="form-grid three">
-          ${csrfInput(csrfToken)}
-          <label>Name<input name="name" required maxlength="120" /></label>
-          <label>Email<input name="email" type="email" maxlength="160" /></label>
-          <label>Phone<input name="phone" inputmode="tel" maxlength="40" /></label>
-          <button type="submit">Save Teacher</button>
-        </form>
-        <div class="table-wrap compact-table"><table>
-          <tr><th>Name</th><th>Email</th><th>Phone</th></tr>
-          ${teachers.map((teacher) => `<tr><td>${esc(teacher.name)}</td><td>${esc(teacher.email || '') || '&mdash;'}</td><td>${esc(teacher.phone || '') || '&mdash;'}</td></tr>`).join('') || `<tr><td colspan="3">${emptyState('No teachers yet.')}</td></tr>`}
-        </table></div>`)}
-        ${actionPanel('Classrooms', `<form method="post" action="/classrooms" class="form-grid three">
-          ${csrfInput(csrfToken)}
-          <input type="hidden" name="schoolYearId" value="${yearId}" />
-          <label>Room Name<input name="name" placeholder="Upper Room" required maxlength="120" /></label>
-          <label>Teacher<select name="teacherId"><option value="">Unassigned</option>${teacherOptions}</select></label>
-          <label>Grades in Room<input name="grades" placeholder="3, 4" required maxlength="120" /></label>
-          <button type="submit">Save Classroom</button>
-        </form>
-        <div class="table-wrap compact-table"><table>
-          <tr><th>Classroom</th><th>Teacher</th><th>Grades</th></tr>
-          ${classrooms.map((room) => `<tr><td>${esc(room.name)}</td><td>${esc(room.teacher_name || 'Unassigned')}</td><td>${String(room.grades || '').split(',').filter(Boolean).map((grade) => `<span class="badge">${esc(grade.trim())}</span>`).join('')}</td></tr>`).join('') || `<tr><td colspan="3">${emptyState('No classrooms for this year yet.')}</td></tr>`}
-        </table></div>`)}
-      </div>
-      <div class="workspace">
-        ${actionPanel('Subjects by Grade', `<form method="post" action="/subjects" class="form-grid two">
-          ${csrfInput(csrfToken)}
-          <label>New Subject<input name="name" placeholder="Arithmetic" required maxlength="120" /></label>
-          <button type="submit">Add Subject</button>
-        </form>
-        <form method="post" action="/grade-subjects" class="form-grid three" style="margin-top:.8rem">
-          ${csrfInput(csrfToken)}
-          <input type="hidden" name="schoolYearId" value="${yearId}" />
-          <label>Grade<select name="gradeLevel" required>${gradeOptions()}</select></label>
-          <label>Subject<select name="subjectId" required><option value="">Choose subject</option>${subjectOptions}</select></label>
-          <button type="submit">Assign Subject</button>
-        </form>
-        <div class="table-wrap compact-table"><table>
-          <tr><th>Grade</th><th>Subjects</th></tr>
-          ${sortGrades(gradeSubjects.map((row) => row.grade_level)).map((grade) => `<tr><td>${esc(grade)}</td><td>${gradeSubjects.filter((row) => row.grade_level === grade).map((row) => `<span class="badge">${esc(row.subject_name)}</span>`).join('')}</td></tr>`).join('') || `<tr><td colspan="2">${emptyState('No subjects have been assigned to grades yet.')}</td></tr>`}
-        </table></div>`)}
-        ${actionPanel('School Years', `<form method="post" action="/school-years" class="form-grid two">
-          ${csrfInput(csrfToken)}
-          <label>Name<input name="name" placeholder="2026-2027" required maxlength="40" /></label>
-          <label>Start Date<input type="date" name="startDate" /></label>
-          <label>End Date<input type="date" name="endDate" /></label>
-          <label>Make Active<select name="makeActive"><option value="1">Yes</option><option value="0">No</option></select></label>
-          <button type="submit">Create Year</button>
-        </form>
-        <form method="post" action="/promote-year" class="form-grid two" style="margin-top:.8rem">
-          ${csrfInput(csrfToken)}
-          <input type="hidden" name="fromYearId" value="${yearId}" />
-          <label>Next Year Name<input name="name" placeholder="2026-2027" required maxlength="40" /></label>
-          <label>Start Date<input type="date" name="startDate" /></label>
-          <label>End Date<input type="date" name="endDate" /></label>
-          <label>Make Active<select name="makeActive"><option value="1">Yes</option><option value="0">No</option></select></label>
-          <button type="submit">Promote Students</button>
-        </form>`, 'Promotion creates new year-specific enrollment records and leaves prior grades untouched.')}
-      </div>
+    ${schoolYearHead('School Setup', 'Manage the records that define the school year.', selectedYear)}
+    <div class="setup-layout">
+      ${setupNav}
+      ${modules[section]}
     </div>
   </div>`;
 }
@@ -1241,6 +1969,39 @@ function reportsPage(url, selectedYear) {
     GROUP BY st.id, a.subject_id
     ORDER BY sy.grade_level, st.last_name, st.first_name, s.name;`);
   const studentIds = [...new Set(studentRows.map((row) => row.id))];
+  const scoredClassRows = classRows.filter((row) => Number.isFinite(Number(row.avg_score)));
+  const schoolAverage = average(scoredClassRows.map((row) => Number(row.avg_score)));
+  const totalScores = classRows.reduce((sum, row) => sum + Number(row.score_count || 0), 0);
+  const topSubjects = [...scoredClassRows]
+    .sort((a, b) => Number(b.avg_score) - Number(a.avg_score))
+    .slice(0, 8);
+  const bands = ['90-100', '80-89', '70-79', 'Below 70', 'No score'].map((label) => ({
+    label,
+    count: studentRows.filter((row) => scoreBand(row.avg_score) === label).length
+  }));
+  const largestBand = Math.max(1, ...bands.map((band) => band.count));
+  const chartSummary = `<div class="report-summary">
+    <section class="chart-panel">
+      <div class="chart-head"><h2>Subject Averages</h2><span>${formatPercent(schoolAverage)} overall</span></div>
+      <div class="bar-list">
+        ${topSubjects.map((row) => `<div class="bar-row">
+          <b>${esc(row.grade_level)} ${esc(row.subject_name)}</b>
+          <div class="bar-track"><div class="bar-fill ${gradeTone(row.avg_score)}" style="--bar-value:${clampPercent(row.avg_score)}%"></div></div>
+          <span>${formatPercent(row.avg_score)}</span>
+        </div>`).join('') || emptyState('Enter scores to build subject charts.')}
+      </div>
+    </section>
+    <section class="chart-panel">
+      <div class="chart-head"><h2>Student Average Bands</h2><span>${totalScores} scores</span></div>
+      <div class="distribution">
+        ${bands.map((band) => `<div class="distribution-row">
+          <b>${esc(band.label)}</b>
+          <div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((band.count / largestBand) * 100)}%"></div></div>
+          <span>${band.count}</span>
+        </div>`).join('')}
+      </div>
+    </section>
+  </div>`;
 
   return `<div class="workspace">
     ${schoolYearHead('Reports', 'Review averages by subject, student, class, and school year.', selectedYear)}
@@ -1252,6 +2013,7 @@ function reportsPage(url, selectedYear) {
         <button class="secondary-btn" type="button" onclick="window.print()">Print</button>
       </form>
     </section>
+    ${chartSummary}
     <div class="split">
       <section class="ledger">
         <div class="ledger-head"><h2>Class Averages</h2><p>Subject averages across the selected grade scope.</p></div>
@@ -1283,7 +2045,7 @@ function usersPage(csrfToken) {
   const teachers = querySql('SELECT id, name FROM os_teachers ORDER BY name;');
   const teacherOptions = teachers.map((teacher) => `<option value="${teacher.id}">${esc(teacher.name)}</option>`).join('');
   return `<div class="workspace">
-    <header class="page-head"><h1>Users</h1><p>Create administrator and teacher sign-ins.</p></header>
+    <header class="page-head"><div class="page-head-copy"><h1>Users</h1><p>Create administrator and teacher sign-ins.</p></div></header>
     <div class="split">
       ${actionPanel('Create User', `<form method="post" action="/users" class="form-grid two">
         ${csrfInput(csrfToken)}
@@ -1337,9 +2099,21 @@ function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/families') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-    insertReturningId(`INSERT INTO os_families (family_name, father_name, mother_name, phone, email, address)
+    const familyId = asInt(body.familyId);
+    if (familyId) {
+      runSql(`UPDATE os_families
+        SET family_name=${sqlValue(cleanText(body.familyName, 120))},
+            father_name=${sqlValue(cleanText(body.fatherName, 120))},
+            mother_name=${sqlValue(cleanText(body.motherName, 120))},
+            phone=${sqlValue(cleanText(body.phone, 40))},
+            email=${sqlValue(cleanText(body.email, 160))},
+            address=${sqlValue(cleanText(body.address, 220))}
+        WHERE id=${familyId};`);
+      return redirect(res, `/setup?section=families&familyId=${familyId}`, headers);
+    }
+    const newFamilyId = insertReturningId(`INSERT INTO os_families (family_name, father_name, mother_name, phone, email, address)
       VALUES (${sqlValue(cleanText(body.familyName, 120))}, ${sqlValue(cleanText(body.fatherName, 120))}, ${sqlValue(cleanText(body.motherName, 120))}, ${sqlValue(cleanText(body.phone, 40))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.address, 220))})`);
-    return redirect(res, '/families', headers);
+    return redirect(res, `/setup?section=families&familyId=${newFamilyId}`, headers);
   }
 
   if (p === '/students') {
@@ -1349,54 +2123,90 @@ function handlePost(req, res, p, body, user, headers) {
       VALUES (${asInt(body.familyId)}, ${sqlValue(cleanText(body.firstName, 80))}, ${sqlValue(cleanText(body.lastName, 80))}, ${sqlValue(cleanDate(body.birthDate))})`);
     runSql(`INSERT INTO os_student_years (student_id, school_year_id, grade_level, classroom_id)
       VALUES (${studentId}, ${schoolYearId}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'});`);
-    return redirect(res, '/families', headers);
+    return redirect(res, `/setup?section=families&familyId=${asInt(body.familyId)}`, headers);
   }
 
   if (p === '/enrollments') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     runSql(`INSERT OR REPLACE INTO os_student_years (student_id, school_year_id, grade_level, classroom_id, status)
       VALUES (${asInt(body.studentId)}, ${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'}, 'enrolled');`);
-    return redirect(res, '/families', headers);
+    const family = querySql(`SELECT family_id FROM os_students WHERE id=${asInt(body.studentId)} LIMIT 1;`)[0];
+    return redirect(res, `/setup?section=families&familyId=${asInt(family?.family_id)}`, headers);
   }
 
   if (p === '/teachers') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const teacherId = asInt(body.teacherId);
+    if (teacherId) {
+      runSql(`UPDATE os_teachers
+        SET name=${sqlValue(cleanText(body.name, 120))},
+            email=${sqlValue(cleanText(body.email, 160))},
+            phone=${sqlValue(cleanText(body.phone, 40))}
+        WHERE id=${teacherId};`);
+      return redirect(res, '/setup?section=teachers', headers);
+    }
     runSql(`INSERT INTO os_teachers (name, email, phone)
       VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.phone, 40))});`);
-    return redirect(res, '/setup', headers);
+    return redirect(res, '/setup?section=teachers', headers);
   }
 
   if (p === '/classrooms') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-    const classroomId = insertReturningId(`INSERT INTO os_classrooms (school_year_id, name, teacher_id)
+    const classroomId = asInt(body.classroomId) || insertReturningId(`INSERT INTO os_classrooms (school_year_id, name, teacher_id)
       VALUES (${asInt(body.schoolYearId)}, ${sqlValue(cleanText(body.name, 120))}, ${asInt(body.teacherId) || 'NULL'})`);
+    if (asInt(body.classroomId)) {
+      runSql(`UPDATE os_classrooms
+        SET school_year_id=${asInt(body.schoolYearId)},
+            name=${sqlValue(cleanText(body.name, 120))},
+            teacher_id=${asInt(body.teacherId) || 'NULL'}
+        WHERE id=${classroomId};`);
+      runSql(`DELETE FROM os_classroom_grades WHERE classroom_id=${classroomId};`);
+    }
     parseGrades(body.grades).forEach((grade) => {
       runSql(`INSERT OR IGNORE INTO os_classroom_grades (classroom_id, grade_level)
         VALUES (${classroomId}, ${sqlValue(grade)});`);
     });
-    return redirect(res, '/setup', headers);
+    return redirect(res, '/setup?section=classrooms', headers);
   }
 
   if (p === '/subjects') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const subjectId = asInt(body.subjectId);
+    if (subjectId) {
+      runSql(`UPDATE os_subjects SET name=${sqlValue(cleanText(body.name, 120))} WHERE id=${subjectId};`);
+      return redirect(res, '/setup?section=subjects', headers);
+    }
     runSql(`INSERT OR IGNORE INTO os_subjects (name) VALUES (${sqlValue(cleanText(body.name, 120))});`);
-    return redirect(res, '/setup', headers);
+    return redirect(res, '/setup?section=subjects', headers);
   }
 
   if (p === '/grade-subjects') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     runSql(`INSERT OR IGNORE INTO os_grade_subjects (school_year_id, grade_level, subject_id)
       VALUES (${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.subjectId)});`);
-    return redirect(res, '/setup', headers);
+    return redirect(res, '/setup?section=subjects', headers);
   }
 
   if (p === '/school-years') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const existingYearId = asInt(body.yearId);
     if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
+    if (existingYearId) {
+      runSql(`UPDATE os_school_years
+        SET name=${sqlValue(cleanText(body.name, 40))},
+            start_date=${sqlValue(cleanDate(body.startDate))},
+            end_date=${sqlValue(cleanDate(body.endDate))},
+            is_active=${String(body.makeActive) === '1' ? 1 : 0}
+        WHERE id=${existingYearId};`);
+      if (String(body.makeActive) === '1') {
+        appendSetCookie(headers, `selectedYearId=${cookieValue(existingYearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+      }
+      return redirect(res, '/setup?section=years', headers);
+    }
     const yearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
       VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
     appendSetCookie(headers, `selectedYearId=${cookieValue(yearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
-    return redirect(res, '/setup', headers);
+    return redirect(res, '/setup?section=years', headers);
   }
 
   if (p === '/promote-year') {
@@ -1411,16 +2221,40 @@ function handlePost(req, res, p, body, user, headers) {
         VALUES (${asInt(enrollment.student_id)}, ${newYearId}, ${sqlValue(promoteGrade(enrollment.grade_level))}, 'enrolled');`);
     });
     appendSetCookie(headers, `selectedYearId=${cookieValue(newYearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
-    return redirect(res, '/setup', headers);
+    return redirect(res, '/setup?section=years', headers);
   }
 
   if (p === '/users') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     const role = cleanText(body.role, 20).toLowerCase();
     if (!ROLES.includes(role)) return sendText(res, 400, 'Invalid role');
+    const userId = asInt(body.userId);
+    if (userId) {
+      const password = String(body.password || '').slice(0, 120);
+      const passwordSql = password ? `, password_hash=${sqlValue(hashPassword(password))}` : '';
+      runSql(`UPDATE os_users
+        SET name=${sqlValue(cleanText(body.name, 120))},
+            username=${sqlValue(cleanText(body.username, 80).toLowerCase())},
+            role=${sqlValue(role)},
+            teacher_id=${role === ROLE_TEACHER ? (asInt(body.teacherId) || 'NULL') : 'NULL'}
+            ${passwordSql}
+        WHERE id=${userId};`);
+      return redirect(res, '/setup?section=users', headers);
+    }
     runSql(`INSERT INTO os_users (name, username, role, password_hash, teacher_id)
       VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.username, 80).toLowerCase())}, ${sqlValue(role)}, ${sqlValue(hashPassword(String(body.password || '').slice(0, 120)))}, ${role === ROLE_TEACHER ? (asInt(body.teacherId) || 'NULL') : 'NULL'});`);
-    return redirect(res, '/users', headers);
+    return redirect(res, '/setup?section=users', headers);
+  }
+
+  if (p === '/system-settings') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const schoolName = cleanText(body.schoolName, 120) || DEFAULT_SCHOOL_NAME;
+    setSetting('school_name', schoolName);
+    const logoPath = saveUploadedImage(body.logo, 'logo');
+    if (logoPath) setSetting('logo_path', logoPath);
+    const faviconPath = saveUploadedImage(body.favicon, 'favicon');
+    if (faviconPath) setSetting('favicon_path', faviconPath);
+    return redirect(res, '/setup?section=settings', headers);
   }
 
   if (p === '/gradebook') {
@@ -1462,10 +2296,21 @@ const server = http.createServer(async (req, res) => {
       if (!fs.existsSync(logo)) return sendText(res, 404, 'Logo not found');
       res.writeHead(200, {
         ...securityHeaders(),
-        'Content-Type': 'image/svg+xml',
-        'Cache-Control': 'public, max-age=86400'
+        'Content-Type': contentTypeFor(logo),
+        'Cache-Control': 'no-cache'
       });
       return res.end(fs.readFileSync(logo));
+    }
+
+    if (req.method === 'GET' && p === '/assets/favicon') {
+      const favicon = faviconAsset();
+      if (!fs.existsSync(favicon)) return sendText(res, 404, 'Favicon not found');
+      res.writeHead(200, {
+        ...securityHeaders(),
+        'Content-Type': contentTypeFor(favicon),
+        'Cache-Control': 'no-cache'
+      });
+      return res.end(fs.readFileSync(favicon));
     }
 
     if (req.method === 'POST') {
@@ -1489,17 +2334,17 @@ const server = http.createServer(async (req, res) => {
     if (p === '/') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Dashboard', content: dashboardPage(selected) }), headers);
     if (p === '/families') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Families', content: familiesPage(selected, csrfToken) }), headers);
+      return redirect(res, '/setup?section=families', headers);
     }
     if (p === '/setup') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken) }), headers);
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url) }), headers);
     }
     if (p === '/gradebook') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
     if (p === '/reports') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Reports', content: reportsPage(url, selected) }), headers);
     if (p === '/users') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Users', content: usersPage(csrfToken) }), headers);
+      return redirect(res, '/setup?section=users', headers);
     }
 
     return sendText(res, 404, 'Not Found');
