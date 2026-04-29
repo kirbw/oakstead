@@ -60,6 +60,66 @@ function asScore(value) {
   return Math.max(0, Math.min(1000, parsed));
 }
 
+function asPoints(value, fallback = 100) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(1, Math.min(10000, parsed));
+}
+
+function cleanScoreMode(value) {
+  return value === 'wrong' ? 'wrong' : 'percent';
+}
+
+function compactNumber(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  return parsed.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function scoreInputToPoints(value, mode, maxScore) {
+  if (String(value ?? '').trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const points = asPoints(maxScore);
+  if (cleanScoreMode(mode) === 'percent') {
+    const percent = Math.max(0, Math.min(100, parsed));
+    return Number(((percent / 100) * points).toFixed(2));
+  }
+  const wrong = Math.max(0, Math.min(points, parsed));
+  return Number((points - wrong).toFixed(2));
+}
+
+function scoreValueForMode(score, maxScore, mode) {
+  if (score === null || score === undefined || score === '') return '';
+  const earned = Number(score);
+  const points = asPoints(maxScore);
+  if (!Number.isFinite(earned)) return '';
+  if (cleanScoreMode(mode) === 'percent') return compactNumber((earned / points) * 100);
+  return compactNumber(Math.max(0, points - earned));
+}
+
+function scoreInputControl(studentId, value, maxScore, mode) {
+  const points = compactNumber(asPoints(maxScore));
+  const scoreMode = cleanScoreMode(mode);
+  return `<div class="score-entry-cell">
+    <input data-score-input data-score-points="${points}" data-score-mode="${scoreMode}" name="score_${studentId}" type="number" inputmode="decimal" min="0" max="${scoreMode === 'percent' ? '100' : points}" step="0.01" value="${esc(value)}" autocomplete="off" />
+    <small class="score-preview" data-score-preview></small>
+  </div>`;
+}
+
+function scoreModeToggle(percentUrl, wrongUrl, mode) {
+  const scoreMode = cleanScoreMode(mode);
+  return `<div class="score-mode" aria-label="Score entry mode">
+    <span>Percent</span>
+    <label class="score-switch">
+      <input type="checkbox" data-score-mode-toggle data-percent-url="${esc(percentUrl)}" data-wrong-url="${esc(wrongUrl)}" ${scoreMode === 'wrong' ? 'checked' : ''} />
+      <span class="score-switch-track" aria-hidden="true"><span class="score-switch-thumb"></span></span>
+      <span class="sr-only">Use number wrong</span>
+    </label>
+    <span>Number wrong</span>
+  </div>`;
+}
+
 function normalizeCategory(value) {
   const text = cleanText(value, 40).toLowerCase();
   if (text === 'lesson' || text === 'homework' || text === 'lesson / homework' || text === 'lesson/homework') return 'Lesson / Homework';
@@ -659,6 +719,11 @@ function displayCategory(category) {
   return esc(normalizeCategory(category));
 }
 
+function displayCategoryShort(category) {
+  const cat = normalizeCategory(category);
+  return esc(cat);
+}
+
 function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
   if (!user || user.role !== ROLE_TEACHER) return true;
   if (!user.teacher_id) return false;
@@ -674,11 +739,20 @@ function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
   return Boolean(rows.length);
 }
 
+const KPI_ICONS = {
+  families: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3ZM8 11c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 12.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5C23 14.17 18.33 13 16 13Z"/></svg>`,
+  students: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82ZM12 3 1 9l11 6 9-4.91V17h2V9L12 3Z"/></svg>`,
+  teachers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2Zm0 14H5.17L4 17.17V4h16v12ZM7 9h2v2H7V9Zm4 0h2v2h-2V9Zm4 0h2v2h-2V9Z"/></svg>`,
+  classrooms: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2Zm-8-1.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3ZM16 18H8V5h8v13Z"/></svg>`,
+  assignments: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2Zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1Zm2 14H7v-2h7v2Zm3-4H7v-2h10v2Zm0-4H7V7h10v2Z"/></svg>`
+};
+
 const NAV_ICONS = {
   dashboard: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-11h6V4h-6v5Z"></path></svg>',
   families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a5 5 0 0 1 10 0H3Zm8.5 0a6.5 6.5 0 0 0-1.3-3.9A5 5 0 0 1 21 20h-9.5Z"></path></svg>',
   setup: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v3H4V5Zm0 6h10v3H4v-3Zm0 6h16v3H4v-3Zm13.5-6 2.5 1.5-2.5 1.5V11Z"></path></svg>',
   gradebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5V3Zm2 2v14h10V7h-3V5H7Zm2 5h6v2H9v-2Zm0 4h6v2H9v-2Z"></path></svg>',
+  assignments: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>',
   reportcards: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6V3Zm2 2v14h8V5H8Zm1.5 3h5v2h-5V8Zm0 3h5v2h-5v-2Zm0 3h3v2h-3v-2Z"></path></svg>',
   absences: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10Zm-9 3h2v2H9v-2Zm4 0h2v2h-2v-2Z"></path></svg>',
   reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
@@ -982,9 +1056,20 @@ input:focus, select:focus, textarea:focus {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: .85rem;
+  box-shadow: var(--shadow);
 }
-.kpi span { display: block; color: var(--muted); font-size: .82rem; font-weight: 650; }
-.kpi strong { display: block; margin-top: .18rem; font-size: 1.55rem; line-height: 1; }
+.kpi-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .32rem; }
+.kpi-icon svg { width: 20px; height: 20px; fill: var(--muted); display: block; opacity: .55; }
+.kpi span { color: var(--muted); font-size: .82rem; font-weight: 650; }
+.kpi strong { display: block; font-size: 1.55rem; line-height: 1; }
+.week-svg { width: 100%; height: auto; display: block; overflow: visible; margin-top: .4rem; }
+.week-svg .guide { stroke: var(--line); fill: none; }
+.week-svg .y-label { fill: var(--muted); font-size: 9px; font-family: inherit; }
+.week-svg .area { fill: var(--accent); opacity: .1; }
+.week-svg .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.week-svg .dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
+.week-svg .x-label { fill: var(--muted); font-size: 9px; text-anchor: middle; font-family: inherit; }
+.week-svg .empty-msg { fill: var(--muted); font-size: 11px; text-anchor: middle; font-family: inherit; }
 .table-wrap { width: 100%; overflow-x: visible; }
 table { width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed; }
 th, td { padding: .68rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: .9rem; }
@@ -1008,6 +1093,8 @@ tr:last-child td { border-bottom: 0; }
 .badge.good { color: var(--accent-dark); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .badge.watch { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, var(--line)); }
 .badge.low { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+.type-chip { font-size: .78rem; font-weight: 700; color: var(--muted); }
+.selected-row > td { background: var(--accent-soft); color: var(--accent-dark); }
 .split {
   display: grid;
   gap: 1rem;
@@ -1035,6 +1122,79 @@ tr:last-child td { border-bottom: 0; }
 .score-row b { font-size: .92rem; }
 .score-row small { display: block; color: var(--muted); margin-top: .12rem; }
 .score-row input { text-align: center; font-weight: 800; }
+.score-entry-cell { display: grid; gap: .15rem; }
+.score-entry-cell .score-preview {
+  min-height: 1rem;
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: .72rem;
+  font-weight: 700;
+}
+.score-mode {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 32px;
+  color: var(--muted);
+  font-size: .8rem;
+  font-weight: 800;
+}
+.score-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 42px;
+  height: 24px;
+  gap: 0;
+  cursor: pointer;
+}
+.score-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.score-switch-track {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--paper-strong);
+  transition: background .16s ease, border-color .16s ease;
+}
+.score-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition: transform .16s ease, background .16s ease;
+}
+.score-switch input:checked + .score-switch-track {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, var(--paper-strong));
+}
+.score-switch input:checked + .score-switch-track .score-switch-thumb {
+  transform: translateX(18px);
+  background: var(--accent);
+}
+.score-switch input:focus-visible + .score-switch-track {
+  outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.score-help {
+  margin: -.2rem 0 .1rem;
+  color: var(--muted);
+  font-size: .84rem;
+}
 .quick-scores {
   position: sticky;
   bottom: 0;
@@ -1565,6 +1725,7 @@ tr:last-child td { border-bottom: 0; }
   .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
@@ -1634,6 +1795,7 @@ tr:last-child td { border-bottom: 0; }
   ${user ? `<nav class="sidebar" aria-label="Primary">
     ${navLink('/', currentPath, 'Dashboard', 'dashboard')}
     ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
+    ${navLink('/assignments', currentPath, 'Assignments', 'assignments')}
     ${navLink('/report-cards', currentPath, 'Report Cards', 'reportcards')}
     ${navLink('/absences', currentPath, 'Absences', 'absences')}
     ${navLink('/reports', currentPath, 'Reports', 'reports')}
@@ -1674,6 +1836,68 @@ tr:last-child td { border-bottom: 0; }
   document.addEventListener('focusin', function(event) {
     if (event.target.matches('[data-score-input]')) activeScoreInput = event.target;
   });
+  document.querySelectorAll('[data-assignment-select]').forEach(function(select) {
+    select.addEventListener('change', function() {
+      if (this.dataset.baseUrl) {
+        var nextUrl = new URL(this.dataset.baseUrl, window.location.origin);
+        if (this.value) nextUrl.searchParams.set('assignmentId', this.value);
+        window.location.href = nextUrl.toString();
+        return;
+      }
+      if (this.value) {
+        this.form.submit();
+      } else {
+        var url = new URL(window.location.href);
+        url.searchParams.delete('assignmentId');
+        window.location.href = url.toString();
+      }
+    });
+  });
+
+  function formatScorePreviewNumber(value) {
+    if (!Number.isFinite(value)) return '';
+    return value.toFixed(1).replace(/\.0$/, '');
+  }
+
+  function updateScorePreview(input) {
+    const preview = input.closest('.score-entry-cell')?.querySelector('[data-score-preview]');
+    if (!preview) return;
+    const formPoints = Number(input.form?.querySelector('input[name="maxScore"]')?.value);
+    const points = Number.isFinite(formPoints) && formPoints > 0 ? formPoints : Number(input.dataset.scorePoints || 100);
+    const raw = Number(input.value);
+    const mode = input.dataset.scoreMode || input.form?.querySelector('input[name="scoreMode"]')?.value || 'wrong';
+    input.max = mode === 'percent' ? '100' : String(points);
+    if (!Number.isFinite(raw)) {
+      preview.textContent = mode === 'percent' ? formatScorePreviewNumber(points) + ' pts possible' : 'out of ' + formatScorePreviewNumber(points);
+      return;
+    }
+    if (mode === 'percent') {
+      const earned = Math.max(0, Math.min(points, (Math.max(0, Math.min(100, raw)) / 100) * points));
+      preview.textContent = formatScorePreviewNumber(earned) + ' / ' + formatScorePreviewNumber(points) + ' pts';
+      return;
+    }
+    const wrong = Math.max(0, Math.min(points, raw));
+    const percent = points > 0 ? ((points - wrong) / points) * 100 : 0;
+    preview.textContent = formatScorePreviewNumber(percent) + '%';
+  }
+
+  document.querySelectorAll('[data-score-input]').forEach(function(input) {
+    updateScorePreview(input);
+    input.addEventListener('input', function() {
+      updateScorePreview(input);
+    });
+  });
+  document.querySelectorAll('[data-score-mode-toggle]').forEach(function(toggle) {
+    toggle.addEventListener('change', function() {
+      window.location.href = toggle.checked ? toggle.dataset.wrongUrl : toggle.dataset.percentUrl;
+    });
+  });
+  document.querySelectorAll('input[name="maxScore"]').forEach(function(pointsInput) {
+    pointsInput.addEventListener('input', function() {
+      pointsInput.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    });
+  });
+
   document.querySelectorAll('[data-score-chip]').forEach(function(button) {
     button.addEventListener('click', function() {
       const target = activeScoreInput || document.querySelector('[data-score-input]');
@@ -1751,6 +1975,62 @@ function faviconAsset() {
   return logoAsset();
 }
 
+function weeklyAverageChart(weekData) {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const label = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+    const row = weekData.find(r => r.day === key);
+    days.push({ label, avg: row ? Number(row.avg_score) : null });
+  }
+
+  const W = 400, H = 130;
+  const padL = 32, padR = 10, padT = 14, padB = 28;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const toX = (i) => (padL + (i / 6) * chartW).toFixed(1);
+  const toY = (v) => (padT + chartH - (v / 100) * chartH).toFixed(1);
+
+  const guides = [25, 50, 75, 100].map(v => {
+    const y = toY(v);
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="guide" stroke-dasharray="3 3" /><text x="${padL - 4}" y="${(Number(y) + 3.5).toFixed(1)}" text-anchor="end" class="y-label">${v}%</text>`;
+  }).join('');
+
+  const pts = days.map((d, i) => ({ ...d, i })).filter(p => p.avg !== null);
+  let linePath = '', areaPath = '';
+  if (pts.length >= 1) {
+    linePath = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'}${toX(p.i)} ${toY(p.avg)}`).join(' ');
+    const first = pts[0], last = pts[pts.length - 1];
+    const bottom = (padT + chartH).toFixed(1);
+    areaPath = `${linePath} L${toX(last.i)} ${bottom} L${toX(first.i)} ${bottom} Z`;
+  }
+
+  const dots = pts.map(p => `<circle cx="${toX(p.i)}" cy="${toY(p.avg)}" r="3.5" class="dot" />`).join('');
+  const xLabels = days.map((d, i) => `<text x="${toX(i)}" y="${H - 4}" class="x-label">${d.label}</text>`).join('');
+  const emptyMsg = pts.length === 0
+    ? `<text x="${(W / 2).toFixed(0)}" y="${(padT + chartH / 2 + 4).toFixed(0)}" class="empty-msg">No scores recorded this week</text>`
+    : '';
+
+  const scored = days.filter(d => d.avg !== null);
+  const overallAvg = scored.length ? scored.reduce((s, d) => s + d.avg, 0) / scored.length : null;
+
+  return {
+    overallAvg,
+    svg: `<svg class="week-svg" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+      ${guides}
+      ${areaPath ? `<path d="${areaPath}" class="area" />` : ''}
+      ${linePath ? `<path d="${linePath}" class="line" />` : ''}
+      ${dots}
+      ${xLabels}
+      ${emptyMsg}
+    </svg>`
+  };
+}
+
 function dashboardPage(selectedYear) {
   const yearId = asInt(selectedYear.id);
   const kpis = {
@@ -1761,7 +2041,7 @@ function dashboardPage(selectedYear) {
     assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments WHERE school_year_id=${yearId};`)[0]?.c || 0
   };
   const recent = querySql(`SELECT a.title, a.category, a.grade_level, s.name AS subject_name,
-      COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score
+      COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
     JOIN os_subjects s ON s.id = a.subject_id
     LEFT JOIN os_scores sc ON sc.assignment_id = a.id
@@ -1769,32 +2049,42 @@ function dashboardPage(selectedYear) {
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC
     LIMIT 8;`);
-  const roster = querySql(`SELECT sy.grade_level, COUNT(*) AS count
-    FROM os_student_years sy
-    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
-    GROUP BY sy.grade_level;`);
-  const gradeBadges = sortGrades(roster.map((row) => row.grade_level))
-    .map((grade) => {
-      const row = roster.find((entry) => entry.grade_level === grade);
-      return `<span class="badge">Grade ${esc(grade)} &middot; ${row?.count || 0}</span>`;
-    }).join('') || '<span class="badge">No students enrolled</span>';
+  const weekData = querySql(`SELECT DATE(a.assignment_date) AS day,
+      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
+    FROM os_assignments a
+    JOIN os_scores sc ON sc.assignment_id = a.id
+    WHERE a.school_year_id=${yearId}
+      AND DATE(a.assignment_date) >= DATE('now', '-6 days')
+    GROUP BY DATE(a.assignment_date)
+    ORDER BY day ASC;`);
+  const chart = weeklyAverageChart(weekData);
+  const overallLabel = chart.overallAvg !== null ? `${Number(chart.overallAvg).toFixed(1)}% this week` : 'No data this week';
 
   return `<div class="workspace">
     ${schoolYearHead('Dashboard', 'A compact working view for enrollment, classrooms, and grades.', selectedYear)}
     <section class="kpis">
-      <article class="kpi"><span>Families</span><strong>${kpis.families}</strong></article>
-      <article class="kpi"><span>Students</span><strong>${kpis.students}</strong></article>
-      <article class="kpi"><span>Teachers</span><strong>${kpis.teachers}</strong></article>
-      <article class="kpi"><span>Classrooms</span><strong>${kpis.classrooms}</strong></article>
-      <article class="kpi"><span>Assignments</span><strong>${kpis.assignments}</strong></article>
+      <article class="kpi"><div class="kpi-head"><span>Families</span><div class="kpi-icon">${KPI_ICONS.families}</div></div><strong>${kpis.families}</strong></article>
+      <article class="kpi"><div class="kpi-head"><span>Students</span><div class="kpi-icon">${KPI_ICONS.students}</div></div><strong>${kpis.students}</strong></article>
+      <article class="kpi"><div class="kpi-head"><span>Teachers</span><div class="kpi-icon">${KPI_ICONS.teachers}</div></div><strong>${kpis.teachers}</strong></article>
+      <article class="kpi"><div class="kpi-head"><span>Classrooms</span><div class="kpi-icon">${KPI_ICONS.classrooms}</div></div><strong>${kpis.classrooms}</strong></article>
+      <article class="kpi"><div class="kpi-head"><span>Assignments</span><div class="kpi-icon">${KPI_ICONS.assignments}</div></div><strong>${kpis.assignments}</strong></article>
     </section>
     <div class="split">
-      ${actionPanel('Roster by Grade', gradeBadges)}
+      <section class="chart-panel">
+        <div class="chart-head"><h2>School Average &mdash; Past 7 Days</h2><span>${overallLabel}</span></div>
+        ${chart.svg}
+      </section>
       <section class="ledger">
         <div class="ledger-head"><h2>Recent Gradebook Entries</h2><p>Newest lessons, quizzes, and tests in this school year.</p></div>
         <div class="table-wrap compact-table"><table>
-          <tr><th>Assignment</th><th>Type</th><th>Grade</th><th>Subject</th><th>Class Avg</th></tr>
-          ${recent.map((row) => `<tr><td>${esc(row.title)}</td><td>${displayCategory(row.category)}</td><td>${esc(row.grade_level)}</td><td>${esc(row.subject_name)}</td><td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No grades have been entered for this year yet.')}</td></tr>`}
+          <tr><th>Assignment</th><th>Type</th><th>Gr.</th><th>Subject</th><th>Avg</th></tr>
+          ${recent.map((row) => `<tr>
+            <td>${esc(row.title)}</td>
+            <td><span class="type-chip">${displayCategoryShort(row.category)}</span></td>
+            <td>${esc(row.grade_level)}</td>
+            <td>${esc(row.subject_name)}</td>
+            <td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td>
+          </tr>`).join('') || `<tr><td colspan="5">${emptyState('No grades have been entered for this year yet.')}</td></tr>`}
         </table></div>
       </section>
     </div>
@@ -2300,107 +2590,290 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
   const yearId = asInt(selectedYear.id);
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedSubjectId = asInt(url.searchParams.get('subjectId'));
-  const selectedClassroomId = asInt(url.searchParams.get('classroomId'));
-  const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
+  const selectedAssignmentId = asInt(url.searchParams.get('assignmentId'));
+  const scoreMode = cleanScoreMode(url.searchParams.get('mode'));
   const allGrades = sortGrades([
     ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level),
     ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((row) => row.grade_level)
   ]);
-  const teacherRoomFilter = user.role === ROLE_TEACHER ? `AND c.teacher_id=${asInt(user.teacher_id)}` : '';
-  const classrooms = querySql(`SELECT c.id, c.name, GROUP_CONCAT(cg.grade_level, ', ') AS grades
-    FROM os_classrooms c
-    LEFT JOIN os_classroom_grades cg ON cg.classroom_id = c.id
-    WHERE c.school_year_id=${yearId} ${teacherRoomFilter}
-    GROUP BY c.id
-    ORDER BY c.name;`);
   const subjects = selectedGrade
-    ? querySql(`SELECT s.id, s.name
-        FROM os_grade_subjects gs
-        JOIN os_subjects s ON s.id = gs.subject_id
-        WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)}
-        ORDER BY s.name;`)
+    ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)} ORDER BY s.name;`)
     : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
-  const markingPeriods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
   const subject = subjects.find((row) => row.id === selectedSubjectId);
-  const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, selectedClassroomId);
-  const classroomClause = selectedClassroomId ? `AND sy.classroom_id=${selectedClassroomId}` : '';
+  const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, 0);
   const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
-  const students = selectedGrade && allowed ? querySql(`SELECT st.id, st.first_name, st.last_name, st.birth_date, c.name AS classroom_name
+  const students = selectedGrade && allowed ? querySql(`SELECT st.id, st.first_name, st.last_name
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
       WHERE sy.school_year_id=${yearId}
         AND sy.grade_level=${sqlValue(selectedGrade)}
         AND sy.status='enrolled'
-        ${classroomClause}
         ${teacherStudentClause}
       ORDER BY st.last_name, st.first_name;`) : [];
-  const assignments = selectedGrade && selectedSubjectId ? querySql(`SELECT a.*, s.name AS subject_name,
+  const assignments = selectedGrade && selectedSubjectId ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
       COUNT(sc.id) AS score_count,
-      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score
+      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
-    JOIN os_subjects s ON s.id = a.subject_id
     LEFT JOIN os_scores sc ON sc.assignment_id = a.id
     WHERE a.school_year_id=${yearId}
       AND a.grade_level=${sqlValue(selectedGrade)}
       AND a.subject_id=${selectedSubjectId}
-      ${selectedClassroomId ? `AND COALESCE(a.classroom_id, 0)=${selectedClassroomId}` : ''}
-      ${selectedPeriodId ? `AND COALESCE(a.marking_period_id, 0)=${selectedPeriodId}` : ''}
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC
-    LIMIT 18;`) : [];
+    LIMIT 24;`) : [];
+  const selectedAssignment = selectedAssignmentId
+    ? (assignments.find((a) => a.id === selectedAssignmentId) || querySql(`SELECT id, title, category, assignment_date, max_score FROM os_assignments WHERE id=${selectedAssignmentId} AND school_year_id=${yearId} LIMIT 1;`)[0])
+    : null;
+  const existingScores = selectedAssignment ? Object.fromEntries(
+    querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=${selectedAssignment.id};`).map((r) => [r.student_id, r.score])
+  ) : {};
 
-  const gradeSelect = `<select name="grade" required><option value="">Grade</option>${allGrades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
-  const subjectSelect = `<select name="subjectId" required><option value="">Subject</option>${subjects.map((subj) => `<option value="${subj.id}" ${subj.id === selectedSubjectId ? 'selected' : ''}>${esc(subj.name)}</option>`).join('')}</select>`;
-  const classroomSelect = `<select name="classroomId"><option value="">All classrooms</option>${classrooms.map((room) => `<option value="${room.id}" ${room.id === selectedClassroomId ? 'selected' : ''}>${esc(room.name)}${room.grades ? ` - ${esc(room.grades)}` : ''}</option>`).join('')}</select>`;
-  const periodSelect = `<select name="markingPeriodId"><option value="">All periods</option>${markingPeriods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
+  const baseParams = `yearId=${yearId}${selectedGrade ? `&grade=${encodeURIComponent(selectedGrade)}` : ''}${selectedSubjectId ? `&subjectId=${selectedSubjectId}` : ''}&mode=${scoreMode}`;
+  const gradeSelect = `<select name="grade" required data-auto-submit><option value="">Grade</option>${allGrades.map((g) => `<option value="${esc(g)}" ${g === selectedGrade ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>`;
+  const subjectSelect = `<select name="subjectId" required data-auto-submit><option value="">Subject</option>${subjects.map((s) => `<option value="${s.id}" ${s.id === selectedSubjectId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
+  const percentUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=percent')}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}`;
+  const wrongUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=wrong')}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}`;
+  const scoreModeControl = scoreModeToggle(percentUrl, wrongUrl, scoreMode);
+
+  // Score entry panel
+  let scoreContent = '';
+  if (!allowed) {
+    scoreContent = emptyState('This grade is not assigned to your teacher account.');
+  } else if (!selectedGrade || !selectedSubjectId) {
+    scoreContent = emptyState('Select a grade and subject to begin.');
+  } else {
+    const assignmentPicker = `<label>Assignment<select name="assignmentId" data-assignment-select data-base-url="/gradebook?${baseParams}">
+      <option value="">— New assignment —</option>
+      ${assignments.map((a) => `<option value="${a.id}" ${a.id === selectedAssignmentId ? 'selected' : ''}>${esc(a.title)} · ${compactNumber(a.max_score)} pts${a.assignment_date ? ` · ${esc(a.assignment_date)}` : ''}</option>`).join('')}
+    </select></label>`;
+
+    const newFields = !selectedAssignment ? `<div class="form-grid four">
+      <label>Title<input name="title" placeholder="Lesson 24" required maxlength="140" /></label>
+      <label>Type<select name="category">${categoryOptions()}</select></label>
+      <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="100" required /></label>
+      <label>Date<input type="date" name="assignmentDate" value="${new Date().toISOString().slice(0, 10)}" /></label>
+    </div>` : '';
+
+    const maxScore = asPoints(selectedAssignment?.max_score);
+    const scoreRows = students.map((st) => {
+      const existing = existingScores[st.id];
+      const val = scoreValueForMode(existing, maxScore, scoreMode);
+      return `<div class="score-row">
+        <div><b>${esc(`${st.last_name}, ${st.first_name}`)}</b></div>
+        ${scoreInputControl(st.id, val, maxScore, scoreMode)}
+      </div>`;
+    }).join('') || emptyState('No enrolled students found for this grade.');
+
+    scoreContent = `<form method="post" action="/gradebook" class="form-grid">
+      ${csrfInput(csrfToken)}
+      <input type="hidden" name="schoolYearId" value="${yearId}" />
+      <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+      <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+      <input type="hidden" name="scoreMode" value="${scoreMode}" />
+      ${assignmentPicker}
+      ${newFields}
+      ${scoreModeControl}
+      <p class="score-help">${scoreMode === 'percent' ? 'Enter each student score as a percentage.' : `Enter how many points were marked wrong${selectedAssignment ? ` out of ${compactNumber(maxScore)}` : ''}.`}</p>
+      <div class="score-sheet">${scoreRows}</div>
+      <button type="submit">Save Scores</button>
+    </form>`;
+  }
+
+  const panelMeta = subject ? `Grade ${esc(selectedGrade)} &middot; ${esc(subject.name)}` : '';
+
+  const historyRows = assignments.map((a) => {
+    const active = a.id === selectedAssignmentId;
+    return `<tr class="${active ? 'selected-row' : ''}">
+      <td>${esc(a.assignment_date || '') || '&mdash;'}</td>
+      <td>${esc(a.title)}</td>
+      <td><span class="type-chip">${displayCategoryShort(a.category)}</span></td>
+      <td>${compactNumber(a.max_score)}</td>
+      <td>${a.score_count}</td>
+      <td><span class="badge ${gradeTone(a.avg_score)}">${formatPercent(a.avg_score)}</span></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6">${emptyState('No assignment history for this selection yet.')}</td></tr>`;
 
   return `<div class="workspace">
-    ${schoolYearHead('Gradebook', 'Choose a year, grade, subject, and lesson; then enter the whole class at once.', selectedYear)}
+    ${schoolYearHead('Gradebook', 'Choose a grade and subject, pick or create an assignment, then enter scores.', selectedYear)}
     <section class="panel">
       <form method="get" action="/gradebook" class="filters">
         <input type="hidden" name="yearId" value="${yearId}" />
+        <input type="hidden" name="mode" value="${scoreMode}" />
         <label>Grade${gradeSelect}</label>
         <label>Subject${subjectSelect}</label>
-        <label>Classroom${classroomSelect}</label>
-        <label>Marking Period${periodSelect}</label>
-        <button type="submit">Load Class</button>
       </form>
     </section>
     <div class="split">
-      ${actionPanel('Enter Scores', !allowed ? emptyState('This grade is not assigned to your teacher account.')
-        : (!selectedGrade || !selectedSubjectId ? emptyState('Select a grade and subject to begin.')
-          : `<form method="post" action="/gradebook" class="form-grid">
-            ${csrfInput(csrfToken)}
-            <input type="hidden" name="schoolYearId" value="${yearId}" />
-            <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
-            <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
-            <input type="hidden" name="classroomId" value="${selectedClassroomId || ''}" />
-            <input type="hidden" name="markingPeriodId" value="${selectedPeriodId || ''}" />
-            <div class="form-grid three">
-              <label>Lesson / Assignment<input name="title" placeholder="Lesson 24" required maxlength="140" /></label>
-              <label>Type<select name="category">${categoryOptions()}</select></label>
-              <label>Date<input type="date" name="assignmentDate" value="${new Date().toISOString().slice(0, 10)}" /></label>
-              <label>Max Score<input type="number" name="maxScore" value="100" min="1" max="1000" step="0.01" required /></label>
-            </div>
-            <div class="quick-scores" aria-label="Quick scores">
-              ${[100, 95, 90, 85, 80, 75, 70, 65, 60, 0].map((score) => `<button type="button" data-score-chip="${score}">${score}</button>`).join('')}
-            </div>
-            <div class="score-sheet">
-              ${students.map((student) => `<div class="score-row">
-                <div><b>${esc(`${student.last_name}, ${student.first_name}`)}</b><small>${esc(student.classroom_name || 'No classroom')}</small></div>
-                <input data-score-input name="score_${student.id}" type="number" inputmode="decimal" min="0" max="1000" step="0.01" autocomplete="off" />
-              </div>`).join('') || emptyState('No enrolled students match this selection.')}
-            </div>
-            <button type="submit">Save Scores</button>
-          </form>`), subject ? `Grade ${esc(selectedGrade)} &middot; ${esc(subject.name)}` : '')}
+      ${actionPanel('Enter Scores', scoreContent, panelMeta)}
       <section class="ledger">
         <div class="ledger-head"><h2>Assignment History</h2><p>Recent entries for the loaded grade and subject.</p></div>
         <div class="table-wrap compact-table"><table>
-          <tr><th>Date</th><th>Assignment</th><th>Type</th><th>Scores</th><th>Average</th></tr>
-          ${assignments.map((assignment) => `<tr><td>${esc(assignment.assignment_date || '') || '&mdash;'}</td><td>${esc(assignment.title)}</td><td>${displayCategory(assignment.category)}</td><td>${assignment.score_count}</td><td><span class="badge ${gradeTone(assignment.avg_score)}">${formatPercent(assignment.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No assignment history for this selection yet.')}</td></tr>`}
+          <tr><th>Date</th><th>Assignment</th><th>Type</th><th>Points</th><th>Scores</th><th>Avg</th></tr>
+          ${historyRows}
         </table></div>
       </section>
+    </div>
+  </div>`;
+}
+
+function assignmentsPage(req, url, user, selectedYear, csrfToken) {
+  const yearId = asInt(selectedYear.id);
+  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  const selectedSubjectId = asInt(url.searchParams.get('subjectId'));
+  const selectedAssignmentId = asInt(url.searchParams.get('assignmentId'));
+  const scoreMode = cleanScoreMode(url.searchParams.get('mode'));
+  const showAdd = !selectedAssignmentId || url.searchParams.get('action') === 'add';
+
+  const allGrades = sortGrades([
+    ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((r) => r.grade_level),
+    ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((r) => r.grade_level)
+  ]);
+  const subjects = selectedGrade
+    ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)} ORDER BY s.name;`)
+    : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
+  const subject = subjects.find((s) => s.id === selectedSubjectId);
+
+  const assignments = selectedGrade && selectedSubjectId ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
+      COUNT(sc.id) AS score_count,
+      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
+    FROM os_assignments a
+    LEFT JOIN os_scores sc ON sc.assignment_id = a.id
+    WHERE a.school_year_id=${yearId}
+      AND a.grade_level=${sqlValue(selectedGrade)}
+      AND a.subject_id=${selectedSubjectId}
+    GROUP BY a.id
+    ORDER BY a.assignment_date DESC, a.id DESC;`) : [];
+
+  const selectedAssignment = selectedAssignmentId && !showAdd
+    ? (assignments.find((a) => a.id === selectedAssignmentId) || querySql(`SELECT id, title, category, assignment_date, max_score FROM os_assignments WHERE id=${selectedAssignmentId} AND school_year_id=${yearId} LIMIT 1;`)[0])
+    : null;
+
+  const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
+  const students = selectedGrade ? querySql(`SELECT st.id, st.first_name, st.last_name
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId}
+      AND sy.grade_level=${sqlValue(selectedGrade)}
+      AND sy.status='enrolled'
+      ${teacherStudentClause}
+    ORDER BY st.last_name, st.first_name;`) : [];
+
+  const existingScores = selectedAssignment ? Object.fromEntries(
+    querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=${selectedAssignment.id};`).map((r) => [r.student_id, r.score])
+  ) : {};
+
+  const baseParams = `yearId=${yearId}${selectedGrade ? `&grade=${encodeURIComponent(selectedGrade)}` : ''}${selectedSubjectId ? `&subjectId=${selectedSubjectId}` : ''}&mode=${scoreMode}`;
+  const gradeSelect = `<select name="grade" data-auto-submit><option value="">Grade</option>${allGrades.map((g) => `<option value="${esc(g)}" ${g === selectedGrade ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>`;
+  const subjectSelect = `<select name="subjectId" data-auto-submit><option value="">Subject</option>${subjects.map((s) => `<option value="${s.id}" ${s.id === selectedSubjectId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
+  const modeBaseParams = baseParams.replace(`mode=${scoreMode}`, 'mode=');
+
+  const assignmentList = assignments.length > 0
+    ? assignments.map((a) => {
+        const active = !showAdd && a.id === selectedAssignmentId;
+        return `<a class="family-link ${active ? 'active' : ''}" href="/assignments?${baseParams}&assignmentId=${a.id}">
+          <strong>${esc(a.title)}</strong>
+          <span>${displayCategoryShort(a.category)} &middot; ${compactNumber(a.max_score)} pts &middot; ${esc(a.assignment_date || '—')} &middot; <span class="badge ${gradeTone(a.avg_score)}">${formatPercent(a.avg_score)}</span></span>
+        </a>`;
+      }).join('')
+    : `<div style="padding:.9rem">${emptyState(selectedGrade && selectedSubjectId ? 'No assignments yet.' : 'Select a grade and subject.')}</div>`;
+
+  let rightPanel = '';
+  if (selectedAssignment) {
+    const maxScore = asPoints(selectedAssignment.max_score);
+    const scoreModeControl = scoreModeToggle(
+      `/assignments?${modeBaseParams}percent&assignmentId=${selectedAssignment.id}`,
+      `/assignments?${modeBaseParams}wrong&assignmentId=${selectedAssignment.id}`,
+      scoreMode
+    );
+    const scoreRows = students.map((st) => {
+      const existing = existingScores[st.id];
+      const val = scoreValueForMode(existing, maxScore, scoreMode);
+      return `<div class="score-row">
+        <div><b>${esc(`${st.last_name}, ${st.first_name}`)}</b></div>
+        ${scoreInputControl(st.id, val, maxScore, scoreMode)}
+      </div>`;
+    }).join('') || emptyState('No enrolled students in this grade.');
+
+    rightPanel = `<section class="family-detail">
+      <div class="family-detail-head">
+        <h2>${esc(selectedAssignment.title)}</h2>
+        <a class="secondary-btn compact-action" href="/assignments?${baseParams}&action=add">+ New</a>
+      </div>
+      <div class="family-detail-body">
+        <form method="post" action="/assignments" class="form-grid" style="margin-bottom:1.25rem">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="action" value="update" />
+          <input type="hidden" name="assignmentId" value="${selectedAssignment.id}" />
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+          <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+          <div class="form-grid four">
+            <label>Title<input name="title" value="${esc(selectedAssignment.title)}" required maxlength="140" /></label>
+            <label>Type<select name="category">${categoryOptions(selectedAssignment.category)}</select></label>
+            <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="${compactNumber(maxScore)}" required /></label>
+            <label>Date<input type="date" name="assignmentDate" value="${esc(selectedAssignment.assignment_date || '')}" /></label>
+          </div>
+          <button type="submit">Save Details</button>
+        </form>
+        <div style="border-top:1px solid var(--line);padding-top:1.1rem">
+          <p style="margin:0 0 .75rem;font-size:.9rem;font-weight:720">Student Scores</p>
+          <form method="post" action="/assignments" class="form-grid">
+            ${csrfInput(csrfToken)}
+            <input type="hidden" name="action" value="scores" />
+            <input type="hidden" name="assignmentId" value="${selectedAssignment.id}" />
+            <input type="hidden" name="schoolYearId" value="${yearId}" />
+            <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+            <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+            <input type="hidden" name="scoreMode" value="${scoreMode}" />
+            ${scoreModeControl}
+            <p class="score-help">${scoreMode === 'percent' ? 'Enter each student score as a percentage.' : `Enter how many points were marked wrong out of ${compactNumber(maxScore)}.`}</p>
+            <div class="score-sheet">${scoreRows}</div>
+            <button type="submit">Save Scores</button>
+          </form>
+        </div>
+      </div>
+    </section>`;
+  } else {
+    const placeholder = subject ? `e.g. Lesson 24 – ${subject.name}` : 'e.g. Lesson 24';
+    rightPanel = `<section class="family-detail">
+      <div class="family-detail-head"><h2>Add Assignment</h2></div>
+      <div class="family-detail-body">
+        ${selectedGrade && selectedSubjectId ? `<form method="post" action="/assignments" class="form-grid">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="action" value="add" />
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+          <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+          <label>Title<input name="title" placeholder="${esc(placeholder)}" required maxlength="140" /></label>
+          <label>Type<select name="category">${categoryOptions()}</select></label>
+          <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="100" required /></label>
+          <label>Date<input type="date" name="assignmentDate" value="${new Date().toISOString().slice(0, 10)}" /></label>
+          <button type="submit">Add Assignment</button>
+        </form>` : `<p class="empty">Select a grade and subject to add an assignment.</p>`}
+      </div>
+    </section>`;
+  }
+
+  return `<div class="workspace">
+    ${schoolYearHead('Assignments', 'Create and edit assignments for a grade and subject.', selectedYear)}
+    <section class="panel">
+      <form method="get" action="/assignments" class="filters">
+        <input type="hidden" name="yearId" value="${yearId}" />
+        <input type="hidden" name="mode" value="${scoreMode}" />
+        <label>Grade${gradeSelect}</label>
+        <label>Subject${subjectSelect}</label>
+        ${selectedGrade && selectedSubjectId ? `<a class="page-action compact-action" href="/assignments?${baseParams}&action=add">Add Assignment</a>` : ''}
+      </form>
+    </section>
+    <div class="family-layout">
+      <section class="family-list">
+        <div class="family-list-head">
+          <h2>Assignments</h2>
+          <div class="module-actions"><span class="family-count">${assignments.length}</span></div>
+        </div>
+        ${assignmentList}
+      </section>
+      ${rightPanel}
     </div>
   </div>`;
 }
@@ -3069,21 +3542,65 @@ function handlePost(req, res, p, body, user, headers) {
     const schoolYearId = asInt(body.schoolYearId);
     const gradeLevel = cleanGrade(body.gradeLevel);
     const subjectId = asInt(body.subjectId);
-    const classroomId = asInt(body.classroomId);
-    const markingPeriodId = asInt(body.markingPeriodId);
-    if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel, classroomId)) return sendText(res, 403, 'Forbidden');
-    const maxScore = Math.max(1, asScore(body.maxScore) || 100);
+    const existingAssignmentId = asInt(body.assignmentId);
+    const scoreMode = cleanScoreMode(body.scoreMode);
+    if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel)) return sendText(res, 403, 'Forbidden');
     const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
-    const assignmentId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, classroom_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
-      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${classroomId || 'NULL'}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+    const maxScore = existingAssignmentId
+      ? asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${existingAssignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score)
+      : asPoints(body.maxScore);
+    const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, title, category, assignment_date, max_score, teacher_id)
+      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
     Object.keys(body).forEach((key) => {
       if (!key.startsWith('score_')) return;
-      const score = asScore(body[key]);
+      const studentId = asInt(key.replace('score_', ''));
+      const score = scoreInputToPoints(body[key], scoreMode, maxScore);
       if (score === null) return;
-      runSql(`INSERT INTO os_scores (assignment_id, student_id, score)
-        VALUES (${assignmentId}, ${asInt(key.replace('score_', ''))}, ${score});`);
+      runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
+        ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
     });
-    return redirect(res, `/gradebook?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&classroomId=${classroomId || ''}&markingPeriodId=${markingPeriodId || ''}`, headers);
+    return redirect(res, `/gradebook?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&assignmentId=${assignmentId}`, headers);
+  }
+
+  if (p === '/assignments') {
+    const action = body.action;
+    const schoolYearId = asInt(body.schoolYearId);
+    const gradeLevel = cleanGrade(body.gradeLevel);
+    const subjectId = asInt(body.subjectId);
+    if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel)) return sendText(res, 403, 'Forbidden');
+    const baseRedirect = `/assignments?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}`;
+
+    if (action === 'add') {
+      const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
+      const maxScore = asPoints(body.maxScore);
+      const newId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, title, category, assignment_date, max_score, teacher_id)
+        VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+      return redirect(res, `${baseRedirect}&assignmentId=${newId}`, headers);
+    }
+
+    if (action === 'update') {
+      const assignmentId = asInt(body.assignmentId);
+      const maxScore = asPoints(body.maxScore);
+      runSql(`UPDATE os_assignments SET title=${sqlValue(cleanText(body.title, 140))}, category=${sqlValue(normalizeCategory(body.category))}, assignment_date=${sqlValue(cleanDate(body.assignmentDate))}, max_score=${maxScore} WHERE id=${assignmentId} AND school_year_id=${schoolYearId};`);
+      return redirect(res, `${baseRedirect}&assignmentId=${assignmentId}`, headers);
+    }
+
+    if (action === 'scores') {
+      const assignmentId = asInt(body.assignmentId);
+      const scoreMode = cleanScoreMode(body.scoreMode);
+      const maxScore = asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${assignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score);
+      Object.keys(body).forEach((key) => {
+        if (!key.startsWith('score_')) return;
+        const studentId = asInt(key.replace('score_', ''));
+        const score = scoreInputToPoints(body[key], scoreMode, maxScore);
+        if (score === null) return;
+        runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
+          ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
+      });
+      return redirect(res, `${baseRedirect}&mode=${scoreMode}&assignmentId=${assignmentId}`, headers);
+    }
+
+    return sendText(res, 400, 'Bad Request');
   }
 
   return sendText(res, 404, 'Not Found');
@@ -3150,6 +3667,7 @@ const server = http.createServer(async (req, res) => {
       return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url) }), headers);
     }
     if (p === '/gradebook') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
+    if (p === '/assignments') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Assignments', content: assignmentsPage(req, url, user, selected, csrfToken) }), headers);
     if (p === '/report-cards') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Report Cards', content: reportCardsPage(url, selected) }), headers);
     if (p === '/absences') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
