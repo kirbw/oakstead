@@ -2,3 +2,6 @@ school.db
 public/uploads/
 .oakstead-update-status.json
 *:Zone.Identifier
+backups/*.db
+
+

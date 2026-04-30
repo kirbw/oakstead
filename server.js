@@ -10,11 +10,12 @@ const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_DIR = path.join(PUBLIC_DIR, 'uploads');
+const BACKUP_DIR = path.join(__dirname, 'backups');
 const DEFAULT_LOGO_FILE = path.join(__dirname, 'assets', 'oakleaf.png');
 const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
 const UPDATE_STATUS_FILE = path.join(__dirname, '.oakstead-update-status.json');
 const DEFAULT_SCHOOL_NAME = 'Oakstead';
-const MAX_BODY_SIZE = 4_000_000;
+const MAX_BODY_SIZE = 50_000_000;
 const SESSION_HOURS = 12;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
@@ -84,6 +85,13 @@ function compactNumber(value) {
   return parsed.toFixed(2).replace(/\.?0+$/, '');
 }
 
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+  return `${size} B`;
+}
+
 function scoreInputToPoints(value, mode, maxScore) {
   if (String(value ?? '').trim() === '') return null;
   const parsed = Number(value);
@@ -148,6 +156,46 @@ function querySql(sql) {
 function insertReturningId(sql) {
   const row = querySql(`${sql} RETURNING id;`)[0];
   return asInt(row?.id);
+}
+
+function timestampForFile(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+function backupPath(fileName) {
+  const base = path.basename(String(fileName || ''));
+  if (!/^oakstead-backup-[0-9T-]+Z(?:-[a-z0-9-]+)?\.db$/i.test(base)) return '';
+  const target = path.join(BACKUP_DIR, base);
+  return target.startsWith(BACKUP_DIR) ? target : '';
+}
+
+function createDatabaseBackup(reason = 'manual') {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const safeReason = cleanText(reason, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'manual';
+  const fileName = `oakstead-backup-${timestampForFile()}-${safeReason}.db`;
+  const target = path.join(BACKUP_DIR, fileName);
+  fs.copyFileSync(DB_FILE, target);
+  setSetting('backup_last_at', new Date().toISOString());
+  setSetting('backup_last_file', fileName);
+  return { fileName, path: target, size: fs.statSync(target).size };
+}
+
+function listDatabaseBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs.readdirSync(BACKUP_DIR)
+    .map((fileName) => {
+      const target = backupPath(fileName);
+      if (!target || !fs.existsSync(target)) return null;
+      const stat = fs.statSync(target);
+      return { fileName, size: stat.size, createdAt: stat.mtime };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function validateBackupDatabase(filePath) {
+  const output = execFileSync('sqlite3', [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
+  if (output !== 'ok') throw new Error('Backup database did not pass integrity check.');
 }
 
 function ensureColumn(table, column, definition) {
@@ -746,6 +794,37 @@ function appSettings() {
   };
 }
 
+function backupFrequency(value) {
+  const clean = cleanText(value, 20).toLowerCase();
+  return ['manual', 'daily', 'weekly', 'monthly'].includes(clean) ? clean : 'manual';
+}
+
+function backupFrequencyLabel(value) {
+  return { manual: 'Manual only', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[backupFrequency(value)];
+}
+
+function scheduledBackupDue(now = new Date()) {
+  const frequency = backupFrequency(getSetting('backup_frequency', 'manual'));
+  if (frequency === 'manual') return false;
+  const lastAt = getSetting('backup_last_at', '');
+  if (!lastAt) return true;
+  const last = new Date(lastAt);
+  if (Number.isNaN(last.getTime())) return true;
+  const ageMs = now - last;
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (frequency === 'daily') return ageMs >= dayMs;
+  if (frequency === 'weekly') return ageMs >= dayMs * 7;
+  return ageMs >= dayMs * 30;
+}
+
+function runScheduledBackupIfDue() {
+  try {
+    if (fs.existsSync(DB_FILE) && scheduledBackupDue()) createDatabaseBackup('scheduled');
+  } catch (error) {
+    console.error('Scheduled backup failed:', error.message || error);
+  }
+}
+
 function defaultUpdateStatus() {
   return {
     running: false,
@@ -755,6 +834,9 @@ function defaultUpdateStatus() {
     channel: 'stable',
     version: APP_VERSION,
     targetVersion: '',
+    latestVersion: '',
+    latestTag: '',
+    updateAvailable: false,
     updatedAt: new Date().toISOString(),
     log: []
   };
@@ -807,6 +889,27 @@ function latestReleaseTag(channel) {
   return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
 }
 
+function checkLatestRelease(channel) {
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({ phase: 'checking', percent: 4, channel: updateChannel, message: 'Checking GitHub for available releases.', log: [updateLog(`Checking ${updateChannel} releases`)] });
+  runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
+  const tag = latestReleaseTag(updateChannel);
+  const latestVersion = tag ? tag.replace(/^v/, '') : '';
+  const updateAvailable = Boolean(latestVersion && latestVersion !== APP_VERSION);
+  return writeUpdateStatus({
+    running: false,
+    phase: 'checked',
+    percent: 0,
+    channel: updateChannel,
+    targetVersion: latestVersion,
+    latestVersion,
+    latestTag: tag,
+    updateAvailable,
+    message: tag ? `${updateAvailable ? 'Update available' : 'Already current'}: ${tag}` : 'No release tag was found.',
+    log: [updateLog(tag ? `Latest ${updateChannel} release is ${tag}` : 'No release tag found')]
+  });
+}
+
 function restartApplication() {
   writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
   const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
@@ -847,6 +950,9 @@ function startSystemUpdate(channel) {
 
 function runSystemUpdateWorker(channel) {
   try {
+    writeUpdateStatus({ phase: 'backup', percent: 5, message: 'Creating a database backup before updating.' });
+    const backup = createDatabaseBackup('pre-update');
+    writeUpdateStatus({ log: [updateLog(`Created pre-update backup ${backup.fileName}`)] });
     writeUpdateStatus({ phase: 'checking', percent: 8, message: 'Checking local repository state.' });
     runUpdateCommand('Checking for tracked local changes', 'git', ['diff', '--quiet']);
     runUpdateCommand('Checking staged changes', 'git', ['diff', '--cached', '--quiet']);
@@ -1883,6 +1989,33 @@ tr:last-child td { border-bottom: 0; }
   font-size: .78rem;
   white-space: pre-wrap;
 }
+.update-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: .65rem;
+}
+.update-actions label {
+  min-width: min(260px, 100%);
+}
+.update-actions button {
+  min-height: 38px;
+}
+.backup-list {
+  display: grid;
+  gap: .55rem;
+}
+.backup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .75rem;
+  align-items: center;
+  padding: .65rem;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+.backup-row strong { display: block; font-size: .88rem; overflow-wrap: anywhere; }
+.backup-row span { display: block; color: var(--muted); font-size: .78rem; }
 .report-summary {
   display: grid;
   grid-template-columns: 1fr;
@@ -1922,6 +2055,7 @@ tr:last-child td { border-bottom: 0; }
   height: 100%;
   width: var(--bar-value);
   background: var(--accent);
+  transition: width .35s ease;
 }
 .bar-fill.good { background: var(--accent); }
 .bar-fill.watch { background: var(--gold); }
@@ -1939,6 +2073,198 @@ tr:last-child td { border-bottom: 0; }
 }
 .distribution-row b { font-size: .84rem; }
 .distribution-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
+.report-nav-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .65rem;
+}
+.report-tile {
+  display: grid;
+  gap: .35rem;
+  min-height: 104px;
+  padding: .85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--paper-strong);
+  text-decoration: none;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease;
+}
+.report-tile:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 46%, var(--paper));
+}
+.report-tile.active {
+  border-color: color-mix(in srgb, var(--accent) 56%, var(--line));
+  background: var(--accent-soft);
+}
+.report-tile strong { font-size: .95rem; }
+.report-tile span { color: var(--muted); font-size: .82rem; line-height: 1.4; }
+.report-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem;
+}
+.report-kpi {
+  display: grid;
+  gap: .28rem;
+  padding: .85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.report-kpi span { color: var(--muted); font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .025em; }
+.report-kpi strong { font-size: 1.45rem; line-height: 1; }
+.print-report-head {
+  display: none;
+}
+.report-section-list {
+  display: grid;
+  gap: 1rem;
+}
+.report-grade-section {
+  display: grid;
+  gap: .65rem;
+}
+.report-grade-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .8rem;
+  padding: .35rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.report-grade-head h3 { margin: 0; font-size: 1rem; }
+.report-grade-head span { color: var(--muted); font-size: .84rem; font-weight: 750; }
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: .75rem;
+}
+.month-block {
+  display: grid;
+  align-content: start;
+  gap: .55rem;
+  min-height: 128px;
+  padding: .85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.month-block h3 {
+  margin: 0;
+  font-size: .9rem;
+}
+.birthday-list {
+  display: grid;
+  gap: .4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.birthday-list li {
+  display: grid;
+  gap: .12rem;
+  padding-top: .4rem;
+  border-top: 1px solid var(--line);
+  font-size: .86rem;
+}
+.birthday-list li:first-child { border-top: 0; padding-top: 0; }
+.birthday-list span { color: var(--muted); font-size: .78rem; }
+.birthday-date { font-variant-numeric: tabular-nums; }
+.board-report-list {
+  display: grid;
+  gap: .95rem;
+  padding: .95rem;
+}
+.board-report-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, .7fr) minmax(160px, .8fr);
+  gap: 1rem;
+  align-items: start;
+}
+.board-report-row strong { display: block; font-size: .92rem; }
+.board-report-row span {
+  display: block;
+  color: var(--muted);
+  font-size: .84rem;
+  line-height: 1.38;
+}
+.grade-graph {
+  display: grid;
+  gap: .8rem;
+}
+.grade-graph-screen {
+  display: grid;
+  gap: .8rem;
+}
+.grade-graph-svg {
+  width: 100%;
+  min-height: 260px;
+  display: block;
+  overflow: visible;
+}
+.grade-graph-svg .guide { stroke: var(--line); stroke-dasharray: 4 4; }
+.grade-graph-svg .axis { stroke: var(--line-strong); }
+.grade-graph-svg .label { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.grade-graph-svg .line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.grade-graph-svg .dot { stroke: var(--paper); stroke-width: 2; }
+.grade-graph-svg .empty-msg { fill: var(--muted); font-size: 13px; text-anchor: middle; font-family: inherit; }
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem .75rem;
+}
+.graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 750;
+}
+.graph-legend i {
+  width: 22px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--legend-color);
+}
+.grade-graph-print-grid {
+  display: none;
+}
+.grade-graph-print-grid.single {
+  grid-template-columns: 1fr;
+}
+.mini-subject-chart {
+  display: grid;
+  gap: .25rem;
+}
+.mini-subject-chart header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .5rem;
+  border-bottom: 1px solid var(--line-strong);
+}
+.mini-subject-chart h3 {
+  margin: 0;
+  font-size: .9rem;
+}
+.mini-subject-chart span {
+  color: var(--muted);
+  font-size: .76rem;
+}
+.mini-subject-chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
 .report-card-actions { display: flex; justify-content: flex-end; gap: .55rem; }
 .report-card-document {
   display: grid;
@@ -2259,6 +2585,8 @@ tr:last-child td { border-bottom: 0; }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
   .asset-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-nav-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .report-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (min-width: 1040px) {
   .app { grid-template-columns: 168px 1fr; max-width: none; }
@@ -2296,12 +2624,150 @@ tr:last-child td { border-bottom: 0; }
   .detail-grid { grid-template-columns: 1fr; }
 }
 @media print {
-  @page { size: letter landscape; margin: 0; }
-  html, body { width: 11in; margin: 0; background: #fff; color: #111; }
-  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head { display: none !important; }
+  @page { size: letter portrait; margin: .48in .55in; }
+  @page report-card-page { size: letter landscape; margin: 0; }
+  html, body { width: auto; margin: 0; background: #fff; color: #000; }
+  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
-  .panel, .ledger, .kpi { box-shadow: none; break-inside: avoid; }
+  .workspace { gap: .22in; }
+  .print-report-head {
+    display: block;
+    margin: 0 0 .22in;
+    text-align: center;
+    color: #000;
+  }
+  .print-report-head h1 {
+    margin: 0;
+    font-size: 18pt;
+    line-height: 1.15;
+  }
+  .print-report-head p {
+    margin: .03in 0 0;
+    font-size: 10pt;
+    color: #222;
+  }
+  .panel, .ledger, .kpi, .chart-panel, .month-block, .report-kpi {
+    box-shadow: none;
+    break-inside: avoid;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .ledger-head, .chart-head { display: none; }
+  th, td {
+    border-bottom-color: #cfcfcf;
+    padding: .05in .06in;
+    color: #000;
+    font-size: 9.5pt;
+  }
+  th {
+    background: transparent;
+    color: #000;
+    font-size: 8.5pt;
+  }
+  .student-report .family-detail-body,
+  .birthday-report .family-detail-body { padding: 0; }
+  .student-report .report-section-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .08in .42in;
+    align-items: start;
+  }
+  .student-report .report-grade-section {
+    gap: 0;
+    break-inside: avoid;
+  }
+  .student-report .report-grade-head {
+    padding: .02in 0;
+    border-bottom: 1px solid #c8c8c8;
+  }
+  .student-report .report-grade-head h3,
+  .month-block h3 {
+    font-size: 10pt;
+    font-weight: 800;
+  }
+  .student-report .report-grade-head span,
+  .month-block h3 span {
+    color: #000;
+    font-size: 9pt;
+    font-weight: 400;
+  }
+  .student-report th,
+  .student-report td:nth-child(3),
+  .student-report td:nth-child(4) { display: none; }
+  .student-report td {
+    border: 0;
+    padding: .01in 0;
+    font-size: 9.2pt;
+  }
+  .student-report td:nth-child(2) {
+    display: table-cell;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .month-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .16in .52in;
+  }
+  .month-block {
+    min-height: 0;
+    padding: 0;
+  }
+  .month-block h3 {
+    display: flex;
+    justify-content: space-between;
+    margin: 0 0 .04in;
+    padding: 0 0 .02in;
+    border-bottom: 1px solid #c8c8c8;
+  }
+  .birthday-list {
+    gap: 0;
+  }
+  .birthday-list li {
+    grid-template-columns: minmax(0, 1fr) .95in;
+    gap: .12in;
+    border: 0;
+    padding: .01in 0;
+    font-size: 9.2pt;
+  }
+  .birthday-list span {
+    color: #000;
+    font-size: 9.2pt;
+    text-align: right;
+  }
+  .birthday-meta { display: none !important; }
+  .board-report-list {
+    gap: .18in;
+    padding: 0;
+  }
+  .board-report-row {
+    grid-template-columns: minmax(2.4in, 1fr) 1.55in minmax(1.8in, 1fr);
+    gap: .32in;
+    break-inside: avoid;
+  }
+  .board-report-row strong,
+  .board-report-row span {
+    color: #000;
+    font-size: 10pt;
+  }
+  .board-report-row strong { font-weight: 800; }
+  .grade-graph-screen { display: none; }
+  .grade-graph-print-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .26in .42in;
+  }
+  .grade-graph-print-grid.single {
+    grid-template-columns: 1fr;
+  }
+  .mini-subject-chart {
+    break-inside: avoid;
+  }
+  .mini-subject-chart h3 { font-size: 10pt; }
+  .mini-subject-chart span { color: #333; font-size: 8.2pt; }
+  .mini-subject-chart svg text { font-family: Arial, sans-serif; }
+  body.report-card-printing { page: report-card-page; width: 11in; }
   body.report-card-printing .workspace > :not(.report-card-document) { display: none !important; }
   body.report-card-printing .report-card-document { display: block; gap: 0; width: 11in; }
   body.report-card-printing .report-card-spread {
@@ -2398,6 +2864,7 @@ function generateReportCardPdf(btn) {
   });
   const updateStatusPanel = document.querySelector('[data-update-status]');
   const updateForm = document.querySelector('[data-update-form]');
+  const updateCheckForm = document.querySelector('[data-update-check-form]');
   function renderUpdateStatus(status) {
     if (!updateStatusPanel || !status) return;
     const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
@@ -2413,6 +2880,12 @@ function generateReportCardPdf(btn) {
     if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
     if (updateForm) {
       const button = updateForm.querySelector('button[type="submit"]');
+      if (button) button.disabled = Boolean(status.running);
+      const channelInput = updateForm.querySelector('input[name="channel"]');
+      if (channelInput && status.channel) channelInput.value = status.channel;
+    }
+    if (updateCheckForm) {
+      const button = updateCheckForm.querySelector('button[type="submit"]');
       if (button) button.disabled = Boolean(status.running);
     }
   }
@@ -2437,6 +2910,18 @@ function generateReportCardPdf(btn) {
         .catch(function() { if (button) button.disabled = false; });
     });
     pollUpdateStatus();
+  }
+  if (updateCheckForm) {
+    updateCheckForm.addEventListener('submit', function(event) {
+      event.preventDefault();
+      const button = updateCheckForm.querySelector('button[type="submit"]');
+      if (button) button.disabled = true;
+      fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
+        .then(function(response) { return response.json(); })
+        .then(function(status) { renderUpdateStatus(status); })
+        .catch(function() {})
+        .finally(function() { if (button) button.disabled = false; });
+    });
   }
 
   let activeScoreInput = null;
@@ -2852,7 +3337,7 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings', 'updates'];
+  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings', 'backups', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
@@ -2911,6 +3396,8 @@ function setupPage(selectedYear, csrfToken, url) {
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
   const districtOptions = (selected = '') => districts.map((district) => `<option value="${district.id}" ${selectedAttr(district.id, selected)}>${esc(district.name)}</option>`).join('');
   const updateStatus = readUpdateStatus();
+  const backups = listDatabaseBackups();
+  const backupFreq = backupFrequency(getSetting('backup_frequency', 'manual'));
   const setupLinks = [
     ['families', 'Families', `${families.length} households`],
     ['districts', 'School Districts', `${districts.length} districts`],
@@ -2921,6 +3408,7 @@ function setupPage(selectedYear, csrfToken, url) {
     ['weights', 'Grade Weights', `${weightGroups.length} groups`],
     ['users', 'Users', `${users.length} sign-ins`],
     ['settings', 'System Settings', settings.schoolName],
+    ['backups', 'Backups', `${backupFrequencyLabel(backupFreq)}`],
     ['updates', 'System Updates', `v${APP_VERSION}`]
   ];
   const setupNav = `<aside class="setup-nav" aria-label="School setup modules">
@@ -3352,6 +3840,47 @@ function setupPage(selectedYear, csrfToken, url) {
   </section>`;
 
   const updateLogText = (updateStatus.log || []).slice(-20).join('\n');
+  const latestBackup = backups[0] || null;
+  const backupsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Backups</h2>
+      <span class="family-count">${backups.length} saved</span>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Schedule</span><strong>${backupFrequencyLabel(backupFreq)}</strong></div>
+        <div class="detail-item"><span>Latest Backup</span><strong>${latestBackup ? esc(latestBackup.fileName) : 'None yet'}</strong></div>
+      </div>
+      <form method="post" action="/backup-settings" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>Automatic Backup Schedule<select name="frequency">
+          <option value="manual" ${selectedAttr(backupFreq, 'manual')}>Manual only</option>
+          <option value="daily" ${selectedAttr(backupFreq, 'daily')}>Daily</option>
+          <option value="weekly" ${selectedAttr(backupFreq, 'weekly')}>Weekly</option>
+          <option value="monthly" ${selectedAttr(backupFreq, 'monthly')}>Monthly</option>
+        </select></label>
+        <button class="secondary-btn compact-action" type="submit">Save Schedule</button>
+      </form>
+      <div class="inline-actions">
+        <form method="post" action="/backup/create" style="margin:0">${csrfInput(csrfToken)}<button class="page-action compact-action" type="submit">Create Backup</button></form>
+        ${latestBackup ? `<a class="secondary-btn compact-action" href="/backup/download?file=${encodeURIComponent(latestBackup.fileName)}">Download Latest</a>` : ''}
+      </div>
+      <div class="subhead"><h3>Restore Backup</h3></div>
+      <form method="post" action="/backup/restore" enctype="multipart/form-data" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>Saved Backup<select name="backupFileName"><option value="">Choose saved backup</option>${backups.map((backup) => `<option value="${esc(backup.fileName)}">${esc(backup.fileName)}</option>`).join('')}</select></label>
+        <label>Upload Backup<input type="file" name="backupFile" accept=".db,application/octet-stream" /></label>
+        <button class="secondary-btn compact-action" type="submit">Restore Backup</button>
+      </form>
+      <p class="notice">Restoring replaces the current database. Oakstead creates a pre-restore backup first.</p>
+      <div class="backup-list">
+        ${backups.map((backup) => `<div class="backup-row">
+          <div><strong>${esc(backup.fileName)}</strong><span>${esc(formatFileSize(backup.size))} / ${esc(backup.createdAt.toLocaleString())}</span></div>
+          <a class="secondary-btn compact-action" href="/backup/download?file=${encodeURIComponent(backup.fileName)}">Download</a>
+        </div>`).join('') || emptyState('No backups have been created yet.')}
+      </div>
+    </div>
+  </section>`;
   const updatesModule = `<section class="family-detail">
     <div class="family-detail-head">
       <h2>System Updates</h2>
@@ -3360,16 +3889,23 @@ function setupPage(selectedYear, csrfToken, url) {
     <div class="family-detail-body">
       <div class="detail-grid">
         <div class="detail-item"><span>Installed Version</span><strong>v${esc(APP_VERSION)}</strong></div>
-        <div class="detail-item"><span>Update Channel</span><strong>${updateStatus.channel === 'prerelease' ? 'Pre-release' : 'Current release'}</strong></div>
+        <div class="detail-item"><span>Latest Checked</span><strong>${updateStatus.latestVersion ? `v${esc(updateStatus.latestVersion)}` : 'Not checked yet'}</strong></div>
       </div>
-      <form method="post" action="/system-update" class="form-grid two" data-update-form>
+      <div class="update-actions">
+      <form method="post" action="/system-update/check" class="update-actions" data-update-check-form>
         ${csrfInput(csrfToken)}
         <label>Release Type<select name="channel">
           <option value="stable" ${selectedAttr(updateStatus.channel, 'stable')}>Current release</option>
           <option value="prerelease" ${selectedAttr(updateStatus.channel, 'prerelease')}>Pre-release</option>
         </select></label>
-        <button type="submit" ${updateStatus.running ? 'disabled' : ''}>Download and Install</button>
+        <button class="secondary-btn compact-action" type="submit" ${updateStatus.running ? 'disabled' : ''}>Check for Updates</button>
       </form>
+      <form method="post" action="/system-update" class="update-actions" data-update-form>
+        ${csrfInput(csrfToken)}
+        <input type="hidden" name="channel" value="${esc(updateStatus.channel)}" />
+        <button class="page-action compact-action" type="submit" ${updateStatus.running ? 'disabled' : ''}>Download and Install</button>
+      </form>
+      </div>
       <div class="update-status" data-update-status>
         <div class="update-status-head">
           <strong data-update-message>${esc(updateStatus.message)}</strong>
@@ -3379,7 +3915,7 @@ function setupPage(selectedYear, csrfToken, url) {
         <p class="notice" data-update-phase>${esc(updateStatus.phase)}${updateStatus.targetVersion ? ` / target v${esc(updateStatus.targetVersion)}` : ''}</p>
         <pre class="update-log" data-update-log>${esc(updateLogText || 'No update activity yet.')}</pre>
       </div>
-      <p class="notice">Updates are fetched from the configured GitHub remote. Oakstead installs npm dependencies, validates the server, and restarts after a successful update.</p>
+      <p class="notice">Updates are fetched from the configured GitHub remote. Oakstead creates a database backup before updating, installs npm dependencies, validates the server, and restarts after success.</p>
     </div>
   </section>`;
 
@@ -3393,6 +3929,7 @@ function setupPage(selectedYear, csrfToken, url) {
     weights: weightsModule,
     users: usersModule,
     settings: settingsModule,
+    backups: backupsModule,
     updates: updatesModule
   };
 
@@ -3718,96 +4255,424 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
   </div>`;
 }
 
-function reportsPage(url, selectedYear) {
-  const yearId = asInt(selectedYear.id);
-  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
-  const gradeClause = selectedGrade ? `AND a.grade_level=${sqlValue(selectedGrade)}` : '';
-  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level));
-  const classRows = querySql(`SELECT a.grade_level, s.name AS subject_name,
-      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score,
-      COUNT(sc.id) AS score_count
-    FROM os_assignments a
-    JOIN os_subjects s ON s.id = a.subject_id
-    LEFT JOIN os_scores sc ON sc.assignment_id = a.id
-    WHERE a.school_year_id=${yearId} ${gradeClause}
-    GROUP BY a.grade_level, a.subject_id
-    ORDER BY a.grade_level, s.name;`);
-  const studentRows = querySql(`SELECT st.id, st.last_name, st.first_name, sy.grade_level, s.name AS subject_name,
-      ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / a.max_score) * 100 END), 1) AS avg_score
-    FROM os_scores sc
-    JOIN os_assignments a ON a.id = sc.assignment_id
-    JOIN os_subjects s ON s.id = a.subject_id
-    JOIN os_students st ON st.id = sc.student_id
-    JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id
-    WHERE a.school_year_id=${yearId} ${gradeClause}
-    GROUP BY st.id, a.subject_id
-    ORDER BY sy.grade_level, st.last_name, st.first_name, s.name;`);
-  const studentIds = [...new Set(studentRows.map((row) => row.id))];
-  const scoredClassRows = classRows.filter((row) => Number.isFinite(Number(row.avg_score)));
-  const schoolAverage = average(scoredClassRows.map((row) => Number(row.avg_score)));
-  const totalScores = classRows.reduce((sum, row) => sum + Number(row.score_count || 0), 0);
-  const topSubjects = [...scoredClassRows]
-    .sort((a, b) => Number(b.avg_score) - Number(a.avg_score))
-    .slice(0, 8);
-  const bands = ['90-100', '80-89', '70-79', 'Below 70', 'No score'].map((label) => ({
-    label,
-    count: studentRows.filter((row) => scoreBand(row.avg_score) === label).length
-  }));
-  const largestBand = Math.max(1, ...bands.map((band) => band.count));
-  const chartSummary = `<div class="report-summary">
-    <section class="chart-panel">
-      <div class="chart-head"><h2>Subject Averages</h2><span>${formatPercent(schoolAverage)} overall</span></div>
-      <div class="bar-list">
-        ${topSubjects.map((row) => `<div class="bar-row">
-          <b>${esc(row.grade_level)} ${esc(row.subject_name)}</b>
-          <div class="bar-track"><div class="bar-fill ${gradeTone(row.avg_score)}" style="--bar-value:${clampPercent(row.avg_score)}%"></div></div>
-          <span>${formatPercent(row.avg_score)}</span>
-        </div>`).join('') || emptyState('Enter scores to build subject charts.')}
-      </div>
-    </section>
-    <section class="chart-panel">
-      <div class="chart-head"><h2>Student Average Bands</h2><span>${totalScores} scores</span></div>
-      <div class="distribution">
-        ${bands.map((band) => `<div class="distribution-row">
-          <b>${esc(band.label)}</b>
-          <div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((band.count / largestBand) * 100)}%"></div></div>
-          <span>${band.count}</span>
-        </div>`).join('')}
-      </div>
-    </section>
-  </div>`;
+function reportDefinitions() {
+  return [
+    { key: 'families', title: 'Families', description: 'Household contact list with enrolled student counts.' },
+    { key: 'students', title: 'Students', description: 'Students grouped by grade, room, and teacher.' },
+    { key: 'school-board', title: 'School Board', description: 'Board member roles, contact details, and terms.' },
+    { key: 'birthdays', title: 'Birthdays', description: 'Student birthdays grouped by month.' },
+    { key: 'grade-graph', title: 'Grade Graph', description: 'Subject averages across marking periods.' }
+  ];
+}
+
+function reportPath(key, yearId, extra = '') {
+  return `/reports?yearId=${asInt(yearId)}${key ? `&report=${encodeURIComponent(key)}` : ''}${extra}`;
+}
+
+function reportsNav(activeReport, yearId) {
+  return `<section class="report-nav-grid">
+    ${reportDefinitions().map((report) => `<a class="report-tile ${activeReport === report.key ? 'active' : ''}" href="${reportPath(report.key, yearId)}">
+      <strong>${esc(report.title)}</strong>
+      <span>${esc(report.description)}</span>
+    </a>`).join('')}
+  </section>`;
+}
+
+function firstNameOnly(value) {
+  return cleanText(value, 120).split(/\s+/).filter(Boolean)[0] || '';
+}
+
+function familyReportName(row) {
+  const parents = [firstNameOnly(row.father_name), firstNameOnly(row.mother_name)].filter(Boolean).join(' & ');
+  return parents ? `${row.family_name}, ${parents}` : row.family_name;
+}
+
+function studentLastFirst(student) {
+  const first = [student.first_name, student.middle_name].filter(Boolean).join(' ');
+  return `${student.last_name}${first ? `, ${first}` : ''}`;
+}
+
+function monthName(index) {
+  return ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][index - 1] || '';
+}
+
+function formatDateShort(value) {
+  const text = cleanDate(value);
+  if (!text) return '';
+  const [year, month, day] = text.split('-').map(Number);
+  if (!month || !day) return text;
+  return `${monthName(month)} ${day}${year ? `, ${year}` : ''}`;
+}
+
+function formatDateNumeric(value) {
+  const text = cleanDate(value);
+  if (!text) return '';
+  const [year, month, day] = text.split('-').map(Number);
+  if (!month || !day || !year) return text;
+  return `${month}-${String(day).padStart(2, '0')}-${year}`;
+}
+
+function boardTermLabel(row) {
+  const start = cleanDate(row.term_start);
+  const end = cleanDate(row.term_end);
+  if (start && end) return `${formatDateShort(start)} to ${formatDateShort(end)}`;
+  if (start) return `Started ${formatDateShort(start)}`;
+  if (end) return `Through ${formatDateShort(end)}`;
+  return 'Not set';
+}
+
+function gradeOptionsFromRows(grades, selectedGrade, allLabel = 'All grades') {
+  return `<option value="">${esc(allLabel)}</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}`;
+}
+
+function printReportHead(title, selectedYear, detail = '') {
+  const settings = appSettings();
+  const parts = [settings.schoolName, selectedYear?.name, detail].filter(Boolean);
+  return `<header class="print-report-head">
+    <h1>${esc(title)}</h1>
+    <p>${parts.map(esc).join(' &middot; ')}</p>
+  </header>`;
+}
+
+function reportOverview(yearId, selectedYear) {
+  const kpis = {
+    families: querySql('SELECT COUNT(*) AS count FROM os_families;')[0]?.count || 0,
+    students: querySql(`SELECT COUNT(*) AS count FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`)[0]?.count || 0,
+    classrooms: querySql(`SELECT COUNT(*) AS count FROM os_classrooms WHERE school_year_id=${yearId};`)[0]?.count || 0,
+    board: querySql(`SELECT COUNT(*) AS count
+      FROM os_person_roles pr
+      JOIN os_role_groups rg ON rg.id = pr.group_id
+      WHERE rg.name='Board Members';`)[0]?.count || 0
+  };
+  const gradeRows = querySql(`SELECT grade_level, COUNT(*) AS count
+    FROM os_student_years
+    WHERE school_year_id=${yearId} AND status='enrolled'
+    GROUP BY grade_level;`);
+  const sortedGrades = sortGrades(gradeRows.map((row) => row.grade_level));
+  const gradesByName = new Map(gradeRows.map((row) => [row.grade_level, Number(row.count || 0)]));
+  const largestGrade = Math.max(1, ...gradeRows.map((row) => Number(row.count || 0)));
+  const birthdayRows = querySql(`SELECT CAST(strftime('%m', st.birth_date) AS INTEGER) AS month, COUNT(*) AS count
+    FROM os_students st
+    JOIN os_student_years sy ON sy.student_id = st.id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
+    GROUP BY month;`);
+  const birthdayByMonth = new Map(birthdayRows.map((row) => [Number(row.month), Number(row.count || 0)]));
+  const largestMonth = Math.max(1, ...birthdayRows.map((row) => Number(row.count || 0)));
 
   return `<div class="workspace">
-    ${schoolYearHead('Reports', 'Review averages by subject, student, class, and school year.', selectedYear)}
+    ${schoolYearHead('Reports', `Overview for ${selectedYear.name}.`, selectedYear, '<button class="secondary-btn" type="button" onclick="window.print()">Print</button>')}
+    ${printReportHead('Reports', selectedYear, 'Overview')}
+    <section class="report-kpis">
+      <div class="report-kpi"><span>Families</span><strong>${kpis.families}</strong></div>
+      <div class="report-kpi"><span>Students</span><strong>${kpis.students}</strong></div>
+      <div class="report-kpi"><span>Classrooms</span><strong>${kpis.classrooms}</strong></div>
+      <div class="report-kpi"><span>Board Roles</span><strong>${kpis.board}</strong></div>
+    </section>
+    ${reportsNav('', yearId)}
+    <div class="report-summary">
+      <section class="chart-panel">
+        <div class="chart-head"><h2>Students by Grade</h2><span>${kpis.students} enrolled</span></div>
+        <div class="bar-list">
+          ${sortedGrades.map((grade) => {
+            const count = gradesByName.get(grade) || 0;
+            return `<div class="bar-row"><b>Grade ${esc(grade)}</b><div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((count / largestGrade) * 100)}%"></div></div><span>${count}</span></div>`;
+          }).join('') || emptyState('No enrolled students for this school year.')}
+        </div>
+      </section>
+      <section class="chart-panel">
+        <div class="chart-head"><h2>Birthdays by Month</h2><span>${birthdayRows.reduce((sum, row) => sum + Number(row.count || 0), 0)} dated</span></div>
+        <div class="distribution">
+          ${Array.from({ length: 12 }, (_, index) => {
+            const month = index + 1;
+            const count = birthdayByMonth.get(month) || 0;
+            return `<div class="distribution-row"><b>${monthName(month).slice(0, 3)}</b><div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((count / largestMonth) * 100)}%"></div></div><span>${count}</span></div>`;
+          }).join('')}
+        </div>
+      </section>
+    </div>
+  </div>`;
+}
+
+function familiesReport(yearId, selectedYear) {
+  const rows = querySql(`SELECT f.id, f.family_name, f.father_name, f.mother_name, f.father_phone, f.mother_phone, f.phone, f.address,
+      COUNT(sy.id) AS student_count
+    FROM os_families f
+    LEFT JOIN os_students st ON st.family_id = f.id
+    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId} AND sy.status='enrolled'
+    GROUP BY f.id
+    ORDER BY f.family_name;`);
+  return `${printReportHead('Families', selectedYear, `${rows.length} families`)}
+  <section class="ledger family-report">
+    <div class="ledger-head"><h2>Families</h2><p>Parent names, household contact information, and enrolled student counts.</p></div>
+    <div class="table-wrap"><table>
+      <tr><th>Family</th><th>Address</th><th>Contact</th><th>Students</th></tr>
+      ${rows.map((row) => {
+        const contact = row.father_phone || row.mother_phone || row.phone || '';
+        return `<tr>
+          <td>${esc(familyReportName(row))}</td>
+          <td>${esc(row.address || '') || '&mdash;'}</td>
+          <td>${esc(contact) || '&mdash;'}</td>
+          <td>${Number(row.student_count || 0)}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="4">${emptyState('No families have been entered yet.')}</td></tr>`}
+    </table></div>
+  </section>`;
+}
+
+function studentsReport(url, yearId, selectedYear) {
+  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  const gradeClause = selectedGrade ? `AND sy.grade_level=${sqlValue(selectedGrade)}` : '';
+  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
+  const rows = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, st.birth_date,
+      sy.grade_level, c.name AS classroom_name, t.name AS teacher_name
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
+    LEFT JOIN os_teachers t ON t.id = c.teacher_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' ${gradeClause}
+    ORDER BY st.last_name, st.first_name;`);
+  const groupedGrades = sortGrades(rows.map((row) => row.grade_level));
+  return `<div class="workspace">
     <section class="panel">
       <form method="get" action="/reports" class="filters">
         <input type="hidden" name="yearId" value="${yearId}" />
-        <label>Grade<select name="grade"><option value="">All grades</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select></label>
-        <button type="submit">Load Report</button>
-        <button class="secondary-btn" type="button" onclick="window.print()">Print</button>
+        <input type="hidden" name="report" value="students" />
+        <label>Grade<select name="grade" data-auto-submit>${gradeOptionsFromRows(grades, selectedGrade)}</select></label>
       </form>
     </section>
-    ${chartSummary}
-    <div class="split">
-      <section class="ledger">
-        <div class="ledger-head"><h2>Class Averages</h2><p>Subject averages across the selected grade scope.</p></div>
-        <div class="table-wrap compact-table"><table>
-          <tr><th>Grade</th><th>Subject</th><th>Scores</th><th>Average</th></tr>
-          ${classRows.map((row) => `<tr><td>${esc(row.grade_level)}</td><td>${esc(row.subject_name)}</td><td>${row.score_count}</td><td><span class="badge ${gradeTone(row.avg_score)}">${formatPercent(row.avg_score)}</span></td></tr>`).join('') || `<tr><td colspan="4">${emptyState('No class averages available yet.')}</td></tr>`}
-        </table></div>
-      </section>
-      <section class="ledger">
-        <div class="ledger-head"><h2>Student Subject Averages</h2><p>Each student's current average per subject.</p></div>
-        <div class="table-wrap"><table>
-          <tr><th>Student</th><th>Grade</th><th>Subjects</th></tr>
-          ${studentIds.map((id) => {
-            const rows = studentRows.filter((row) => row.id === id);
-            const first = rows[0];
-            return `<tr><td>${esc(`${first.last_name}, ${first.first_name}`)}</td><td>${esc(first.grade_level)}</td><td>${rows.map((row) => `<span class="badge ${gradeTone(row.avg_score)}">${esc(row.subject_name)} &middot; ${formatPercent(row.avg_score)}</span>`).join('')}</td></tr>`;
-          }).join('') || `<tr><td colspan="3">${emptyState('No student averages available yet.')}</td></tr>`}
-        </table></div>
-      </section>
+    ${printReportHead('Student Report', selectedYear, selectedGrade ? `Grade ${selectedGrade}` : 'All grades')}
+    <section class="ledger student-report">
+      <div class="ledger-head"><h2>Student Report</h2><p>Students grouped by grade with room and teacher assignments.</p></div>
+      <div class="family-detail-body report-section-list">
+        ${groupedGrades.map((grade) => {
+          const gradeRows = rows.filter((row) => row.grade_level === grade);
+          const rooms = [...new Set(gradeRows.map((row) => [row.classroom_name, row.teacher_name].filter(Boolean).join(' / ')).filter(Boolean))];
+          return `<section class="report-grade-section">
+            <div class="report-grade-head"><h3>Grade ${esc(grade)} <span>(${gradeRows.length})</span></h3><span>${rooms.map(esc).join(', ') || 'No room assigned'}</span></div>
+            <div class="table-wrap compact-table"><table>
+              <tr><th>Student</th><th>Birthday</th><th>Room</th><th>Teacher</th></tr>
+              ${gradeRows.map((row) => `<tr>
+                <td>${esc(studentLastFirst(row))}</td>
+                <td>${esc(formatDateNumeric(row.birth_date)) || '&mdash;'}</td>
+                <td>${esc(row.classroom_name || '') || '&mdash;'}</td>
+                <td>${esc(row.teacher_name || '') || '&mdash;'}</td>
+              </tr>`).join('')}
+            </table></div>
+          </section>`;
+        }).join('') || emptyState('No enrolled students found for this report.')}
+      </div>
+    </section>
+  </div>`;
+}
+
+function schoolBoardReport(selectedYear) {
+  const rows = querySql(`SELECT pr.*, rt.name AS role_name,
+      CASE pr.person_type WHEN 'father' THEN f.father_name WHEN 'mother' THEN f.mother_name ELSE t.name END AS person_name,
+      CASE pr.person_type WHEN 'father' THEN f.address WHEN 'mother' THEN f.address ELSE t.address END AS address,
+      CASE pr.person_type WHEN 'father' THEN COALESCE(f.father_phone, f.phone) WHEN 'mother' THEN COALESCE(f.mother_phone, f.phone) ELSE COALESCE(t.mobile_phone, t.phone) END AS phone
+    FROM os_person_roles pr
+    JOIN os_role_groups rg ON rg.id = pr.group_id
+    JOIN os_role_types rt ON rt.id = pr.role_type_id
+    LEFT JOIN os_families f ON f.id = pr.person_id AND pr.person_type IN ('father', 'mother')
+    LEFT JOIN os_teachers t ON t.id = pr.person_id AND pr.person_type = 'teacher'
+    WHERE rg.name='Board Members'
+    ORDER BY rt.name, person_name;`);
+  return `${printReportHead('School Board', selectedYear, `${rows.length} members`)}
+  <section class="ledger board-report">
+    <div class="ledger-head"><h2>School Board</h2><p>Board roles are pulled from the existing Board Members role group.</p></div>
+    <div class="board-report-list">
+      ${rows.map((row) => `<article class="board-report-row">
+        <div><strong>${esc(row.person_name || '') || '&mdash;'}</strong><span>${esc(row.address || '') || '&mdash;'}</span></div>
+        <div><span>${esc(row.phone || '') || '&mdash;'}</span></div>
+        <div><strong>${row.is_assistant ? 'Assistant ' : ''}${esc(row.role_name)}</strong><span>${esc(boardTermLabel(row))}</span></div>
+      </article>`).join('') || emptyState('No school board roles have been assigned yet.')}
     </div>
+  </section>`;
+}
+
+function birthdaysReport(yearId, selectedYear) {
+  const rows = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, st.birth_date,
+      CAST(strftime('%m', st.birth_date) AS INTEGER) AS birth_month,
+      CAST(strftime('%d', st.birth_date) AS INTEGER) AS birth_day,
+      sy.grade_level, c.name AS classroom_name
+    FROM os_students st
+    JOIN os_student_years sy ON sy.student_id = st.id
+    LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
+    ORDER BY birth_month, birth_day, st.last_name, st.first_name;`);
+  return `${printReportHead('Student Birthdays', selectedYear)}
+  <section class="ledger birthday-report">
+    <div class="ledger-head"><h2>Student Birthdays</h2><p>Birthdays grouped by month for the selected school year.</p></div>
+    <div class="family-detail-body">
+      <div class="month-grid">
+        ${Array.from({ length: 12 }, (_, index) => {
+          const month = index + 1;
+          const monthRows = rows.filter((row) => Number(row.birth_month) === month);
+          return `<section class="month-block">
+            <h3>${monthName(month)} <span>${monthRows.length} ${monthRows.length === 1 ? 'student' : 'students'}</span></h3>
+            <ul class="birthday-list">
+              ${monthRows.map((row) => `<li><b>${esc(studentDisplayName(row))}</b><span class="birthday-date">${esc(formatDateNumeric(row.birth_date))}</span><span class="birthday-meta">Grade ${esc(row.grade_level)}${row.classroom_name ? ` &middot; ${esc(row.classroom_name)}` : ''}</span></li>`).join('') || `<li><span>No birthdays listed.</span></li>`}
+            </ul>
+          </section>`;
+        }).join('')}
+      </div>
+    </div>
+  </section>`;
+}
+
+function graphColor(index) {
+  return ['#2563eb', '#0f766e', '#b54708', '#be185d', '#6d28d9', '#4d7c0f', '#0369a1', '#b42318'][index % 8];
+}
+
+function gradeGraphSvg(series, periods) {
+  const W = 860, H = 320;
+  const padL = 42, padR = 20, padT = 22, padB = 42;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const periodCount = Math.max(1, periods.length - 1);
+  const toX = (index) => (padL + (periods.length === 1 ? chartW / 2 : (index / periodCount) * chartW)).toFixed(1);
+  const toY = (value) => (padT + chartH - (clampPercent(value) / 100) * chartH).toFixed(1);
+  const guides = [0, 25, 50, 75, 100].map((value) => {
+    const y = toY(value);
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="guide" /><text x="${padL - 7}" y="${Number(y) + 4}" text-anchor="end" class="label">${value}%</text>`;
+  }).join('');
+  const xLabels = periods.map((period, index) => `<text x="${toX(index)}" y="${H - 12}" text-anchor="middle" class="label">${esc(period.name)}</text>`).join('');
+  const lines = series.map((item, index) => {
+    const points = item.values.map((value, valueIndex) => ({ value, valueIndex })).filter((point) => Number.isFinite(Number(point.value)));
+    const color = graphColor(index);
+    const pathData = points.map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'}${toX(point.valueIndex)} ${toY(point.value)}`).join(' ');
+    const dots = points.map((point) => `<circle cx="${toX(point.valueIndex)}" cy="${toY(point.value)}" r="4" fill="${color}" class="dot" />`).join('');
+    return pathData ? `<path d="${pathData}" class="line" stroke="${color}" />${dots}` : '';
+  }).join('');
+  const hasPoints = series.some((item) => item.values.some((value) => Number.isFinite(Number(value))));
+  return `<svg class="grade-graph-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Subject averages by marking period">
+    ${guides}
+    <line x1="${padL}" y1="${padT + chartH}" x2="${W - padR}" y2="${padT + chartH}" class="axis" />
+    ${xLabels}
+    ${lines}
+    ${hasPoints ? '' : `<text x="${W / 2}" y="${padT + chartH / 2}" class="empty-msg">No scores available for this graph.</text>`}
+  </svg>`;
+}
+
+function miniSubjectChartSvg(item, periods) {
+  const W = 330, H = 150;
+  const padL = 28, padR = 8, padT = 12, padB = 32;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const periodCount = Math.max(1, periods.length);
+  const slot = chartW / periodCount;
+  const barW = Math.min(24, slot * .42);
+  const toX = (index) => padL + index * slot + slot / 2;
+  const toY = (value) => padT + chartH - (clampPercent(value) / 100) * chartH;
+  const values = item.values.map((value) => Number.isFinite(Number(value)) ? Number(value) : null);
+  const bars = values.map((value, index) => {
+    if (value === null) return '';
+    const x = toX(index) - barW / 2;
+    const y = toY(value);
+    const h = padT + chartH - y;
+    const colors = ['#ffd7dc', '#ffe5c2', '#fff1a8', '#ccefee', '#d7eaff', '#e4d8ff'];
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${colors[index % colors.length]}" stroke="${item.color}" stroke-width="1" opacity=".72" />`;
+  }).join('');
+  const points = values.map((value, index) => ({ value, index })).filter((point) => point.value !== null);
+  const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${toX(point.index).toFixed(1)} ${toY(point.value).toFixed(1)}`).join(' ');
+  const dots = points.map((point) => `<circle cx="${toX(point.index).toFixed(1)}" cy="${toY(point.value).toFixed(1)}" r="2.7" fill="${item.color}" />`).join('');
+  const guides = [60, 70, 80, 90, 100].map((value) => {
+    const y = toY(value);
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="#d7d7d7" stroke-width="1" /><text x="${padL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#555" font-size="8">${value}</text>`;
+  }).join('');
+  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 15}" text-anchor="middle" fill="#555" font-size="7">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
+  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 5}" text-anchor="middle" fill="#555" font-size="7">${Math.round(value)}%</text>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">
+    ${guides}
+    ${bars}
+    ${line ? `<path d="${line}" fill="none" stroke="${item.color}" stroke-width="2" />${dots}` : `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#777" font-size="10">No scores</text>`}
+    ${labels}
+    ${scoreLabels}
+  </svg>`;
+}
+
+function gradeGraphReport(url, yearId, selectedYear) {
+  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
+  const selectedGrade = cleanGrade(url.searchParams.get('grade')) || grades[0] || '';
+  const requestedScope = cleanText(url.searchParams.get('scope'), 12);
+  const scope = requestedScope === 'student' ? 'student' : 'grade';
+  const students = selectedGrade ? querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND sy.grade_level=${sqlValue(selectedGrade)}
+    ORDER BY st.last_name, st.first_name;`) : [];
+  const selectedStudentId = scope === 'student' ? (asInt(url.searchParams.get('studentId')) || asInt(students[0]?.id)) : 0;
+  const selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || null;
+  const graphStudentIds = scope === 'student'
+    ? (selectedStudent ? [asInt(selectedStudent.id)] : [])
+    : students.map((student) => asInt(student.id));
+  const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+  const subjects = selectedGrade ? querySql(`SELECT DISTINCT s.id, s.name
+    FROM os_assignments a
+    JOIN os_subjects s ON s.id = a.subject_id
+    WHERE a.school_year_id=${yearId} AND a.grade_level=${sqlValue(selectedGrade)}
+    ORDER BY s.name;`) : [];
+  const graphPeriods = periods.length ? periods : [{ id: 0, name: 'Current', start_date: '', end_date: '' }];
+  const series = subjects.map((subject, index) => ({
+    id: subject.id,
+    name: subject.name,
+    color: graphColor(index),
+    values: graphPeriods.map((period) => {
+      if (!graphStudentIds.length) return null;
+      const result = periodAverageRows(yearId, selectedGrade, asInt(subject.id), graphStudentIds, period);
+      if (scope === 'student') return result.studentAverages.get(asInt(selectedStudent?.id)) ?? null;
+      return result.classAverage;
+    })
+  }));
+  const studentOptions = students.map((student) => `<option value="${student.id}" ${asInt(student.id) === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('');
+  return `<div class="workspace">
+    <section class="panel">
+      <form method="get" action="/reports" class="filters">
+        <input type="hidden" name="yearId" value="${yearId}" />
+        <input type="hidden" name="report" value="grade-graph" />
+        <label>Scope<select name="scope" data-auto-submit><option value="grade" ${scope === 'grade' ? 'selected' : ''}>Full grade</option><option value="student" ${scope === 'student' ? 'selected' : ''}>Individual student</option></select></label>
+        <label>Grade<select name="grade" data-auto-submit>${gradeOptionsFromRows(grades, selectedGrade, 'Choose grade')}</select></label>
+        <label>Student<select name="studentId" ${scope === 'student' ? 'data-auto-submit' : ''}><option value="">Choose student</option>${studentOptions}</select></label>
+      </form>
+    </section>
+    ${printReportHead(scope === 'student' && selectedStudent ? studentDisplayName(selectedStudent) : selectedGrade ? `Grade ${selectedGrade}` : 'Grade Graph', selectedYear, 'Grade Graph')}
+    <section class="chart-panel grade-graph">
+      <div class="grade-graph-screen">
+        <div class="chart-head"><h2>Grade Graph</h2><span>${scope === 'student' && selectedStudent ? esc(studentDisplayName(selectedStudent)) : selectedGrade ? `Grade ${esc(selectedGrade)}` : 'No grade selected'}</span></div>
+        ${gradeGraphSvg(series, graphPeriods)}
+        <div class="graph-legend">
+          ${series.map((item) => `<span><i style="--legend-color:${item.color}"></i>${esc(item.name)}</span>`).join('') || `<span>No subjects with scores yet.</span>`}
+        </div>
+      </div>
+      <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
+        ${series.map((item) => {
+          const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
+          return `<section class="mini-subject-chart">
+            <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
+            ${miniSubjectChartSvg(item, graphPeriods)}
+          </section>`;
+        }).join('') || emptyState('No subjects with scores yet.')}
+      </div>
+    </section>
+  </div>`;
+}
+
+function reportsPage(url, selectedYear) {
+  const yearId = asInt(selectedYear.id);
+  const activeReport = reportDefinitions().some((report) => report.key === url.searchParams.get('report')) ? url.searchParams.get('report') : '';
+  const title = activeReport ? reportDefinitions().find((report) => report.key === activeReport).title : 'Reports';
+  let content = '';
+  if (activeReport === 'families') content = familiesReport(yearId, selectedYear);
+  if (activeReport === 'students') content = studentsReport(url, yearId, selectedYear);
+  if (activeReport === 'school-board') content = schoolBoardReport(selectedYear);
+  if (activeReport === 'birthdays') content = birthdaysReport(yearId, selectedYear);
+  if (activeReport === 'grade-graph') content = gradeGraphReport(url, yearId, selectedYear);
+  if (!activeReport) return reportOverview(yearId, selectedYear);
+
+  return `<div class="workspace">
+    ${schoolYearHead(title, reportDefinitions().find((report) => report.key === activeReport).description, selectedYear, '<button class="secondary-btn" type="button" onclick="window.print()">Print</button>')}
+    ${reportsNav(activeReport, yearId)}
+    ${content}
   </div>`;
 }
 
@@ -4566,6 +5431,48 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=settings', headers);
   }
 
+  if (p === '/backup-settings') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    setSetting('backup_frequency', backupFrequency(body.frequency));
+    return redirect(res, '/setup?section=backups', headers);
+  }
+
+  if (p === '/backup/create') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    createDatabaseBackup('manual');
+    return redirect(res, '/setup?section=backups', headers);
+  }
+
+  if (p === '/backup/restore') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    createDatabaseBackup('pre-restore');
+    const uploaded = body.backupFile?.data?.length ? body.backupFile : null;
+    let source = '';
+    if (uploaded) {
+      if (!String(uploaded.filename || '').toLowerCase().endsWith('.db')) return sendText(res, 400, 'Upload a .db backup file.');
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+      source = path.join(BACKUP_DIR, `oakstead-backup-${timestampForFile()}-uploaded.db`);
+      fs.writeFileSync(source, uploaded.data);
+    } else {
+      source = backupPath(body.backupFileName);
+    }
+    if (!source || !fs.existsSync(source)) return sendText(res, 400, 'Backup file not found.');
+    validateBackupDatabase(source);
+    fs.copyFileSync(source, DB_FILE);
+    setSetting('backup_last_restore_at', new Date().toISOString());
+    return redirect(res, '/setup?section=backups', headers);
+  }
+
+  if (p === '/system-update/check') {
+    if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' });
+    try {
+      return sendJson(res, 200, checkLatestRelease(cleanText(body.channel, 20)), headers);
+    } catch (error) {
+      const status = writeUpdateStatus({ running: false, phase: 'check failed', percent: 0, message: error.message || 'Update check failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
+      return sendJson(res, 500, status, headers);
+    }
+  }
+
   if (p === '/system-update') {
     if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' });
     const status = startSystemUpdate(cleanText(body.channel, 20));
@@ -4648,6 +5555,7 @@ if (process.argv[2] === '--run-system-update') {
 }
 
 ensureDb();
+runScheduledBackupIfDue();
 
 const server = http.createServer(async (req, res) => {
   const headers = {};
@@ -4693,6 +5601,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (!user) return redirect(res, '/login', headers);
+
+    if (p === '/backup/download') {
+      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      const target = backupPath(url.searchParams.get('file'));
+      if (!target || !fs.existsSync(target)) return sendText(res, 404, 'Backup not found');
+      const fileName = path.basename(target);
+      res.writeHead(200, {
+        ...securityHeaders(),
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${fileName}"`
+      });
+      return fs.createReadStream(target).pipe(res);
+    }
 
     if (p === '/system-update/status') {
       if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' }, headers);
