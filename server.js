@@ -805,8 +805,8 @@ function studentDisplayName(student) {
 
 function genderIcon(gender) {
   const clean = cleanGender(gender);
-  if (!clean) return '<span class="student-icon neutral" aria-hidden="true">-</span>';
-  return `<span class="student-icon ${clean === 'female' ? 'girl' : 'boy'}" aria-label="${clean === 'female' ? 'Girl' : 'Boy'}">${clean === 'female' ? 'G' : 'B'}</span>`;
+  const cls = clean === 'female' ? 'girl' : clean === 'male' ? 'boy' : 'neutral';
+  return `<span class="student-icon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></span>`;
 }
 
 function categoryOptions(selected = 'Lesson / Homework') {
@@ -1185,7 +1185,7 @@ th, td { padding: .68rem .75rem; border-bottom: 1px solid var(--line); text-alig
 th { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .025em; font-weight: 700; background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg)); }
 td { overflow-wrap: anywhere; }
 tr:last-child td { border-bottom: 0; }
-.compact-table table { min-width: 0; }
+.compact-table table { min-width: 0; table-layout: auto; }
 .badge {
   display: inline-flex;
   align-items: center;
@@ -1347,6 +1347,7 @@ tr:last-child td { border-bottom: 0; }
   padding: .6rem .85rem;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
 .family-layout {
   display: grid;
@@ -1504,29 +1505,21 @@ tr:last-child td { border-bottom: 0; }
   min-width: 0;
 }
 .student-icon {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--paper);
-  color: var(--muted);
-  font-size: .7rem;
-  font-weight: 900;
 }
-.student-icon.girl {
-  color: #be185d;
-  background: #fdf2f8;
-  border-color: #fbcfe8;
-}
-.student-icon.boy {
-  color: #1d4ed8;
-  background: #eff6ff;
-  border-color: #bfdbfe;
-}
+.student-icon svg { width: 100%; height: 100%; display: block; }
+.student-icon.neutral svg { fill: var(--muted); }
+.student-icon.girl svg { fill: #be185d; }
+.student-icon.boy svg { fill: #1d4ed8; }
+.family-detail-body button[type="submit"] { justify-self: start; }
+.asgn-link { display: flex; align-items: center; gap: .5rem; }
+.asgn-link .asgn-title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 720; font-size: .9rem; }
+.asgn-link .asgn-meta { color: var(--muted); font-size: .78rem; white-space: nowrap; flex-shrink: 0; }
 .grade-checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
@@ -1895,6 +1888,7 @@ tr:last-child td { border-bottom: 0; }
   .form-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
+  .compact-filters { grid-template-columns: repeat(auto-fill, minmax(130px, 180px)); }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
   .asset-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1977,6 +1971,56 @@ tr:last-child td { border-bottom: 0; }
   <main class="main">${content}</main>
 </div>
 <script>
+function generateReportCardPdf(btn) {
+  var filename = btn.dataset.filename || 'report-card.pdf';
+  var orig = btn.textContent;
+  btn.textContent = 'Generating…';
+  btn.disabled = true;
+  function fail(err) {
+    btn.textContent = orig; btn.disabled = false;
+    console.error('PDF generation failed:', err);
+    alert('PDF generation failed: ' + (err && err.message ? err.message : String(err)));
+  }
+  function runPdf() {
+    var el = document.querySelector('.report-card-document');
+    if (!el) { fail(new Error('.report-card-document element not found in page')); return; }
+    var spreads = Array.from(el.querySelectorAll('.report-card-spread'));
+    if (!spreads.length) { fail(new Error('No .report-card-spread elements found')); return; }
+    el.style.gap = '0';
+    var restore = function() { el.style.gap = ''; };
+    var canvasOpt = {
+      margin: 0,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: true, logging: false, removeContainer: true, imageTimeout: 0 },
+      jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' }
+    };
+    // Render spread[0] → page 1, get jsPDF instance
+    var chain = html2pdf().set(canvasOpt).from(spreads[0]).toPdf().get('pdf');
+    // For each additional spread: add a page, render to canvas, stamp onto new page
+    spreads.slice(1).forEach(function(spread) {
+      chain = chain.then(function(pdf) {
+        pdf.addPage();
+        return html2pdf().set(canvasOpt).from(spread).toCanvas().get('canvas').then(function(canvas) {
+          var w = pdf.internal.pageSize.getWidth();
+          var h = pdf.internal.pageSize.getHeight();
+          pdf.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, w, h);
+          return pdf;
+        });
+      });
+    });
+    chain.then(function(pdf) {
+      pdf.save(filename);
+      restore();
+      btn.textContent = orig; btn.disabled = false;
+    }).catch(function(err) { restore(); fail(err); });
+  }
+  if (typeof html2pdf !== 'undefined') { runPdf(); return; }
+  var s = document.createElement('script');
+  s.src = '/assets/html2pdf.js';
+  s.onload = runPdf;
+  s.onerror = function() { fail(new Error('Failed to load html2pdf.js from CDN — check internet connection')); };
+  document.head.appendChild(s);
+}
 (function(){
   const root = document.documentElement;
   const saved = localStorage.getItem('oakstead-theme');
@@ -3041,7 +3085,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
   return `<div class="workspace">
     ${schoolYearHead('Gradebook', 'Choose a grade and subject, pick or create an assignment, then enter scores.', selectedYear)}
     <section class="panel">
-      <form method="get" action="/gradebook" class="filters">
+      <form method="get" action="/gradebook" class="filters compact-filters">
         <input type="hidden" name="yearId" value="${yearId}" />
         <input type="hidden" name="mode" value="${scoreMode}" />
         <label>Grade${gradeSelect}</label>
@@ -3115,9 +3159,10 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
   const assignmentList = assignments.length > 0
     ? assignments.map((a) => {
         const active = !showAdd && a.id === selectedAssignmentId;
-        return `<a class="family-link ${active ? 'active' : ''}" href="/assignments?${baseParams}&assignmentId=${a.id}">
-          <strong>${esc(a.title)}</strong>
-          <span>${displayCategoryShort(a.category)} &middot; ${compactNumber(a.max_score)} pts &middot; ${esc(a.assignment_date || '—')} &middot; <span class="badge ${gradeTone(a.avg_score)}">${formatPercent(a.avg_score)}</span></span>
+        return `<a class="family-link asgn-link ${active ? 'active' : ''}" href="/assignments?${baseParams}&assignmentId=${a.id}">
+          <span class="asgn-title">${esc(a.title)}</span>
+          <span class="asgn-meta">${displayCategoryShort(a.category)} &middot; ${esc(a.assignment_date || '—')}</span>
+          <span class="badge ${gradeTone(a.avg_score)}">${formatPercent(a.avg_score)}</span>
         </a>`;
       }).join('')
     : `<div style="padding:.9rem">${emptyState(selectedGrade && selectedSubjectId ? 'No assignments yet.' : 'Select a grade and subject.')}</div>`;
@@ -3202,7 +3247,7 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
   return `<div class="workspace">
     ${schoolYearHead('Assignments', 'Create and edit assignments for a grade and subject.', selectedYear)}
     <section class="panel">
-      <form method="get" action="/assignments" class="filters">
+      <form method="get" action="/assignments" class="filters compact-filters">
         <input type="hidden" name="yearId" value="${yearId}" />
         <input type="hidden" name="mode" value="${scoreMode}" />
         <label>Grade${gradeSelect}</label>
@@ -3459,6 +3504,9 @@ function reportCardsPage(url, selectedYear) {
   const studentSelect = `<select name="studentId" required><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
   const periodSelect = `<select name="markingPeriodId" required><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
   const pdfUrl = `/report-cards?yearId=${yearId}&grade=${encodeURIComponent(selectedGrade)}&studentId=${selectedStudentId}&markingPeriodId=${selectedPeriodId}&pdf=1`;
+  const pdfFilename = selectedStudent && selectedPeriod
+    ? `report-card-${selectedStudent.last_name}-${selectedStudent.first_name}-${selectedPeriod.name}.pdf`.replace(/[^a-z0-9._-]/gi, '-').toLowerCase()
+    : 'report-card.pdf';
   const periodHeaders = periods.map((period) => `<th>${esc(period.period_number)}</th>`).join('');
   const conductRows = Array.from({ length: 28 }, () => `<tr>${periods.map(() => '<td></td>').join('')}</tr>`).join('');
   const subjectTableRows = subjectPeriodRows.map((row) => `<tr>${row.periodScores.map((score) => `<td>${score === null || score === undefined ? '' : Math.round(Number(score))}</td>`).join('')}</tr>`).join('');
@@ -3550,9 +3598,8 @@ function reportCardsPage(url, selectedYear) {
         <button type="submit">Load Report Card</button>
       </form>
     </section>
-    ${selectedStudent && selectedPeriod ? `<div class="report-card-actions"><a class="page-action compact-action" href="${pdfUrl}">Generate PDF</a></div>` : ''}
+    ${selectedStudent && selectedPeriod ? `<div class="report-card-actions"><button type="button" class="page-action compact-action" data-filename="${esc(pdfFilename)}" onclick="generateReportCardPdf(this)">Generate PDF</button></div>` : ''}
     ${preview}
-    ${autoPrint && selectedStudent && selectedPeriod ? `<script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 250); });</script>` : ''}
   </div>`;
 }
 
@@ -4101,6 +4148,12 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-cache'
       });
       return res.end(fs.readFileSync(logo));
+    }
+
+    if (req.method === 'GET' && p === '/assets/html2pdf.js') {
+      const bundlePath = path.join(__dirname, 'html2pdf.bundle.min.js');
+      res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'public, max-age=86400' });
+      return res.end(fs.readFileSync(bundlePath));
     }
 
     if (req.method === 'GET' && p === '/assets/favicon') {
