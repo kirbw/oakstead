@@ -3,17 +3,21 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const querystring = require('querystring');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOAD_DIR = path.join(PUBLIC_DIR, 'uploads');
-const DEFAULT_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
+const DEFAULT_LOGO_FILE = path.join(__dirname, 'assets', 'oakleaf.png');
+const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
+const UPDATE_STATUS_FILE = path.join(__dirname, '.oakstead-update-status.json');
 const DEFAULT_SCHOOL_NAME = 'Oakstead';
 const MAX_BODY_SIZE = 4_000_000;
 const SESSION_HOURS = 12;
+const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
 
 const ROLE_ADMIN = 'admin';
 const ROLE_TEACHER = 'teacher';
@@ -284,6 +288,11 @@ function sendHtml(res, html, headers = {}) {
 function sendText(res, status, text, headers = {}) {
   res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
+}
+
+function sendJson(res, status, data, headers = {}) {
+  res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(data));
 }
 
 function redirect(res, location, headers = {}) {
@@ -688,6 +697,137 @@ function appSettings() {
   };
 }
 
+function defaultUpdateStatus() {
+  return {
+    running: false,
+    phase: 'idle',
+    percent: 0,
+    message: 'Ready to check for updates.',
+    channel: 'stable',
+    version: APP_VERSION,
+    targetVersion: '',
+    updatedAt: new Date().toISOString(),
+    log: []
+  };
+}
+
+function readUpdateStatus() {
+  try {
+    if (!fs.existsSync(UPDATE_STATUS_FILE)) return defaultUpdateStatus();
+    return { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
+  } catch {
+    return defaultUpdateStatus();
+  }
+}
+
+function writeUpdateStatus(patch) {
+  const previous = readUpdateStatus();
+  const log = patch.log ? [...(previous.log || []), ...patch.log].slice(-80) : previous.log || [];
+  const next = { ...previous, ...patch, log, version: APP_VERSION, updatedAt: new Date().toISOString() };
+  fs.writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(next, null, 2));
+  return next;
+}
+
+function updateLog(message) {
+  return `${new Date().toLocaleTimeString('en-US', { hour12: false })} ${message}`;
+}
+
+function runUpdateCommand(label, command, args, options = {}) {
+  writeUpdateStatus({ message: label, log: [updateLog(label)] });
+  const result = spawnSync(command, args, {
+    cwd: __dirname,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024 * 8,
+    ...options
+  });
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  if (output) writeUpdateStatus({ log: output.split('\n').slice(-30).map((line) => `  ${line.slice(0, 500)}`) });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed${result.error ? `: ${result.error.message}` : ''}`);
+  }
+  return output;
+}
+
+function latestReleaseTag(channel) {
+  const tags = runUpdateCommand('Reading release tags', 'git', ['tag', '--list', '--sort=-v:refname'])
+    .split('\n')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const stable = tags.find((tag) => /^v?\d+\.\d+\.\d+$/.test(tag));
+  const prerelease = tags.find((tag) => /^v?\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/.test(tag));
+  return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
+}
+
+function restartApplication() {
+  writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
+  const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
+  if (!supervised) {
+    const child = spawn(process.execPath, [__filename], {
+      cwd: __dirname,
+      detached: true,
+      stdio: 'ignore',
+      env: process.env
+    });
+    child.unref();
+  }
+  setTimeout(() => process.exit(0), 900);
+}
+
+function startSystemUpdate(channel) {
+  const active = readUpdateStatus();
+  if (active.running) return active;
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({
+    running: true,
+    phase: 'starting',
+    percent: 2,
+    channel: updateChannel,
+    targetVersion: '',
+    message: 'Starting update.',
+    log: [updateLog(`Starting ${updateChannel} update from version ${APP_VERSION}`)]
+  });
+  const child = spawn(process.execPath, [__filename, '--run-system-update', updateChannel], {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+    env: process.env
+  });
+  child.unref();
+  return readUpdateStatus();
+}
+
+function runSystemUpdateWorker(channel) {
+  try {
+    writeUpdateStatus({ phase: 'checking', percent: 8, message: 'Checking local repository state.' });
+    runUpdateCommand('Checking for tracked local changes', 'git', ['diff', '--quiet']);
+    runUpdateCommand('Checking staged changes', 'git', ['diff', '--cached', '--quiet']);
+    writeUpdateStatus({ phase: 'fetching', percent: 22, message: 'Fetching releases from GitHub.' });
+    runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
+    const tag = latestReleaseTag(channel);
+    writeUpdateStatus({ phase: 'downloading', percent: 42, targetVersion: tag.replace(/^v/, ''), message: tag ? `Downloading ${tag}.` : 'No release tag found; updating current branch.' });
+    if (tag) {
+      runUpdateCommand(`Checking out ${tag}`, 'git', ['checkout', tag]);
+    } else {
+      const branch = runUpdateCommand('Reading current branch', 'git', ['branch', '--show-current']).trim() || 'main';
+      runUpdateCommand(`Pulling origin/${branch}`, 'git', ['pull', '--ff-only', 'origin', branch]);
+    }
+    writeUpdateStatus({ phase: 'installing', percent: 66, message: 'Installing npm dependencies.' });
+    runUpdateCommand('Running npm install', 'npm', ['install']);
+    writeUpdateStatus({ phase: 'validating', percent: 84, message: 'Validating server code.' });
+    runUpdateCommand('Running npm run check', 'npm', ['run', 'check']);
+    writeUpdateStatus({ running: false, phase: 'complete', percent: 96, message: 'Update complete. Restarting now.', log: [updateLog('Update completed successfully')] });
+    restartApplication();
+  } catch (error) {
+    writeUpdateStatus({
+      running: false,
+      phase: 'failed',
+      percent: 100,
+      message: error.message || 'Update failed.',
+      log: [updateLog(`ERROR ${error.message || error}`)]
+    });
+  }
+}
+
 function contentTypeFor(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.svg') return 'image/svg+xml';
@@ -989,6 +1129,7 @@ button, select, input { min-height: 42px; }
 }
 .logout-form { margin: 0; }
 .user-chip { color: var(--muted); font-size: .84rem; white-space: nowrap; }
+.app-version { color: var(--muted); font-size: .78rem; font-weight: 800; white-space: nowrap; }
 .sidebar {
   position: sticky;
   top: 117px;
@@ -1641,6 +1782,44 @@ tr:last-child td { border-bottom: 0; }
 .login-logo p { margin: .1rem 0 0; color: var(--muted); }
 .notice { color: var(--muted); font-size: .86rem; line-height: 1.4; }
 .danger { color: var(--red); font-weight: 800; }
+.update-status {
+  display: grid;
+  gap: .65rem;
+  padding: .75rem;
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+}
+.update-status-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.update-status-head strong { font-size: .95rem; }
+.update-status-head span { color: var(--muted); font-size: .8rem; font-weight: 800; }
+.progress-track {
+  height: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+}
+.progress-fill {
+  height: 100%;
+  width: var(--progress-value);
+  background: var(--accent);
+  transition: width .2s ease;
+}
+.update-log {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: .65rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
+  font-size: .78rem;
+  white-space: pre-wrap;
+}
 .report-summary {
   display: grid;
   grid-template-columns: 1fr;
@@ -2097,7 +2276,7 @@ tr:last-child td { border-bottom: 0; }
     </div>
     <div class="top-actions">
       ${yearSwitcher}
-      ${user ? `<span class="user-chip">${esc(user.name)} &middot; ${roleLabel(user.role)}</span>
+      ${user ? `<span class="app-version">v${esc(APP_VERSION)}</span><span class="user-chip">${esc(user.name)} &middot; ${roleLabel(user.role)}</span>
         <form class="logout-form" method="post" action="/logout">${csrfInput(csrfToken)}<button class="logout-btn" type="submit">Log out</button></form>` : ''}
     </div>
   </header>
@@ -2154,6 +2333,48 @@ function generateReportCardPdf(btn) {
       control.form.submit();
     });
   });
+  const updateStatusPanel = document.querySelector('[data-update-status]');
+  const updateForm = document.querySelector('[data-update-form]');
+  function renderUpdateStatus(status) {
+    if (!updateStatusPanel || !status) return;
+    const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
+    const message = updateStatusPanel.querySelector('[data-update-message]');
+    const percentLabel = updateStatusPanel.querySelector('[data-update-percent]');
+    const progress = updateStatusPanel.querySelector('[data-update-progress]');
+    const phase = updateStatusPanel.querySelector('[data-update-phase]');
+    const log = updateStatusPanel.querySelector('[data-update-log]');
+    if (message) message.textContent = status.message || '';
+    if (percentLabel) percentLabel.textContent = percent + '%';
+    if (progress) progress.style.setProperty('--progress-value', percent + '%');
+    if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
+    if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
+    if (updateForm) {
+      const button = updateForm.querySelector('button[type="submit"]');
+      if (button) button.disabled = Boolean(status.running);
+    }
+  }
+  function pollUpdateStatus() {
+    if (!updateStatusPanel) return;
+    fetch('/system-update/status', { headers: { Accept: 'application/json' } })
+      .then(function(response) { return response.ok ? response.json() : null; })
+      .then(function(status) {
+        renderUpdateStatus(status);
+        if (status && status.running) setTimeout(pollUpdateStatus, 1400);
+      })
+      .catch(function() {});
+  }
+  if (updateForm) {
+    updateForm.addEventListener('submit', function(event) {
+      event.preventDefault();
+      const button = updateForm.querySelector('button[type="submit"]');
+      if (button) button.disabled = true;
+      fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
+        .then(function(response) { return response.json(); })
+        .then(function(status) { renderUpdateStatus(status); setTimeout(pollUpdateStatus, 800); })
+        .catch(function() { if (button) button.disabled = false; });
+    });
+    pollUpdateStatus();
+  }
 
   let activeScoreInput = null;
   document.addEventListener('focusin', function(event) {
@@ -2304,7 +2525,7 @@ function logoAsset() {
     const customPath = path.join(PUBLIC_DIR, custom);
     if (fs.existsSync(customPath)) return customPath;
   }
-  return fs.existsSync(DEFAULT_LOGO_FILE) ? DEFAULT_LOGO_FILE : path.join(__dirname, 'assets', 'oakstead-logo.svg');
+  return fs.existsSync(DEFAULT_LOGO_FILE) ? DEFAULT_LOGO_FILE : LEGACY_LOGO_FILE;
 }
 
 function faviconAsset() {
@@ -2568,7 +2789,7 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings'];
+  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
@@ -2626,6 +2847,7 @@ function setupPage(selectedYear, csrfToken, url) {
   const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
   const districtOptions = (selected = '') => districts.map((district) => `<option value="${district.id}" ${selectedAttr(district.id, selected)}>${esc(district.name)}</option>`).join('');
+  const updateStatus = readUpdateStatus();
   const setupLinks = [
     ['families', 'Families', `${families.length} households`],
     ['districts', 'School Districts', `${districts.length} districts`],
@@ -2635,7 +2857,8 @@ function setupPage(selectedYear, csrfToken, url) {
     ['years', 'School Years', `${schoolYears.length} years`],
     ['weights', 'Grade Weights', `${weightGroups.length} groups`],
     ['users', 'Users', `${users.length} sign-ins`],
-    ['settings', 'System Settings', settings.schoolName]
+    ['settings', 'System Settings', settings.schoolName],
+    ['updates', 'System Updates', `v${APP_VERSION}`]
   ];
   const setupNav = `<aside class="setup-nav" aria-label="School setup modules">
     <div class="setup-nav-head"><h2>Setup</h2></div>
@@ -3065,6 +3288,38 @@ function setupPage(selectedYear, csrfToken, url) {
     </div>
   </section>`;
 
+  const updateLogText = (updateStatus.log || []).slice(-20).join('\n');
+  const updatesModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>System Updates</h2>
+      <span class="family-count">v${esc(APP_VERSION)}</span>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Installed Version</span><strong>v${esc(APP_VERSION)}</strong></div>
+        <div class="detail-item"><span>Update Channel</span><strong>${updateStatus.channel === 'prerelease' ? 'Pre-release' : 'Current release'}</strong></div>
+      </div>
+      <form method="post" action="/system-update" class="form-grid two" data-update-form>
+        ${csrfInput(csrfToken)}
+        <label>Release Type<select name="channel">
+          <option value="stable" ${selectedAttr(updateStatus.channel, 'stable')}>Current release</option>
+          <option value="prerelease" ${selectedAttr(updateStatus.channel, 'prerelease')}>Pre-release</option>
+        </select></label>
+        <button type="submit" ${updateStatus.running ? 'disabled' : ''}>Download and Install</button>
+      </form>
+      <div class="update-status" data-update-status>
+        <div class="update-status-head">
+          <strong data-update-message>${esc(updateStatus.message)}</strong>
+          <span data-update-percent>${asInt(updateStatus.percent)}%</span>
+        </div>
+        <div class="progress-track" aria-label="Update progress"><div class="progress-fill" data-update-progress style="--progress-value:${asInt(updateStatus.percent)}%"></div></div>
+        <p class="notice" data-update-phase>${esc(updateStatus.phase)}${updateStatus.targetVersion ? ` / target v${esc(updateStatus.targetVersion)}` : ''}</p>
+        <pre class="update-log" data-update-log>${esc(updateLogText || 'No update activity yet.')}</pre>
+      </div>
+      <p class="notice">Updates are fetched from the configured GitHub remote. Oakstead installs npm dependencies, validates the server, and restarts after a successful update.</p>
+    </div>
+  </section>`;
+
   const modules = {
     families: familiesModule,
     districts: districtsModule,
@@ -3074,7 +3329,8 @@ function setupPage(selectedYear, csrfToken, url) {
     years: yearsModule,
     weights: weightsModule,
     users: usersModule,
-    settings: settingsModule
+    settings: settingsModule,
+    updates: updatesModule
   };
 
   return `<div class="workspace">
@@ -4241,6 +4497,12 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=settings', headers);
   }
 
+  if (p === '/system-update') {
+    if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' });
+    const status = startSystemUpdate(cleanText(body.channel, 20));
+    return sendJson(res, 202, status, headers);
+  }
+
   if (p === '/gradebook') {
     const schoolYearId = asInt(body.schoolYearId);
     const markingPeriodId = asInt(body.markingPeriodId);
@@ -4311,6 +4573,11 @@ function handlePost(req, res, p, body, user, headers) {
   return sendText(res, 404, 'Not Found');
 }
 
+if (process.argv[2] === '--run-system-update') {
+  runSystemUpdateWorker(process.argv[3] === 'prerelease' ? 'prerelease' : 'stable');
+  return;
+}
+
 ensureDb();
 
 const server = http.createServer(async (req, res) => {
@@ -4357,6 +4624,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (!user) return redirect(res, '/login', headers);
+
+    if (p === '/system-update/status') {
+      if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' }, headers);
+      return sendJson(res, 200, readUpdateStatus(), headers);
+    }
 
     const { years, selected } = getSelectedYear(req, url);
     if (!selected) return sendText(res, 500, 'No school year configured');

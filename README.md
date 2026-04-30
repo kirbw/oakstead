@@ -2,6 +2,8 @@
 
 **Rooted Records for Growing Minds.**
 
+Current version: **0.0.1**
+
 Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
 
 ## Highlights
@@ -16,6 +18,7 @@ Oakstead is a small-school records and gradebook app built for simple daily clas
 - Quick score buttons for entering a whole class in one pass
 - Reports for class averages and student subject averages
 - Admin and teacher sign-ins with secure sessions and CSRF protection
+- In-app system updates from GitHub with current release and pre-release channels
 
 ## Tech
 
@@ -50,3 +53,22 @@ Change the default password before using this with real school data.
 ```bash
 npm run check
 ```
+
+## System Updates
+
+Administrators can update Oakstead from **School Setup -> System Updates**. Choose **Current release** for the latest stable version, or **Pre-release** to install the newest pre-release tag when one is available. The updater fetches GitHub tags from the configured `origin` remote, checks out the selected release, runs `npm install`, validates the server with `npm run check`, and restarts the app.
+
+For production installs, run Oakstead under a supervisor such as systemd or pm2 so a process exit can restart cleanly after updates.
+
+## Release Notes
+
+Release notes are also kept in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+### 0.0.1
+
+- Initial Oakstead release with family, student, teacher, classroom, subject, school-year, gradebook, absence, report, and report-card workflows.
+- Added admin and teacher accounts with session security and CSRF protection.
+- Added customizable school name, logo, and favicon settings.
+- Added default Oakstead oak leaf logo and favicon.
+- Added in-app GitHub system updater with progress display.
+- Added visible application versioning from `package.json`.
