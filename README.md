@@ -48,6 +48,10 @@ admin / ChangeMeNow!
 
 Change the default password before using this with real school data.
 
+## Security and Deployment
+
+Oakstead stores sensitive student and family records. Do not publish it directly to the internet. If it must be reachable outside a trusted local network or VPN, place it behind a protective edge layer such as Cloudflare, another WAF, or an equivalent reverse proxy with HTTPS, rate limiting, access controls, and request filtering.
+
 ## Validate
 
 ```bash

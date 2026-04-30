@@ -16,6 +16,9 @@ const UPDATE_STATUS_FILE = path.join(__dirname, '.oakstead-update-status.json');
 const DEFAULT_SCHOOL_NAME = 'Oakstead';
 const MAX_BODY_SIZE = 4_000_000;
 const SESSION_HOURS = 12;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const MAX_LOGIN_FAILURES = 5;
 const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
 
@@ -23,6 +26,7 @@ const ROLE_ADMIN = 'admin';
 const ROLE_TEACHER = 'teacher';
 const ROLES = [ROLE_ADMIN, ROLE_TEACHER];
 const CATEGORIES = ['Lesson / Homework', 'Quiz', 'Test'];
+const loginAttempts = new Map();
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -179,6 +183,51 @@ function verifyPassword(password, encoded) {
   } catch {
     return false;
   }
+}
+
+function clientIp(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function loginAttemptKeys(req, username) {
+  const ip = clientIp(req);
+  return [`ip:${ip}`, `user:${username || 'blank'}:${ip}`];
+}
+
+function pruneLoginAttempts(now = Date.now()) {
+  for (const [key, attempt] of loginAttempts.entries()) {
+    if (attempt.lockedUntil > now || now - attempt.firstAt <= LOGIN_WINDOW_MS) continue;
+    loginAttempts.delete(key);
+  }
+}
+
+function loginThrottleStatus(req, username) {
+  pruneLoginAttempts();
+  const now = Date.now();
+  const locked = loginAttemptKeys(req, username)
+    .map((key) => loginAttempts.get(key))
+    .filter((attempt) => attempt?.lockedUntil > now)
+    .sort((a, b) => b.lockedUntil - a.lockedUntil)[0];
+  if (!locked) return null;
+  return { retryAfter: Math.max(1, Math.ceil((locked.lockedUntil - now) / 1000)) };
+}
+
+function recordLoginFailure(req, username) {
+  pruneLoginAttempts();
+  const now = Date.now();
+  loginAttemptKeys(req, username).forEach((key) => {
+    const previous = loginAttempts.get(key);
+    const attempt = previous && now - previous.firstAt <= LOGIN_WINDOW_MS
+      ? previous
+      : { count: 0, firstAt: now, lockedUntil: 0 };
+    attempt.count += 1;
+    if (attempt.count >= MAX_LOGIN_FAILURES) attempt.lockedUntil = now + LOGIN_LOCK_MS;
+    loginAttempts.set(key, attempt);
+  });
+}
+
+function clearLoginFailures(req, username) {
+  loginAttemptKeys(req, username).forEach((key) => loginAttempts.delete(key));
 }
 
 function parseCookies(req) {
@@ -838,17 +887,31 @@ function contentTypeFor(filePath) {
   return 'application/octet-stream';
 }
 
-function uploadExtension(file) {
-  const type = String(file?.contentType || '').toLowerCase();
-  const nameExt = path.extname(String(file?.filename || '')).toLowerCase();
-  const allowedExts = new Set(['.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico']);
-  if (allowedExts.has(nameExt)) return nameExt;
-  if (type.includes('svg')) return '.svg';
-  if (type.includes('png')) return '.png';
-  if (type.includes('jpeg')) return '.jpg';
-  if (type.includes('webp')) return '.webp';
-  if (type.includes('icon') || type.includes('ico')) return '.ico';
+function imageUploadError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function detectedImageExtension(buffer) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) return '';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return '.png';
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return '.jpg';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return '.webp';
+  if (buffer.length >= 4 && buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x01 && buffer[3] === 0x00) return '.ico';
   return '';
+}
+
+function uploadExtension(file) {
+  const nameExt = path.extname(String(file?.filename || '')).toLowerCase();
+  if (nameExt === '.svg') throw imageUploadError('SVG uploads are not supported. Use PNG, JPEG, WebP, or ICO.');
+  const detectedExt = detectedImageExtension(file?.data);
+  if (!detectedExt) throw imageUploadError('Unsupported image upload. Use PNG, JPEG, WebP, or ICO.');
+  const compatibleExts = detectedExt === '.jpg' ? new Set(['.jpg', '.jpeg']) : new Set([detectedExt]);
+  if (nameExt && !compatibleExts.has(nameExt)) {
+    throw imageUploadError('Uploaded image extension does not match the file contents.');
+  }
+  return detectedExt;
 }
 
 function saveUploadedImage(file, basename) {
@@ -3281,8 +3344,8 @@ function setupPage(selectedYear, csrfToken, url) {
       <form method="post" action="/system-settings" enctype="multipart/form-data" class="form-grid two">
         ${csrfInput(csrfToken)}
         <label>School Name<input name="schoolName" required maxlength="120" value="${esc(settings.schoolName)}" /></label>
-        <label>Logo<input type="file" name="logo" accept=".svg,.png,.jpg,.jpeg,.webp,image/svg+xml,image/png,image/jpeg,image/webp" /></label>
-        <label>Favicon<input type="file" name="favicon" accept=".ico,.svg,.png,.jpg,.jpeg,.webp,image/x-icon,image/svg+xml,image/png,image/jpeg,image/webp" /></label>
+        <label>Logo<input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" /></label>
+        <label>Favicon<input type="file" name="favicon" accept=".ico,.png,.jpg,.jpeg,.webp,image/x-icon,image/png,image/jpeg,image/webp" /></label>
         <button type="submit">Save Settings</button>
       </form>
     </div>
@@ -4179,9 +4242,15 @@ function handlePost(req, res, p, body, user, headers) {
     if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
     const username = cleanText(body.username, 80).toLowerCase();
     const password = String(body.password || '').slice(0, 120);
+    const throttle = loginThrottleStatus(req, username);
+    if (throttle) return sendText(res, 429, 'Too many sign-in attempts. Please try again later.', { 'Retry-After': String(throttle.retryAfter) });
     const row = querySql(`SELECT * FROM os_users WHERE username=${sqlValue(username)} LIMIT 1;`)[0];
-    if (!row || !verifyPassword(password, row.password_hash)) return redirect(res, '/login?error=1', headers);
+    if (!row || !verifyPassword(password, row.password_hash)) {
+      recordLoginFailure(req, username);
+      return redirect(res, '/login?error=1', headers);
+    }
     clearSession(req, headers);
+    clearLoginFailures(req, username);
     createSession(row.id, headers);
     return redirect(res, '/', headers);
   }
@@ -4663,6 +4732,7 @@ const server = http.createServer(async (req, res) => {
     return sendText(res, 404, 'Not Found');
   } catch (error) {
     if (error.message === 'Payload too large') return sendText(res, 413, 'Payload too large');
+    if (error.statusCode) return sendText(res, error.statusCode, error.message || 'Bad Request');
     console.error(error);
     return sendText(res, 500, 'Internal Server Error');
   }
