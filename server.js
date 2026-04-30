@@ -6,6 +6,20 @@ const querystring = require('querystring');
 const { execFileSync, spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
 
+function loadEnvFile() {
+  const envFile = path.join(__dirname, '.env');
+  if (!fs.existsSync(envFile)) return;
+  fs.readFileSync(envFile, 'utf8').split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match || process.env[match[1]] !== undefined) return;
+    process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
+  });
+}
+
+loadEnvFile();
+
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -22,6 +36,8 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 5;
 const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
+const DEMO_MODE = /^(1|true|yes|on)$/i.test(String(process.env.DEMO_MODE || ''));
+const DEMO_REFRESH_HOURS = Math.max(1, Math.min(24, Number(process.env.DEMO_REFRESH_HOURS) || 2));
 
 const ROLE_ADMIN = 'admin';
 const ROLE_TEACHER = 'teacher';
@@ -196,6 +212,23 @@ function listDatabaseBackups() {
 function validateBackupDatabase(filePath) {
   const output = execFileSync('sqlite3', [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
   if (output !== 'ok') throw new Error('Backup database did not pass integrity check.');
+}
+
+function refreshDemoData(reason = 'scheduled') {
+  const script = path.join(__dirname, 'scripts', 'seed-demo.js');
+  if (!fs.existsSync(script)) {
+    console.error('Demo seed script is missing.');
+    return;
+  }
+  const result = spawnSync(process.execPath, [script, '--reset'], {
+    cwd: __dirname,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024 * 16,
+    env: { ...process.env, DB_FILE }
+  });
+  if (result.stdout) console.log(result.stdout.trim());
+  if (result.stderr) console.error(result.stderr.trim());
+  if (result.status !== 0) console.error(`Demo data refresh failed during ${reason}.`);
 }
 
 function ensureColumn(table, column, definition) {
@@ -729,6 +762,7 @@ function clearSession(req, headers) {
 }
 
 function currentUser(req) {
+  if (DEMO_MODE) return { id: 0, name: 'Demo Admin', username: 'demo', role: ROLE_ADMIN, teacher_id: null };
   const token = parseCookies(req).sessionToken;
   if (!token) return null;
   const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id
@@ -1265,9 +1299,26 @@ button, select, input { min-height: 42px; }
   display: grid;
   grid-template-columns: 1fr;
 }
-.topbar {
+.demo-banner {
+  grid-column: 1 / -1;
   position: sticky;
   top: 0;
+  z-index: 30;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: .38rem .85rem;
+  background: #b42318;
+  color: #fff;
+  font-size: .84rem;
+  font-weight: 850;
+  text-align: center;
+  letter-spacing: .015em;
+}
+.topbar {
+  position: sticky;
+  top: ${DEMO_MODE ? '34px' : '0'};
   z-index: 20;
   display: flex;
   align-items: center;
@@ -2566,10 +2617,10 @@ tr:last-child td { border-bottom: 0; }
   line-height: 1;
   vertical-align: middle;
 }
-@media (min-width: 720px) {
-  .topbar { top: 0; }
+  @media (min-width: 720px) {
+  .topbar { top: ${DEMO_MODE ? '34px' : '0'}; }
   .top-actions { justify-content: end; }
-  .sidebar { top: 70px; padding-inline: 1rem; }
+  .sidebar { top: ${DEMO_MODE ? '104px' : '70px'}; padding-inline: 1rem; }
   .main { padding: 1.2rem 1rem 4rem; }
   .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2593,8 +2644,8 @@ tr:last-child td { border-bottom: 0; }
   .topbar { grid-column: 1 / -1; }
   .sidebar {
     position: sticky;
-    top: 70px;
-    height: calc(100svh - 70px);
+    top: ${DEMO_MODE ? '104px' : '70px'};
+    height: calc(100svh - ${DEMO_MODE ? '104px' : '70px'});
     align-self: start;
     grid-auto-flow: row;
     grid-auto-columns: auto;
@@ -2796,6 +2847,7 @@ tr:last-child td { border-bottom: 0; }
 </head>
 <body>
 <div class="app">
+  ${DEMO_MODE ? `<div class="demo-banner">DEMO MODE. Data will reset every ${DEMO_REFRESH_HOURS} ${DEMO_REFRESH_HOURS === 1 ? 'hr' : 'hrs'}</div>` : ''}
   <header class="topbar">
     <div class="brand-row">
       <a class="brand" href="/">
@@ -3435,8 +3487,7 @@ function setupPage(selectedYear, csrfToken, url) {
     ${families.map((family) => {
       const active = selectedFamily?.id === family.id && !showFamilyForm ? 'active' : '';
       const childText = `${family.child_count || 0} ${Number(family.child_count) === 1 ? 'child' : 'children'}`;
-      const parents = [family.father_name, family.mother_name].filter(Boolean).join(' & ');
-      const householdLine = parents ? `${family.family_name}, ${parents}` : family.family_name;
+      const householdLine = familyReportName(family);
       const contact = [family.father_phone || family.phone, family.mother_phone].filter(Boolean).join(' / ');
       return `<a class="family-link ${active}" href="/setup?section=families&familyId=${family.id}">
         <strong>${esc(householdLine)}</strong>
@@ -5555,6 +5606,10 @@ if (process.argv[2] === '--run-system-update') {
 }
 
 ensureDb();
+if (DEMO_MODE) {
+  refreshDemoData('startup');
+  setInterval(() => refreshDemoData('scheduled'), DEMO_REFRESH_HOURS * 60 * 60 * 1000).unref();
+}
 runScheduledBackupIfDue();
 
 const server = http.createServer(async (req, res) => {
