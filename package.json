@@ -1,7 +1,12 @@
 {
   "name": "oakstead",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Oakstead (Rooted Records for Growing Minds) school CRM and gradebook with SQLite-backed storage",
+  "author": {
+    "name": "Kirby Witmer",
+    "url": "https://github.com/kirbw"
+  },
+  "license": "MIT",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
