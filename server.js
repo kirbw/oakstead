@@ -820,6 +820,7 @@ function displayCategory(category) {
 
 function displayCategoryShort(category) {
   const cat = normalizeCategory(category);
+  if (cat === 'Lesson / Homework') return 'Lesson';
   return esc(cat);
 }
 
@@ -1095,6 +1096,16 @@ button, select, input { min-height: 42px; }
   box-shadow: var(--shadow);
 }
 .panel-title { display: grid; gap: .25rem; margin-bottom: .85rem; }
+.panel-title.inline-title {
+  display: flex;
+  align-items: baseline;
+  gap: .25rem;
+  flex-wrap: wrap;
+}
+.panel-title.inline-title span {
+  color: var(--muted);
+  font-size: .9rem;
+}
 .grid-2, .grid-3, .grid-4 { display: grid; gap: .7rem; grid-template-columns: 1fr; }
 .form-grid { display: grid; gap: .7rem; grid-template-columns: 1fr; }
 label { display: grid; gap: .32rem; color: var(--muted); font-size: .86rem; font-weight: 650; }
@@ -1186,6 +1197,29 @@ th { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-s
 td { overflow-wrap: anywhere; }
 tr:last-child td { border-bottom: 0; }
 .compact-table table { min-width: 0; table-layout: auto; }
+.assignment-history-table td { overflow-wrap: normal; }
+.assignment-history-table th:nth-child(1),
+.assignment-history-table td:nth-child(1) {
+  width: 6.8rem;
+  white-space: nowrap;
+}
+.assignment-history-table th:nth-child(3),
+.assignment-history-table td:nth-child(3),
+.assignment-history-table th:nth-child(4),
+.assignment-history-table td:nth-child(4),
+.assignment-history-table th:nth-child(5),
+.assignment-history-table td:nth-child(5),
+.assignment-history-table th:nth-child(6),
+.assignment-history-table td:nth-child(6) {
+  white-space: nowrap;
+}
+.assignment-history-table th:nth-child(2),
+.assignment-history-table td:nth-child(2) {
+  min-width: 6.5rem;
+}
+.assignment-history-table .badge {
+  white-space: nowrap;
+}
 .badge {
   display: inline-flex;
   align-items: center;
@@ -1214,6 +1248,25 @@ tr:last-child td { border-bottom: 0; }
   gap: .7rem;
   grid-template-columns: 1fr;
 }
+.class-average-callout {
+  align-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  min-height: 42px;
+  padding: .55rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent-soft) 54%, var(--paper));
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 700;
+}
+.class-average-callout b {
+  color: var(--ink);
+  font-size: .95rem;
+}
 .score-sheet {
   display: grid;
   gap: .45rem;
@@ -1229,6 +1282,22 @@ tr:last-child td { border-bottom: 0; }
   background: var(--paper-strong);
 }
 .score-row b { font-size: .92rem; }
+.score-student-label {
+  display: flex;
+  align-items: baseline;
+  gap: .35rem;
+  flex-wrap: wrap;
+}
+.student-period-avg {
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.student-period-avg::before {
+  content: "- ";
+  color: var(--muted);
+}
 .score-row small { display: block; color: var(--muted); margin-top: .12rem; }
 .score-row input { text-align: center; font-weight: 800; }
 .score-entry-cell { display: grid; gap: .15rem; }
@@ -1303,6 +1372,13 @@ tr:last-child td { border-bottom: 0; }
   margin: -.2rem 0 .1rem;
   color: var(--muted);
   font-size: .84rem;
+}
+.assignment-picker {
+  max-width: 420px;
+}
+.score-save-btn {
+  justify-self: end;
+  min-width: 128px;
 }
 .quick-scores {
   position: sticky;
@@ -1630,6 +1706,7 @@ tr:last-child td { border-bottom: 0; }
 .report-card-spread {
   width: min(1060px, 100%);
   min-height: 816px;
+  box-sizing: border-box;
   margin: 0 auto;
   background: #fff;
   border: 1px solid #6d7773;
@@ -1772,7 +1849,7 @@ tr:last-child td { border-bottom: 0; }
 .board-signoff { text-align: right; font-style: italic; }
 .period-grid-wrap {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) 180px;
+  grid-template-columns: minmax(155px, 1fr) 216px;
   gap: 16px;
   align-items: start;
 }
@@ -1807,6 +1884,7 @@ tr:last-child td { border-bottom: 0; }
   height: 16px;
   padding: 0 3px;
   text-align: center;
+  vertical-align: middle;
   color: #111827;
   font-family: "Comic Sans MS", "Bradley Hand", cursive;
   font-size: 13px;
@@ -1820,6 +1898,17 @@ tr:last-child td { border-bottom: 0; }
   font-family: "Trebuchet MS", Arial, sans-serif;
   font-size: 11px;
   font-weight: 700;
+}
+.period-table .average-col {
+  background: #eef5f2;
+  color: #164c43;
+  font-family: "Trebuchet MS", Arial, sans-serif;
+  font-weight: 700;
+}
+.period-table th.average-col {
+  background: #51786f;
+  color: #fff;
+  font-size: 10px;
 }
 .key-subject {
   margin-top: 24px;
@@ -1852,9 +1941,25 @@ tr:last-child td { border-bottom: 0; }
   display: block;
   color: #2b6b61;
   font-size: 14px;
+  line-height: 1.15;
+  margin: 1px 0;
+  padding-left: 5px;
+  background: linear-gradient(90deg, rgba(99, 137, 128, .22), rgba(99, 137, 128, 0));
 }
 .conduct-section span { display: block; padding-left: 15px; }
-.conduct-table td { height: 17px; font-size: 12px; }
+.conduct-table td {
+  height: 17px;
+  font-size: 12px;
+  background: #fff;
+}
+.conduct-table tr.conduct-section-row td {
+  background: linear-gradient(90deg, #dcebe6, #f7fbf9);
+}
+.conduct-table th,
+.conduct-table td {
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
 .conduct-keys {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1867,13 +1972,32 @@ tr:last-child td { border-bottom: 0; }
 .attendance {
   margin-top: 20px;
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) 284px;
+  grid-template-columns: minmax(150px, 1fr) 284px;
   gap: 18px;
   align-items: start;
   color: #164c43;
 }
+.attendance-labels {
+  display: grid;
+  grid-template-rows: 20px 20px 20px;
+  align-items: center;
+}
+.attendance-labels h3 {
+  align-self: center;
+  margin: 0;
+}
+.attendance-labels div,
+.attendance-labels strong {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+}
 .attendance-table th,
-.attendance-table td { height: 20px; }
+.attendance-table td {
+  height: 20px;
+  line-height: 1;
+  vertical-align: middle;
+}
 @media (min-width: 720px) {
   .topbar { top: 0; }
   .top-actions { justify-content: end; }
@@ -1889,6 +2013,7 @@ tr:last-child td { border-bottom: 0; }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
   .compact-filters { grid-template-columns: repeat(auto-fill, minmax(130px, 180px)); }
+  .class-average-callout { min-width: 190px; }
   .score-row { grid-template-columns: minmax(220px, 1fr) 120px; }
   .asset-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1911,6 +2036,7 @@ tr:last-child td { border-bottom: 0; }
   .nav-link { border-radius: var(--radius); }
   .main { padding: 1.35rem 1.35rem 4rem; }
   .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
+  .gradebook-split { grid-template-columns: minmax(0, 1fr) minmax(500px, .92fr); }
   .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .family-layout { grid-template-columns: 320px minmax(0, 1fr); align-items: start; }
   .assignments-layout { grid-template-columns: minmax(460px, 1fr) minmax(300px, 420px); align-items: start; }
@@ -1928,14 +2054,35 @@ tr:last-child td { border-bottom: 0; }
   .detail-grid { grid-template-columns: 1fr; }
 }
 @media print {
-  @page { size: letter landscape; margin: .18in; }
-  body { background: #fff; color: #111; }
-  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel { display: none !important; }
+  @page { size: letter landscape; margin: 0; }
+  html, body { width: 11in; margin: 0; background: #fff; color: #111; }
+  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
   .panel, .ledger, .kpi { box-shadow: none; break-inside: avoid; }
-  .report-card-spread { width: 10.6in; min-height: 8.16in; box-shadow: none; page-break-after: always; break-after: page; }
-  .report-card-document { gap: 0; }
+  body.report-card-printing .workspace > :not(.report-card-document) { display: none !important; }
+  body.report-card-printing .report-card-document { display: block; gap: 0; width: 11in; }
+  body.report-card-printing .report-card-spread {
+    width: 11in;
+    height: 8.5in;
+    min-height: 8.5in;
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+  }
+  body.report-card-printing .report-card-spread:last-child { page-break-after: auto; break-after: auto; }
+  body.report-card-printing .period-table,
+  body.report-card-printing .conduct-table,
+  body.report-card-printing .attendance-table { border-bottom-width: .75px; }
+  body.report-card-printing .period-table th,
+  body.report-card-printing .period-table td,
+  body.report-card-printing .conduct-table th,
+  body.report-card-printing .conduct-table td,
+  body.report-card-printing .attendance-table th,
+  body.report-card-printing .attendance-table td { border-width: .75px; }
 }
 </style>
 </head>
@@ -1972,54 +2119,18 @@ tr:last-child td { border-bottom: 0; }
 </div>
 <script>
 function generateReportCardPdf(btn) {
-  var filename = btn.dataset.filename || 'report-card.pdf';
   var orig = btn.textContent;
-  btn.textContent = 'Generating…';
+  btn.textContent = 'Preparing…';
   btn.disabled = true;
-  function fail(err) {
+  function restore() {
     btn.textContent = orig; btn.disabled = false;
-    console.error('PDF generation failed:', err);
-    alert('PDF generation failed: ' + (err && err.message ? err.message : String(err)));
+    document.body.classList.remove('report-card-printing');
   }
-  function runPdf() {
-    var el = document.querySelector('.report-card-document');
-    if (!el) { fail(new Error('.report-card-document element not found in page')); return; }
-    var spreads = Array.from(el.querySelectorAll('.report-card-spread'));
-    if (!spreads.length) { fail(new Error('No .report-card-spread elements found')); return; }
-    el.style.gap = '0';
-    var restore = function() { el.style.gap = ''; };
-    var canvasOpt = {
-      margin: 0,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: true, logging: false, removeContainer: true, imageTimeout: 0 },
-      jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' }
-    };
-    // Render spread[0] → page 1, get jsPDF instance
-    var chain = html2pdf().set(canvasOpt).from(spreads[0]).toPdf().get('pdf');
-    // For each additional spread: add a page, render to canvas, stamp onto new page
-    spreads.slice(1).forEach(function(spread) {
-      chain = chain.then(function(pdf) {
-        pdf.addPage();
-        return html2pdf().set(canvasOpt).from(spread).toCanvas().get('canvas').then(function(canvas) {
-          var w = pdf.internal.pageSize.getWidth();
-          var h = pdf.internal.pageSize.getHeight();
-          pdf.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, w, h);
-          return pdf;
-        });
-      });
-    });
-    chain.then(function(pdf) {
-      pdf.save(filename);
-      restore();
-      btn.textContent = orig; btn.disabled = false;
-    }).catch(function(err) { restore(); fail(err); });
-  }
-  if (typeof html2pdf !== 'undefined') { runPdf(); return; }
-  var s = document.createElement('script');
-  s.src = '/assets/html2pdf.js';
-  s.onload = runPdf;
-  s.onerror = function() { fail(new Error('Failed to load html2pdf.js from CDN — check internet connection')); };
-  document.head.appendChild(s);
+  document.body.classList.add('report-card-printing');
+  setTimeout(function() {
+    window.print();
+    setTimeout(restore, 700);
+  }, 50);
 }
 (function(){
   const root = document.documentElement;
@@ -2977,6 +3088,9 @@ function setupPage(selectedYear, csrfToken, url) {
 
 function gradebookPage(req, url, user, selectedYear, csrfToken) {
   const yearId = asInt(selectedYear.id);
+  const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+  const selectedPeriod = selectedPeriodFromRequest(req, url, periods);
+  const selectedPeriodId = asInt(selectedPeriod?.id);
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedSubjectId = asInt(url.searchParams.get('subjectId'));
   const selectedAssignmentId = asInt(url.searchParams.get('assignmentId'));
@@ -3007,6 +3121,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
     WHERE a.school_year_id=${yearId}
       AND a.grade_level=${sqlValue(selectedGrade)}
       AND a.subject_id=${selectedSubjectId}
+      ${assignmentPeriodClause(selectedPeriod)}
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC
     LIMIT 24;`) : [];
@@ -3017,12 +3132,20 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
     querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=${selectedAssignment.id};`).map((r) => [r.student_id, r.score])
   ) : {};
 
-  const baseParams = `yearId=${yearId}${selectedGrade ? `&grade=${encodeURIComponent(selectedGrade)}` : ''}${selectedSubjectId ? `&subjectId=${selectedSubjectId}` : ''}&mode=${scoreMode}`;
+  const periodParam = selectedPeriodId ? `&markingPeriodId=${selectedPeriodId}` : '';
+  const baseParams = `yearId=${yearId}${periodParam}${selectedGrade ? `&grade=${encodeURIComponent(selectedGrade)}` : ''}${selectedSubjectId ? `&subjectId=${selectedSubjectId}` : ''}&mode=${scoreMode}`;
+  const periodSelect = `<select name="markingPeriodId" required data-auto-submit>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.period_number)}</option>`).join('')}</select>`;
   const gradeSelect = `<select name="grade" required data-auto-submit><option value="">Grade</option>${allGrades.map((g) => `<option value="${esc(g)}" ${g === selectedGrade ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>`;
   const subjectSelect = `<select name="subjectId" required data-auto-submit><option value="">Subject</option>${subjects.map((s) => `<option value="${s.id}" ${s.id === selectedSubjectId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
   const percentUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=percent')}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}`;
   const wrongUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=wrong')}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}`;
   const scoreModeControl = scoreModeToggle(percentUrl, wrongUrl, scoreMode);
+  const averageData = selectedGrade && selectedSubjectId && selectedPeriod
+    ? periodAverageRows(yearId, selectedGrade, selectedSubjectId, students.map((student) => student.id), selectedPeriod)
+    : { classAverage: null, studentAverages: new Map() };
+  const classAverageBlock = selectedGrade && selectedSubjectId && selectedPeriod
+    ? `<div class="class-average-callout"><span>Class average</span><b>${formatPercent(averageData.classAverage)}</b></div>`
+    : '';
 
   // Score entry panel
   let scoreContent = '';
@@ -3031,24 +3154,27 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
   } else if (!selectedGrade || !selectedSubjectId) {
     scoreContent = emptyState('Select a grade and subject to begin.');
   } else {
-    const assignmentPicker = `<label>Assignment<select name="assignmentId" data-assignment-select data-base-url="/gradebook?${baseParams}">
+    const assignmentPicker = `<label class="assignment-picker">Assignment<select name="assignmentId" data-assignment-select data-base-url="/gradebook?${baseParams}">
       <option value="">— New assignment —</option>
       ${assignments.map((a) => `<option value="${a.id}" ${a.id === selectedAssignmentId ? 'selected' : ''}>${esc(a.title)} · ${compactNumber(a.max_score)} pts${a.assignment_date ? ` · ${esc(a.assignment_date)}` : ''}</option>`).join('')}
     </select></label>`;
 
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultAssignmentDate = selectedPeriod?.start_date && selectedPeriod.start_date > today ? selectedPeriod.start_date : today;
     const newFields = !selectedAssignment ? `<div class="form-grid four">
       <label>Title<input name="title" placeholder="Lesson 24" required maxlength="140" /></label>
       <label>Type<select name="category">${categoryOptions()}</select></label>
       <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="100" required /></label>
-      <label>Date<input type="date" name="assignmentDate" value="${new Date().toISOString().slice(0, 10)}" /></label>
+      <label>Date<input type="date" name="assignmentDate" value="${defaultAssignmentDate}" /></label>
     </div>` : '';
 
     const maxScore = asPoints(selectedAssignment?.max_score);
     const scoreRows = students.map((st) => {
       const existing = existingScores[st.id];
       const val = scoreValueForMode(existing, maxScore, scoreMode);
+      const studentAverage = averageData.studentAverages.get(st.id);
       return `<div class="score-row">
-        <div><b>${esc(`${st.last_name}, ${st.first_name}`)}</b></div>
+        <div class="score-student-label"><b>${esc(`${st.last_name}, ${st.first_name}`)}</b><span class="student-period-avg">${formatPercent(studentAverage)}</span></div>
         ${scoreInputControl(st.id, val, maxScore, scoreMode)}
       </div>`;
     }).join('') || emptyState('No enrolled students found for this grade.');
@@ -3056,6 +3182,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
     scoreContent = `<form method="post" action="/gradebook" class="form-grid">
       ${csrfInput(csrfToken)}
       <input type="hidden" name="schoolYearId" value="${yearId}" />
+      <input type="hidden" name="markingPeriodId" value="${selectedPeriodId}" />
       <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
       <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
       <input type="hidden" name="scoreMode" value="${scoreMode}" />
@@ -3064,11 +3191,11 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
       ${scoreModeControl}
       <p class="score-help">${scoreMode === 'percent' ? 'Enter each student score as a percentage.' : `Enter how many points were marked wrong${selectedAssignment ? ` out of ${compactNumber(maxScore)}` : ''}.`}</p>
       <div class="score-sheet">${scoreRows}</div>
-      <button type="submit">Save Scores</button>
+      <button class="score-save-btn" type="submit">Save Scores</button>
     </form>`;
   }
 
-  const panelMeta = subject ? `Grade ${esc(selectedGrade)} &middot; ${esc(subject.name)}` : '';
+  const panelMeta = subject ? `Grade ${esc(selectedGrade)} - ${esc(subject.name)}` : '';
 
   const historyRows = assignments.map((a) => {
     const active = a.id === selectedAssignmentId;
@@ -3088,15 +3215,20 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
       <form method="get" action="/gradebook" class="filters compact-filters">
         <input type="hidden" name="yearId" value="${yearId}" />
         <input type="hidden" name="mode" value="${scoreMode}" />
+        <label>Period${periodSelect}</label>
         <label>Grade${gradeSelect}</label>
         <label>Subject${subjectSelect}</label>
+        ${classAverageBlock}
       </form>
     </section>
-    <div class="split">
-      ${actionPanel('Enter Scores', scoreContent, panelMeta)}
+    <div class="split gradebook-split">
+      <section class="panel">
+        <div class="panel-title inline-title"><h2>Enter Scores</h2>${panelMeta ? `<span>- ${panelMeta}</span>` : ''}</div>
+        ${scoreContent}
+      </section>
       <section class="ledger">
         <div class="ledger-head"><h2>Assignment History</h2><p>Recent entries for the loaded grade and subject.</p></div>
-        <div class="table-wrap compact-table"><table>
+        <div class="table-wrap compact-table"><table class="assignment-history-table">
           <tr><th>Date</th><th>Assignment</th><th>Type</th><th>Points</th><th>Scores</th><th>Avg</th></tr>
           ${historyRows}
         </table></div>
@@ -3443,13 +3575,54 @@ function rowInPeriod(row, period) {
   return false;
 }
 
+function assignmentPeriodClause(period) {
+  if (!period) return '';
+  const idClause = `a.marking_period_id=${asInt(period.id)}`;
+  if (!period.start_date || !period.end_date) return `AND ${idClause}`;
+  return `AND (${idClause} OR (a.marking_period_id IS NULL AND a.assignment_date >= ${sqlValue(period.start_date)} AND a.assignment_date <= ${sqlValue(period.end_date)}))`;
+}
+
+function selectedPeriodFromRequest(req, url, periods) {
+  const requestedId = asInt(url.searchParams.get('markingPeriodId'));
+  const cookieId = asInt(parseCookies(req).gradebookPeriodId);
+  return periods.find((period) => period.id === requestedId)
+    || periods.find((period) => period.id === cookieId)
+    || periods[0]
+    || null;
+}
+
+function periodAverageRows(yearId, grade, subjectId, studentIds, period) {
+  if (!grade || !subjectId || !studentIds.length || !period) return { classAverage: null, studentAverages: new Map() };
+  const scoreRows = querySql(`SELECT sc.student_id, a.category, a.assignment_date, a.marking_period_id,
+      ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
+    FROM os_scores sc
+    JOIN os_assignments a ON a.id = sc.assignment_id
+    WHERE a.school_year_id=${yearId}
+      AND a.grade_level=${sqlValue(grade)}
+      AND a.subject_id=${subjectId}
+      AND sc.student_id IN (${studentIds.map(asInt).join(',')});`);
+  const weightGroups = querySql(`SELECT * FROM os_grade_weight_groups WHERE school_year_id=${yearId};`);
+  const weightItems = querySql(`SELECT wi.* FROM os_grade_weight_items wi
+    JOIN os_grade_weight_groups wg ON wg.id = wi.group_id
+    WHERE wg.school_year_id=${yearId};`);
+  const group = matchingWeightGroup(weightGroups, grade, subjectId);
+  const studentAverages = new Map();
+  studentIds.forEach((studentId) => {
+    const rows = scoreRows.filter((row) => asInt(row.student_id) === asInt(studentId) && rowInPeriod(row, period));
+    studentAverages.set(asInt(studentId), calculateWeightedAverage(rows, group, weightItems).average);
+  });
+  return {
+    classAverage: average([...studentAverages.values()].filter((value) => value !== null && value !== undefined)),
+    studentAverages
+  };
+}
+
 function reportCardsPage(url, selectedYear) {
   const yearId = asInt(selectedYear.id);
   const settings = appSettings();
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedStudentId = asInt(url.searchParams.get('studentId'));
   const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
-  const autoPrint = url.searchParams.get('pdf') === '1';
   const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
   const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
   const selectedPeriod = periods.find((period) => period.id === selectedPeriodId) || null;
@@ -3503,13 +3676,21 @@ function reportCardsPage(url, selectedYear) {
   const gradeSelect = `<select name="grade" data-auto-submit required><option value="">Grade</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
   const studentSelect = `<select name="studentId" required><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
   const periodSelect = `<select name="markingPeriodId" required><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
-  const pdfUrl = `/report-cards?yearId=${yearId}&grade=${encodeURIComponent(selectedGrade)}&studentId=${selectedStudentId}&markingPeriodId=${selectedPeriodId}&pdf=1`;
   const pdfFilename = selectedStudent && selectedPeriod
     ? `report-card-${selectedStudent.last_name}-${selectedStudent.first_name}-${selectedPeriod.name}.pdf`.replace(/[^a-z0-9._-]/gi, '-').toLowerCase()
     : 'report-card.pdf';
   const periodHeaders = periods.map((period) => `<th>${esc(period.period_number)}</th>`).join('');
-  const conductRows = Array.from({ length: 28 }, () => `<tr>${periods.map(() => '<td></td>').join('')}</tr>`).join('');
-  const subjectTableRows = subjectPeriodRows.map((row) => `<tr>${row.periodScores.map((score) => `<td>${score === null || score === undefined ? '' : Math.round(Number(score))}</td>`).join('')}</tr>`).join('');
+  const subjectPeriodHeaders = `${periodHeaders}<th class="average-col">Avg</th>`;
+  const conductSectionStarts = new Set([0, 5, 11, 19, 22]);
+  const conductRows = Array.from({ length: 28 }, (_, index) => `<tr class="${conductSectionStarts.has(index) ? 'conduct-section-row' : ''}">${periods.map(() => '<td></td>').join('')}</tr>`).join('');
+  const subjectTableRows = subjectPeriodRows.map((row) => {
+    const scores = row.periodScores
+      .filter((score) => score !== null && score !== undefined && score !== '')
+      .map((score) => Number(score))
+      .filter(Number.isFinite);
+    const avg = scores.length ? Math.round(average(scores)) : null;
+    return `<tr>${row.periodScores.map((score) => `<td>${score === null || score === undefined ? '' : Math.round(Number(score))}</td>`).join('')}<td class="average-col">${avg === null ? '' : avg}</td></tr>`;
+  }).join('');
   const subjectLabels = subjectPeriodRows.map((row) => `<span>${esc(row.subject.name)}</span>`).join('') || '<span>No subjects</span>';
   const absenceByPeriod = periods.map((period) => periodAbsenceTotal(absenceRows, period));
   const absenceTotal = absenceByPeriod.reduce((sum, value) => sum + value, 0);
@@ -3534,8 +3715,8 @@ function reportCardsPage(url, selectedYear) {
         <div class="verse">"The fear of the Lord is the beginning<br>of wisdom." Psalm 111:10</div>
         <div class="parents-copy">
           <em>To the Parents:</em>
-          <p>This report is to inform you of your child's performance in his studies and conduct at school. Please read it carefully and discuss it with your child.</p>
-          <p>The school requests your support so that your child does his best at school. We invite you to visit school and observe your child at work. We also encourage you to discuss your child's progress with his teacher.</p>
+          <p>This report is to inform you of your child's performance in their studies and conduct at school. Please read it carefully and discuss it with your child.</p>
+          <p>The school requests your support so that your child does their best at school. We invite you to visit school and observe your child at work. We also encourage you to discuss your child's progress with their teacher.</p>
           <p class="board-signoff">The School Board and Teachers</p>
         </div>
       </div>
@@ -3545,8 +3726,8 @@ function reportCardsPage(url, selectedYear) {
         <div class="period-grid-wrap">
           <div class="subject-list"><strong>REPORT PERIODS</strong>${subjectLabels}</div>
           <table class="period-table">
-            <tr>${periodHeaders}</tr>
-            ${subjectTableRows || `<tr>${periods.map(() => '<td></td>').join('')}</tr>`}
+            <tr>${subjectPeriodHeaders}</tr>
+            ${subjectTableRows || `<tr>${periods.map(() => '<td></td>').join('')}<td class="average-col"></td></tr>`}
           </table>
         </div>
         <div class="key-subject">
@@ -3576,7 +3757,7 @@ function reportCardsPage(url, selectedYear) {
           <div><strong>Key to Subheading Marks</strong><br>(+) &nbsp;&nbsp; Commendable<br>(no mark) &nbsp;&nbsp; Satisfactory<br>(-) &nbsp;&nbsp; Needs Improvement</div>
         </div>
         <div class="attendance">
-          <div><h3>ATTENDANCE</h3><div>Absence</div><strong>Total Days Present</strong></div>
+          <div class="attendance-labels"><h3>ATTENDANCE</h3><div>Absence</div><strong>Total Days Present</strong></div>
           <table class="attendance-table">
             <tr>${periodHeaders}<th>Total</th></tr>
             <tr>${absenceByPeriod.map((value) => `<td>${formatAbsence(value)}</td>`).join('')}<td>${formatAbsence(absenceTotal)}</td></tr>
@@ -4062,6 +4243,7 @@ function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/gradebook') {
     const schoolYearId = asInt(body.schoolYearId);
+    const markingPeriodId = asInt(body.markingPeriodId);
     const gradeLevel = cleanGrade(body.gradeLevel);
     const subjectId = asInt(body.subjectId);
     const existingAssignmentId = asInt(body.assignmentId);
@@ -4071,8 +4253,9 @@ function handlePost(req, res, p, body, user, headers) {
     const maxScore = existingAssignmentId
       ? asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${existingAssignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score)
       : asPoints(body.maxScore);
-    const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, title, category, assignment_date, max_score, teacher_id)
-      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+    if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
+      VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
     Object.keys(body).forEach((key) => {
       if (!key.startsWith('score_')) return;
       const studentId = asInt(key.replace('score_', ''));
@@ -4081,7 +4264,7 @@ function handlePost(req, res, p, body, user, headers) {
       runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
         ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
     });
-    return redirect(res, `/gradebook?yearId=${schoolYearId}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&assignmentId=${assignmentId}`, headers);
+    return redirect(res, `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&assignmentId=${assignmentId}`, headers);
   }
 
   if (p === '/assignments') {
@@ -4150,12 +4333,6 @@ const server = http.createServer(async (req, res) => {
       return res.end(fs.readFileSync(logo));
     }
 
-    if (req.method === 'GET' && p === '/assets/html2pdf.js') {
-      const bundlePath = path.join(__dirname, 'html2pdf.bundle.min.js');
-      res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'public, max-age=86400' });
-      return res.end(fs.readFileSync(bundlePath));
-    }
-
     if (req.method === 'GET' && p === '/assets/favicon') {
       const favicon = faviconAsset();
       if (!fs.existsSync(favicon)) return sendText(res, 404, 'Favicon not found');
@@ -4194,7 +4371,11 @@ const server = http.createServer(async (req, res) => {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
       return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url) }), headers);
     }
-    if (p === '/gradebook') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
+    if (p === '/gradebook') {
+      const markingPeriodId = asInt(url.searchParams.get('markingPeriodId'));
+      if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
+    }
     if (p === '/assignments') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Assignments', content: assignmentsPage(req, url, user, selected, csrfToken) }), headers);
     if (p === '/report-cards') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Report Cards', content: reportCardsPage(url, selected) }), headers);
     if (p === '/absences') {
