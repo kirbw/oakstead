@@ -2030,7 +2030,7 @@ tr:last-child td { border-bottom: 0; }
   position: absolute;
   top: 0;
   left: 150px;
-  z-index: 8;
+  z-index: calc(var(--gb-assignment-count) + 20);
   width: calc((var(--gb-assignment-count) + 1) * 54px);
   height: 126px;
   pointer-events: none;
@@ -2062,10 +2062,10 @@ tr:last-child td { border-bottom: 0; }
 .gb-header-add::after {
   content: "";
   position: absolute;
-  right: -1px;
-  bottom: -3px;
+  left: -0.5px;
+  bottom: 30px;
   width: 1px;
-  height: 122px;
+  height: 117px;
   background: var(--grade-grid-head-line);
   transform: rotate(43deg);
   transform-origin: bottom center;
@@ -2166,19 +2166,20 @@ tr:last-child td { border-bottom: 0; }
 }
 .gb-grid-add-btn {
   position: absolute;
-  left: 50%;
-  top: 58px;
-  transform: translateX(-50%);
+  bottom: 8px;
+  right: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
   min-height: 28px;
+  padding: 0;
   border: 1px solid color-mix(in srgb, #16a34a 55%, var(--grade-grid-head-line));
   background: color-mix(in srgb, #16a34a 14%, var(--grade-grid-head));
   border-radius: 4px;
-  text-decoration: none;
+  cursor: pointer;
+  color: var(--grade-grid-head-ink);
   font-weight: 950;
 }
 .gb-grid-add-btn:hover {
@@ -4954,16 +4955,15 @@ function gradebookGridView({
   const subjectLabel = subject ? esc(subject.name) : 'Subject';
 
   const editIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.25V21h3.75L18.81 9.94l-3.75-3.75L4 17.25Zm16.71-10.04a1 1 0 0 0 0-1.42l-2.5-2.5a1 1 0 0 0-1.42 0l-1.48 1.48 3.75 3.75 1.65-1.31Z"/></svg>';
+  const addIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>';
   const headerOverlayWidth = (gridAssignments.length + 1) * 54;
-  const headerLines = `${gridAssignments.map((assignment, index) => {
-    const x = index * 54;
-    return `<line x1="${x + 54}" y1="96" x2="${x + 100}" y2="10"></line>`;
-  }).join('')}<line x1="${gridAssignments.length * 54 + 54}" y1="96" x2="${gridAssignments.length * 54 + 100}" y2="10"></line>`;
-  const headerLabels = gridAssignments.map((assignment, index) => {
-    const x = index * 54;
-    return `<text transform="translate(${x + 10} 77) rotate(-48)">${esc(gradebookTitle(assignment.category, assignment.title))}</text>`;
-  }).join('');
-  const headerOverlay = `<svg class="gb-header-svg" viewBox="0 0 ${headerOverlayWidth} 126" aria-hidden="true">${headerLines}${headerLabels}</svg><div class="gb-header-add"><a class="gb-grid-add-btn" href="/gradebook?yearId=${yearId}${selectedPeriodId ? `&markingPeriodId=${selectedPeriodId}` : ''}&grade=${encodeURIComponent(selectedGrade)}&subjectId=${selectedSubjectId}&mode=${scoreMode}&action=add" aria-label="Add assignment">+</a></div>`;
+  const headerLines = Array.from({length: gridAssignments.length + 1}, (_, i) =>
+    `<line x1="${i * 54}" y1="96" x2="${i * 54 + 80}" y2="10"></line>`
+  ).join('');
+  const headerLabels = gridAssignments.map((assignment, index) =>
+    `<text transform="translate(${index * 54 + 57} 64) rotate(-47)" text-anchor="middle">${esc(gradebookTitle(assignment.category, assignment.title))}</text>`
+  ).join('');
+  const headerOverlay = `<svg class="gb-header-svg" viewBox="0 0 ${headerOverlayWidth} 126" aria-hidden="true">${headerLines}${headerLabels}</svg>`;
   const headerCells = gridAssignments.map((assignment, index) => {
     const categoryClass = gradebookCategoryClass(assignment.category);
     return `<th class="gb-grid-assignment gb-type-${categoryClass}" style="--gb-header-z:${gridAssignments.length - index + 10}" title="${esc(assignment.title)}">
@@ -5010,17 +5010,14 @@ function gradebookGridView({
         <input type="hidden" name="scoreMode" value="${scoreMode}" />
         <div class="assignment-dialog-head">
           <span>${editIcon}</span>
-          <h3>Assignment</h3>
+          <h3>Edit Assignment</h3>
         </div>
         <div class="assignment-dialog-body">
-          <label>Work Assigned<input name="title" required maxlength="140" value="${esc(assignment.title)}" /></label>
+          <label>Title<input name="title" required maxlength="140" value="${esc(assignment.title)}" /></label>
           <div class="assignment-dialog-grid">
-            <fieldset>
-              <legend>Assignment Type</legend>
-              ${CATEGORIES.map((cat) => `<label class="assignment-type-radio"><input type="radio" name="category" value="${esc(cat)}" ${cat === category ? 'checked' : ''} /><span class="legend-box ${gradebookCategoryClass(cat)}"></span>${esc(displayCategoryShort(cat))} ${cat === 'Lesson / Homework' ? '(/)' : cat === 'Quiz' ? '(*)' : '(-)'}</label>`).join('')}
-            </fieldset>
+            <label>Type<select name="category">${categoryOptions(assignment.category)}</select></label>
             <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="${compactNumber(assignment.max_score)}" required /></label>
-            <label>Due<input type="date" name="assignmentDate" value="${esc(assignment.assignment_date || '')}" /></label>
+            <label>Date<input type="date" name="assignmentDate" value="${esc(assignment.assignment_date || '')}" /></label>
           </div>
         </div>
         <div class="assignment-dialog-actions">
@@ -5062,6 +5059,7 @@ function gradebookGridView({
           <thead>
             <tr class="gb-grid-top-row">
               <th class="gb-grid-year" rowspan="2">
+                <button class="gb-grid-add-btn" type="button" data-dialog-target="add-assignment-dialog" title="Add assignment" aria-label="Add assignment">+</button>
               </th>
               ${headerCells}
               <th class="gb-grid-add" rowspan="2"></th>
@@ -5091,6 +5089,33 @@ function gradebookGridView({
         <span data-grid-autosave-status>Autosaves changes</span>
       </div>
       ${assignmentDialogs}
+      <dialog class="assignment-dialog" id="add-assignment-dialog">
+        <form method="post" action="/gradebook" class="assignment-dialog-form">
+          ${csrfInput(csrfToken)}
+          <input type="hidden" name="action" value="add-assignment" />
+          <input type="hidden" name="schoolYearId" value="${yearId}" />
+          <input type="hidden" name="markingPeriodId" value="${selectedPeriodId}" />
+          <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+          <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+          <input type="hidden" name="scoreMode" value="${scoreMode}" />
+          <div class="assignment-dialog-head">
+            <span>${addIcon}</span>
+            <h3>Add Assignment</h3>
+          </div>
+          <div class="assignment-dialog-body">
+            <label>Title<input name="title" placeholder="${subject ? `e.g. Lesson 24 – ${esc(subject.name)}` : 'e.g. Lesson 24'}" required maxlength="140" /></label>
+            <div class="assignment-dialog-grid">
+              <label>Type<select name="category">${categoryOptions()}</select></label>
+              <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="100" required /></label>
+              <label>Date<input type="date" name="assignmentDate" value="${new Date().toISOString().slice(0, 10)}" /></label>
+            </div>
+          </div>
+          <div class="assignment-dialog-actions">
+            <button class="secondary-btn" type="button" data-dialog-close>Cancel</button>
+            <button type="submit">Add Assignment</button>
+          </div>
+        </form>
+      </dialog>
     </div>`;
   }
 
@@ -6765,6 +6790,14 @@ function handlePost(req, res, p, body, user, headers) {
             max_score=${asPoints(body.maxScore)}
         WHERE id=${assignmentId};`);
       return redirect(res, redirectTo, headers);
+    }
+    if (body.action === 'add-assignment') {
+      const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
+      const maxScore = asPoints(body.maxScore);
+      const addRedirectTo = `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&grid=on`;
+      insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
+        VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+      return redirect(res, addRedirectTo, headers);
     }
     if (body.action === 'grid-scores') {
       if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
