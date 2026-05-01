@@ -1,5 +1,15 @@
 # Release Notes
 
+## 0.0.3
+
+- Added an optional spreadsheet-style gradebook grid with students down the side, assignments across the top, sticky headers, class averages, per-student averages, and inline score saving.
+- Added gradebook controls for switching between standard assignment entry and grid entry, remembering the selected grid mode and marking period.
+- Added inline assignment creation, editing, and deletion from the grid view.
+- Added customizable letter grade scales by school year, grade range, and subject, with default letter grade groups created automatically.
+- Added letter grade display alongside percentage averages in gradebook grid cells, class rows, and student averages, with an option to hide letters.
+- Improved assignment history in the standard gradebook view with selectable assignment cards and clearer score/average summaries.
+- Improved grade graph print charts with larger line graphs, clearer period labels, and score labels.
+
 ## 0.0.2
 
 - Added demo mode with `.env` support, automatic refresh scheduling, and a demo seed script for realistic families, students, teachers, subjects, assignments, and scores.
