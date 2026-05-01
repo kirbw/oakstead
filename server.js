@@ -43,6 +43,20 @@ const ROLE_ADMIN = 'admin';
 const ROLE_TEACHER = 'teacher';
 const ROLES = [ROLE_ADMIN, ROLE_TEACHER];
 const CATEGORIES = ['Lesson / Homework', 'Quiz', 'Test'];
+const DEFAULT_LETTER_GRADES = [
+  ['A+', 100],
+  ['A', 96],
+  ['A-', 94],
+  ['B+', 92],
+  ['B', 88],
+  ['B-', 86],
+  ['C+', 84],
+  ['C', 79],
+  ['C-', 76],
+  ['D', 70],
+  ['E', 63],
+  ['F', 0]
+];
 const loginAttempts = new Map();
 
 function esc(value) {
@@ -149,6 +163,18 @@ function scoreModeToggle(percentUrl, wrongUrl, mode) {
       <span class="sr-only">Use number wrong</span>
     </label>
     <span>Number wrong</span>
+  </div>`;
+}
+
+function gridModeToggle(offUrl, onUrl, isGrid) {
+  return `<div class="gradebook-layout-toggle" aria-label="Gradebook grid layout">
+    <span>Grid</span>
+    <label class="score-switch">
+      <input type="checkbox" data-grid-toggle data-off-url="${esc(offUrl)}" data-on-url="${esc(onUrl)}" ${isGrid ? 'checked' : ''} />
+      <span class="score-switch-track" aria-hidden="true"><span class="score-switch-thumb"></span></span>
+      <span class="sr-only">Toggle grid gradebook layout</span>
+    </label>
+    <strong>${isGrid ? 'On' : 'Off'}</strong>
   </div>`;
 }
 
@@ -654,6 +680,26 @@ CREATE TABLE IF NOT EXISTS os_grade_weight_items (
   UNIQUE (group_id, category),
   FOREIGN KEY (group_id) REFERENCES os_grade_weight_groups(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS os_letter_grade_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  min_grade TEXT NOT NULL,
+  max_grade TEXT NOT NULL,
+  subject_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
+);
+CREATE TABLE IF NOT EXISTS os_letter_grade_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  letter TEXT NOT NULL,
+  threshold REAL NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (group_id, letter),
+  FOREIGN KEY (group_id) REFERENCES os_letter_grade_groups(id) ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
 CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
@@ -690,6 +736,8 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
     if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
     const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
     if (!weightCount) createDefaultWeightGroups(asInt(year.id));
+    const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+    if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
   });
 
   runSql("DELETE FROM os_sessions WHERE expires_at <= datetime('now');");
@@ -718,6 +766,15 @@ function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
 function createDefaultWeightGroups(yearId) {
   createWeightGroup(yearId, 'Grades 1-2', '1', '2', { 'Lesson / Homework': 50, Quiz: 25, Test: 25 });
   createWeightGroup(yearId, 'Grades 3-9', '3', '9', { 'Lesson / Homework': 25, Quiz: 25, Test: 50 });
+}
+
+function createDefaultLetterGradeGroup(yearId) {
+  const groupId = insertReturningId(`INSERT INTO os_letter_grade_groups (school_year_id, name, min_grade, max_grade, subject_id)
+    VALUES (${yearId}, 'Default Letter Grades', '1', '12', NULL)`);
+  DEFAULT_LETTER_GRADES.forEach(([letter, threshold], index) => {
+    runSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
+      VALUES (${groupId}, ${sqlValue(letter)}, ${Number(threshold)}, ${index});`);
+  });
 }
 
 function createDefaultRoleGroups() {
@@ -1167,6 +1224,64 @@ function displayCategoryShort(category) {
   return esc(cat);
 }
 
+function gradebookShortcut(category) {
+  const cat = normalizeCategory(category);
+  if (cat === 'Quiz') return 'Q';
+  if (cat === 'Test') return 'T';
+  return 'H';
+}
+
+function gradebookTitle(category, title) {
+  const cleanTitle = cleanText(title, 140);
+  return `${gradebookShortcut(category)}-${cleanTitle || displayCategoryShort(category)}`;
+}
+
+function gradebookLetter(value, scale = DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }))) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return '';
+  const rows = [...scale]
+    .map((row) => ({ letter: cleanText(row.letter, 12), threshold: Number(row.threshold) }))
+    .filter((row) => row.letter && Number.isFinite(row.threshold))
+    .sort((a, b) => b.threshold - a.threshold);
+  return rows.find((row) => score >= row.threshold)?.letter || rows.at(-1)?.letter || '';
+}
+
+function compactPercent(value, decimals = 0) {
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return number.toFixed(decimals).replace(/\.?0+$/, '');
+}
+
+function gradebookDisplayScore(value, scale) {
+  const percent = compactPercent(value);
+  if (!percent) return '&mdash;';
+  const letter = gradebookLetter(value, scale);
+  return `${percent}<sup>${esc(letter)}</sup>`;
+}
+
+function gradebookCategoryClass(category) {
+  const cat = normalizeCategory(category);
+  if (cat === 'Quiz') return 'quiz';
+  if (cat === 'Test') return 'test';
+  return 'lesson';
+}
+
+function matchingLetterGradeGroup(groups, grade, subjectId) {
+  const rank = gradeRank(grade);
+  return groups.find((group) => group.subject_id === subjectId && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
+    || groups.find((group) => !group.subject_id && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
+    || null;
+}
+
+function letterGradeScale(yearId, grade, subjectId) {
+  const groups = querySql(`SELECT * FROM os_letter_grade_groups WHERE school_year_id=${yearId};`);
+  const group = matchingLetterGradeGroup(groups, grade, subjectId);
+  if (!group) return DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
+  const items = querySql(`SELECT letter, threshold FROM os_letter_grade_items WHERE group_id=${asInt(group.id)} ORDER BY threshold DESC, sort_order, letter;`);
+  return items.length ? items : DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
+}
+
 function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
   if (!user || user.role !== ROLE_TEACHER) return true;
   if (!user.teacher_id) return false;
@@ -1249,6 +1364,12 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
   --gold: #b54708;
   --red: #b42318;
   --blue: #2563eb;
+  --grade-grid-head: #dce8ff;
+  --grade-grid-head-ink: #172554;
+  --grade-grid-head-line: #8aa4d6;
+  --grade-grid-band: #dce8ff;
+  --grade-grid-band-strong: #c9dafb;
+  --grade-grid-band-ink: #172554;
   --shadow: 0 18px 48px rgba(16, 24, 40, .07);
   --radius: 4px;
 }
@@ -1267,6 +1388,12 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
   --gold: #f6b95f;
   --red: #fb7185;
   --blue: #93c5fd;
+  --grade-grid-head: #171515;
+  --grade-grid-head-ink: #ffffff;
+  --grade-grid-head-line: #8a8a91;
+  --grade-grid-band: #273967;
+  --grade-grid-band-strong: #415995;
+  --grade-grid-band-ink: #ffffff;
   --shadow: 0 18px 60px rgba(0, 0, 0, .34);
 }
 * { box-sizing: border-box; }
@@ -1581,6 +1708,57 @@ tr:last-child td { border-bottom: 0; }
 .assignment-history-table .badge {
   white-space: nowrap;
 }
+.assignment-history-panel {
+  align-self: start;
+}
+.assignment-history-list {
+  display: grid;
+}
+.history-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .65rem;
+  align-items: center;
+  padding: .78rem .9rem;
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  transition: background .16s ease, color .16s ease;
+}
+.history-link:last-child { border-bottom: 0; }
+.history-link:hover {
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--paper));
+}
+.history-link.active {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+.history-main,
+.history-side {
+  display: grid;
+  gap: .18rem;
+  min-width: 0;
+}
+.history-main b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .9rem;
+}
+.history-main small,
+.history-side small {
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.history-side {
+  justify-items: end;
+}
+.history-side .badge {
+  margin: 0;
+  white-space: nowrap;
+}
 .badge {
   display: inline-flex;
   align-items: center;
@@ -1603,6 +1781,9 @@ tr:last-child td { border-bottom: 0; }
   display: grid;
   gap: 1rem;
   grid-template-columns: 1fr;
+}
+.gradebook-score-panel {
+  min-width: 0;
 }
 .filters {
   display: grid;
@@ -1741,6 +1922,535 @@ tr:last-child td { border-bottom: 0; }
   justify-self: end;
   min-width: 128px;
 }
+.gradebook-layout-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 42px;
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.gradebook-layout-toggle strong {
+  color: var(--ink);
+  min-width: 24px;
+}
+.gradebook-grid-workspace {
+  gap: .7rem;
+}
+.gb-grid-shell {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.gb-grid-shell.letters-hidden .gb-cell-letter,
+.gb-grid-shell.letters-hidden .gb-grid-average sup,
+.gb-grid-shell.letters-hidden .gb-grid-student sup,
+.gb-grid-shell.letters-hidden .gb-grid-class-row sup,
+.gb-grid-shell.letters-hidden .gb-grid-row-end sup {
+  display: none;
+}
+.gb-grid-toolbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 190px)) minmax(300px, 1fr) minmax(110px, 140px) minmax(96px, 110px);
+  gap: .62rem;
+  align-items: end;
+  padding: .65rem .75rem;
+  background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg));
+  border-bottom: 1px solid var(--line);
+}
+.gb-grid-toolbar label {
+  color: var(--ink);
+  font-size: .72rem;
+  font-weight: 850;
+}
+.gb-grid-toolbar select {
+  min-height: 30px;
+  padding: .3rem .45rem;
+  border-color: var(--line-strong);
+  background: var(--paper);
+  color: var(--ink);
+}
+.gb-toolbar-check .check-row {
+  min-height: 30px;
+  padding: .3rem .45rem;
+  border-color: var(--line-strong);
+  background: var(--paper);
+  font-size: .78rem;
+  font-weight: 850;
+}
+.gb-type-legend {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  min-height: 32px;
+  color: var(--ink);
+  font-size: .78rem;
+  white-space: nowrap;
+  overflow: auto;
+  scrollbar-width: none;
+}
+.gb-type-legend::-webkit-scrollbar { display: none; }
+.gb-type-legend b {
+  margin-right: .4rem;
+  font-size: .72rem;
+}
+.legend-box {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: .18rem;
+  vertical-align: -2px;
+}
+.legend-box.lesson { background: #111827; }
+.legend-box.quiz { background: #4778d9; }
+.legend-box.test { background: #c43a35; }
+.gb-grid-form {
+  display: grid;
+  min-width: 0;
+  background: var(--paper);
+}
+.gb-grid-scroll {
+  width: 100%;
+  overflow: auto;
+  background: var(--paper);
+  scrollbar-color: #a6adba #e5e7eb;
+  scrollbar-width: thin;
+}
+.gb-grid-stage {
+  position: relative;
+  width: max-content;
+}
+.gb-grid-header-overlay {
+  position: absolute;
+  top: 0;
+  left: 150px;
+  z-index: 8;
+  width: calc((var(--gb-assignment-count) + 1) * 54px);
+  height: 126px;
+  pointer-events: none;
+}
+.gb-header-svg {
+  display: block;
+  width: 100%;
+  height: 126px;
+  overflow: visible;
+}
+.gb-header-svg line {
+  stroke: var(--grade-grid-head-line);
+  stroke-width: 1;
+}
+.gb-header-svg text {
+  fill: var(--grade-grid-head-ink);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 900;
+}
+.gb-header-add {
+  position: absolute;
+  top: 0;
+  left: calc(var(--gb-assignment-count) * 54px);
+  width: 54px;
+  height: 126px;
+  pointer-events: auto;
+}
+.gb-header-add::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -3px;
+  width: 1px;
+  height: 122px;
+  background: var(--grade-grid-head-line);
+  transform: rotate(43deg);
+  transform-origin: bottom center;
+  pointer-events: none;
+}
+.gb-grid-table {
+  min-width: max-content;
+  width: max-content;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--ink);
+  font-size: .82rem;
+  line-height: 1.1;
+}
+.gb-grid-student-col { width: 150px; }
+.gb-grid-score-col { width: 54px; }
+.gb-grid-average-col { width: 54px; }
+.gb-grid-table th,
+.gb-grid-table td {
+  width: 54px;
+  min-width: 54px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+  vertical-align: middle;
+  overflow: visible;
+  background: var(--paper);
+}
+.gb-grid-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--grade-grid-head);
+  color: var(--grade-grid-head-ink);
+  font-weight: 800;
+}
+.gb-grid-top-row th {
+  height: 96px;
+  border-right-color: transparent;
+  border-bottom: 0;
+}
+.gb-grid-icon-row th {
+  top: 96px;
+  height: 30px;
+  border-top: 1px solid color-mix(in srgb, var(--grade-grid-head-line) 45%, transparent);
+  border-right-color: transparent;
+}
+.gb-grid-assignment {
+  position: relative;
+  z-index: var(--gb-header-z, 4) !important;
+  vertical-align: bottom;
+  overflow: visible !important;
+}
+.gb-grid-assignment::before {
+  content: none;
+}
+.gb-grid-assignment::after {
+  content: none;
+}
+.gb-grid-assignment a {
+  display: none;
+}
+.gb-grid-assignment span {
+  display: none;
+}
+.gb-grid-icon-row a,
+.gb-grid-add a {
+  color: #4f8df5;
+  font-size: .72rem;
+  font-weight: 850;
+  text-decoration: none;
+}
+.gb-edit-icon {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4f8df5;
+  cursor: pointer;
+}
+.gb-edit-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+.gb-grid-add a {
+  color: #16a34a;
+  font-size: 1.15rem;
+}
+.gb-grid-add {
+  position: relative;
+}
+.gb-grid-add-btn {
+  position: absolute;
+  left: 50%;
+  top: 58px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, #16a34a 55%, var(--grade-grid-head-line));
+  background: color-mix(in srgb, #16a34a 14%, var(--grade-grid-head));
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: 950;
+}
+.gb-grid-add-btn:hover {
+  background: color-mix(in srgb, #16a34a 24%, var(--grade-grid-head));
+}
+.gb-grid-year,
+.gb-grid-student,
+.gb-grid-table tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  width: 150px !important;
+  min-width: 150px !important;
+  padding: .38rem .55rem !important;
+  text-align: right !important;
+  background: var(--grade-grid-band-strong) !important;
+  color: var(--grade-grid-band-ink) !important;
+  border-right: 1px solid color-mix(in srgb, var(--grade-grid-band) 70%, #000) !important;
+}
+.gb-grid-year {
+  top: 0;
+  z-index: 7;
+  height: 126px !important;
+  text-align: center !important;
+  background: var(--grade-grid-head) !important;
+}
+.gb-grid-year:empty::before {
+  content: "";
+  display: block;
+  min-height: 1px;
+}
+.gb-grid-year span {
+  display: block;
+  margin: .25rem 0 1.4rem;
+  font-weight: 850;
+}
+.gb-grid-year label {
+  display: flex;
+  align-items: center;
+  gap: .34rem;
+  margin: .2rem 0;
+  color: var(--grade-grid-head-ink);
+  font-size: .76rem;
+  font-weight: 750;
+}
+.gb-grid-year input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.gb-grid-table tbody th span {
+  margin-left: .25rem;
+  font-size: .76rem;
+  font-weight: 900;
+}
+.gb-grid-class-row th,
+.gb-grid-class-row td,
+.gb-grid-points-row th,
+.gb-grid-points-row td {
+  background: var(--grade-grid-band) !important;
+  color: var(--grade-grid-band-ink) !important;
+  border-bottom-color: color-mix(in srgb, var(--grade-grid-band) 70%, var(--line));
+}
+.gb-grid-class-row th {
+  text-align: left !important;
+  padding-left: 1rem !important;
+}
+.gb-grid-points-row th {
+  background: var(--grade-grid-band-strong) !important;
+}
+.gb-grid-points-row td {
+  background: var(--grade-grid-band) !important;
+  font-weight: 850;
+}
+.gb-grid-table tbody tr:nth-child(odd) td:not(.gb-grid-row-end) {
+  background: color-mix(in srgb, var(--paper-strong) 70%, var(--bg));
+}
+.gb-grid-table tbody tr:nth-child(even) td:not(.gb-grid-row-end) {
+  background: var(--paper);
+}
+.gb-grid-score-cell {
+  position: relative;
+  overflow: hidden !important;
+}
+.gb-grid-score-cell input {
+  width: calc(100% - 13px);
+  height: 100%;
+  min-height: 40px;
+  padding: .1rem 0 .1rem .08rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: right;
+  font-size: .78rem;
+  font-weight: 760;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.gb-grid-score-cell input::-webkit-outer-spin-button,
+.gb-grid-score-cell input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+.gb-grid-score-cell input:focus {
+  position: relative;
+  z-index: 3;
+  outline: 2px solid #2563eb;
+  background: var(--paper);
+}
+.gb-cell-letter {
+  position: absolute;
+  right: .12rem;
+  top: .26rem;
+  color: var(--ink);
+  font-size: .62rem;
+  font-weight: 850;
+  line-height: 1;
+  pointer-events: none;
+}
+.gb-cell-status {
+  position: absolute;
+  left: .18rem;
+  bottom: .12rem;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+}
+.gb-grid-score-cell.saving .gb-cell-status {
+  opacity: 1;
+  background: #f59e0b;
+}
+.gb-grid-score-cell.saved .gb-cell-status {
+  opacity: 1;
+  background: #16a34a;
+  animation: saveFade .9s ease forwards;
+}
+.gb-grid-score-cell.save-error .gb-cell-status {
+  opacity: 1;
+  background: #dc2626;
+}
+@keyframes saveFade {
+  0%, 55% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.gb-type-quiz input,
+.gb-type-quiz .gb-cell-letter,
+.gb-grid-average.gb-type-quiz {
+  color: #2563eb;
+}
+.gb-type-test input,
+.gb-type-test .gb-cell-letter,
+.gb-grid-average.gb-type-test {
+  color: #dc2626;
+}
+.gb-grid-average {
+  font-weight: 850;
+}
+.gb-grid-average sup,
+.gb-grid-student sup,
+.gb-grid-class-row sup,
+.gb-grid-row-end sup {
+  font-size: .62em;
+  margin-left: .05rem;
+}
+.gb-grid-row-end {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  min-width: 54px !important;
+  width: 54px !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-dark);
+  font-weight: 900;
+  border-left: 1px solid #c7d2fe !important;
+}
+.gb-grid-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .55rem .75rem;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-strong) 72%, var(--bg));
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 800;
+}
+.assignment-dialog {
+  width: min(720px, calc(100vw - 2rem));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0;
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: 0 24px 80px rgba(16, 24, 40, .3);
+}
+.assignment-dialog::backdrop {
+  background: rgba(17, 24, 39, .68);
+}
+.assignment-dialog-form {
+  display: grid;
+}
+.assignment-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid var(--line);
+}
+.assignment-dialog-head span,
+.assignment-dialog-head svg {
+  width: 26px;
+  height: 26px;
+  fill: var(--ink);
+}
+.assignment-dialog-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.assignment-dialog-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1.15rem;
+}
+.assignment-dialog-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(120px, .75fr) minmax(140px, .75fr);
+  gap: .9rem;
+  align-items: start;
+}
+.assignment-dialog fieldset {
+  display: grid;
+  gap: .7rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.assignment-dialog legend {
+  margin-bottom: .25rem;
+  color: var(--ink);
+  font-size: .86rem;
+  font-weight: 850;
+}
+.assignment-type-radio {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 30px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.assignment-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: .65rem;
+  padding: .85rem 1.15rem;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper-strong) 70%, var(--bg));
+}
+.assignment-dialog-actions .danger-action {
+  margin-right: auto;
+  border-color: var(--red);
+  color: var(--red);
+}
+.letter-grade-edit-table input {
+  min-height: 34px;
+  padding: .38rem .5rem;
+}
 .quick-scores {
   position: sticky;
   bottom: 0;
@@ -1800,6 +2510,9 @@ tr:last-child td { border-bottom: 0; }
   display: grid;
   gap: 1rem;
   grid-template-columns: 1fr;
+}
+.assignments-layout .family-list {
+  align-self: start;
 }
 .assignment-editor {
   align-self: start;
@@ -1954,9 +2667,33 @@ tr:last-child td { border-bottom: 0; }
 .student-icon.girl svg { fill: #be185d; }
 .student-icon.boy svg { fill: #1d4ed8; }
 .family-detail-body button[type="submit"] { justify-self: start; }
-.asgn-link { display: flex; align-items: center; gap: .5rem; }
-.asgn-link .asgn-title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 720; font-size: .9rem; }
-.asgn-link .asgn-meta { color: var(--muted); font-size: .78rem; white-space: nowrap; flex-shrink: 0; }
+.asgn-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .24rem .5rem;
+  align-items: center;
+  padding: .68rem .75rem;
+}
+.asgn-link .asgn-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 720;
+  font-size: .88rem;
+}
+.asgn-link .asgn-meta {
+  color: var(--muted);
+  font-size: .75rem;
+  white-space: nowrap;
+  grid-column: 1;
+}
+.asgn-link .badge {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin: 0;
+  white-space: nowrap;
+}
 .grade-checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
@@ -2287,14 +3024,21 @@ tr:last-child td { border-bottom: 0; }
   background: var(--legend-color);
 }
 .grade-graph-print-grid {
-  display: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: .9rem 1rem;
 }
 .grade-graph-print-grid.single {
   grid-template-columns: 1fr;
 }
 .mini-subject-chart {
   display: grid;
-  gap: .25rem;
+  gap: .35rem;
+  min-width: 0;
+  padding: .8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-strong);
 }
 .mini-subject-chart header {
   display: flex;
@@ -2315,6 +3059,7 @@ tr:last-child td { border-bottom: 0; }
   width: 100%;
   height: auto;
   display: block;
+  overflow: visible;
 }
 .report-card-actions { display: flex; justify-content: flex-end; gap: .55rem; }
 .report-card-document {
@@ -2657,13 +3402,21 @@ tr:last-child td { border-bottom: 0; }
   .nav-link { border-radius: var(--radius); }
   .main { padding: 1.35rem 1.35rem 4rem; }
   .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
-  .gradebook-split { grid-template-columns: minmax(0, 1fr) minmax(500px, .92fr); }
+  .gradebook-split {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    grid-template-areas: "scores history";
+  }
+  .gradebook-score-panel { grid-area: scores; }
+  .assignment-history-panel { grid-area: history; }
   .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .family-layout { grid-template-columns: 320px minmax(0, 1fr); align-items: start; }
-  .assignments-layout { grid-template-columns: minmax(460px, 1fr) minmax(300px, 420px); align-items: start; }
+  .assignments-layout { grid-template-columns: minmax(270px, 34%) minmax(0, 1fr); align-items: start; }
   .family-module-grid { grid-template-columns: 300px minmax(0, 1fr); align-items: start; }
   .setup-layout { grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
   .sidebar-utility { margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--line); }
+}
+@media (min-width: 1280px) {
+  .assignments-layout { grid-template-columns: minmax(280px, 32%) minmax(0, 1fr); }
 }
 @media (max-width: 820px) {
   .topbar { align-items: stretch; flex-direction: column; }
@@ -2807,13 +3560,16 @@ tr:last-child td { border-bottom: 0; }
   .grade-graph-print-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .26in .42in;
+    gap: .2in .34in;
   }
   .grade-graph-print-grid.single {
     grid-template-columns: 1fr;
   }
   .mini-subject-chart {
     break-inside: avoid;
+    padding: 0;
+    border: 0;
+    background: transparent;
   }
   .mini-subject-chart h3 { font-size: 10pt; }
   .mini-subject-chart span { color: #333; font-size: 8.2pt; }
@@ -2978,13 +3734,22 @@ function generateReportCardPdf(btn) {
 
   let activeScoreInput = null;
   document.addEventListener('focusin', function(event) {
-    if (event.target.matches('[data-score-input]')) activeScoreInput = event.target;
+    if (event.target.matches('[data-score-input]')) {
+      activeScoreInput = event.target;
+      window.setTimeout(function() { event.target.select?.(); }, 0);
+    }
   });
   document.querySelectorAll('[data-assignment-select]').forEach(function(select) {
     select.addEventListener('change', function() {
       if (this.dataset.baseUrl) {
         var nextUrl = new URL(this.dataset.baseUrl, window.location.origin);
-        if (this.value) nextUrl.searchParams.set('assignmentId', this.value);
+        if (this.value === '__new__') {
+          nextUrl.searchParams.delete('assignmentId');
+          nextUrl.searchParams.set('action', 'add');
+        } else if (this.value) {
+          nextUrl.searchParams.delete('action');
+          nextUrl.searchParams.set('assignmentId', this.value);
+        }
         window.location.href = nextUrl.toString();
         return;
       }
@@ -3034,6 +3799,104 @@ function generateReportCardPdf(btn) {
   document.querySelectorAll('[data-score-mode-toggle]').forEach(function(toggle) {
     toggle.addEventListener('change', function() {
       window.location.href = toggle.checked ? toggle.dataset.wrongUrl : toggle.dataset.percentUrl;
+    });
+  });
+  document.querySelectorAll('[data-grid-toggle]').forEach(function(toggle) {
+    toggle.addEventListener('change', function() {
+      window.location.href = toggle.checked ? toggle.dataset.onUrl : toggle.dataset.offUrl;
+    });
+  });
+  document.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
+    const shell = toggle.closest('.gb-grid-shell');
+    const saved = localStorage.getItem('oakstead-gradebook-letters');
+    if (saved === 'off') {
+      toggle.checked = false;
+      shell?.classList.add('letters-hidden');
+    }
+    toggle.addEventListener('change', function() {
+      shell?.classList.toggle('letters-hidden', !toggle.checked);
+      localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
+    });
+  });
+  document.querySelectorAll('[data-dialog-target]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      const dialog = document.getElementById(button.dataset.dialogTarget);
+      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+    });
+  });
+  document.querySelectorAll('[data-dialog-close]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      button.closest('dialog')?.close();
+    });
+  });
+  document.querySelectorAll('.assignment-dialog').forEach(function(dialog) {
+    dialog.addEventListener('click', function(event) {
+      if (event.target === dialog) dialog.close();
+    });
+  });
+  function markGridCell(input, state) {
+    const cell = input.closest('.gb-grid-score-cell');
+    if (!cell) return;
+    cell.classList.remove('saving', 'saved', 'save-error');
+    if (state) cell.classList.add(state);
+  }
+  function gridHidden(container, name) {
+    return container.querySelector('input[name="' + name + '"]')?.value || '';
+  }
+  function autosaveGridInput(input) {
+    const container = input.closest('[data-grid-autosave]');
+    if (!container || input.value === input.dataset.originalValue) return;
+    const formData = new FormData();
+    formData.set('csrfToken', gridHidden(container, 'csrfToken'));
+    formData.set('action', 'grid-score');
+    formData.set('schoolYearId', gridHidden(container, 'schoolYearId'));
+    formData.set('markingPeriodId', gridHidden(container, 'markingPeriodId'));
+    formData.set('gradeLevel', gridHidden(container, 'gradeLevel'));
+    formData.set('subjectId', gridHidden(container, 'subjectId'));
+    formData.set('scoreMode', gridHidden(container, 'scoreMode'));
+    formData.set('assignmentId', input.dataset.assignmentId || '');
+    formData.set('studentId', input.dataset.studentId || '');
+    formData.set('scoreValue', input.value);
+    const status = container.querySelector('[data-grid-autosave-status]');
+    markGridCell(input, 'saving');
+    if (status) status.textContent = 'Saving...';
+    fetch(container.dataset.action || '/gradebook', { method: 'POST', body: formData, headers: { Accept: 'application/json' } })
+      .then(function(response) {
+        if (!response.ok) throw new Error('Save failed');
+        return response.json();
+      })
+      .then(function(result) {
+        input.dataset.originalValue = input.value;
+        const letter = input.closest('.gb-grid-score-cell')?.querySelector('.gb-cell-letter');
+        if (letter && result.letter !== undefined) letter.textContent = result.letter || '';
+        markGridCell(input, 'saved');
+        if (status) status.textContent = 'Saved';
+      })
+      .catch(function() {
+        markGridCell(input, 'save-error');
+        if (status) status.textContent = 'Could not save';
+      });
+  }
+  document.querySelectorAll('[data-grid-score-input]').forEach(function(input) {
+    let timer = null;
+    input.addEventListener('keydown', function(event) {
+      if (event.key !== 'Tab') return;
+      const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
+      const index = inputs.indexOf(input);
+      const next = inputs[index + (event.shiftKey ? -1 : 1)];
+      if (!next) return;
+      event.preventDefault();
+      autosaveGridInput(input);
+      next.focus();
+      next.select?.();
+    });
+    input.addEventListener('input', function() {
+      clearTimeout(timer);
+      timer = setTimeout(function() { autosaveGridInput(input); }, 550);
+    });
+    input.addEventListener('change', function() {
+      clearTimeout(timer);
+      autosaveGridInput(input);
     });
   });
   document.querySelectorAll('input[name="maxScore"]').forEach(function(pointsInput) {
@@ -3389,7 +4252,7 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'users', 'settings', 'backups', 'updates'];
+  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'backups', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
@@ -3443,6 +4306,14 @@ function setupPage(selectedYear, csrfToken, url) {
   const weightItems = querySql(`SELECT * FROM os_grade_weight_items
     WHERE group_id IN (SELECT id FROM os_grade_weight_groups WHERE school_year_id=${yearId})
     ORDER BY category;`);
+  const letterGroups = querySql(`SELECT lg.*, s.name AS subject_name
+    FROM os_letter_grade_groups lg
+    LEFT JOIN os_subjects s ON s.id = lg.subject_id
+    WHERE lg.school_year_id=${yearId}
+    ORDER BY CAST(lg.min_grade AS INTEGER), lg.name;`);
+  const letterItems = querySql(`SELECT * FROM os_letter_grade_items
+    WHERE group_id IN (SELECT id FROM os_letter_grade_groups WHERE school_year_id=${yearId})
+    ORDER BY threshold DESC, sort_order, letter;`);
   const teacherOptions = (selected = '') => teachers.map((teacher) => `<option value="${teacher.id}" ${selectedAttr(teacher.id, selected)}>${esc(teacher.name)}</option>`).join('');
   const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
@@ -3458,6 +4329,7 @@ function setupPage(selectedYear, csrfToken, url) {
     ['subjects', 'Subjects', `${subjects.length} subjects`],
     ['years', 'School Years', `${schoolYears.length} years`],
     ['weights', 'Grade Weights', `${weightGroups.length} groups`],
+    ['letter-grades', 'Letter Grades', `${letterGroups.length} scales`],
     ['users', 'Users', `${users.length} sign-ins`],
     ['settings', 'System Settings', settings.schoolName],
     ['backups', 'Backups', `${backupFrequencyLabel(backupFreq)}`],
@@ -3838,6 +4710,53 @@ function setupPage(selectedYear, csrfToken, url) {
     </div>
   </section>`;
 
+  const letterEdit = letterGroups.find((group) => group.id === asInt(url.searchParams.get('letterGroupId')));
+  const letterRows = letterEdit
+    ? letterItems.filter((item) => item.group_id === letterEdit.id)
+    : DEFAULT_LETTER_GRADES.map(([letter, threshold], index) => ({ letter, threshold, sort_order: index }));
+  const letterFormRows = [...letterRows, { letter: '', threshold: '', sort_order: letterRows.length }];
+  const letterForm = `<form method="post" action="/letter-grades" class="form-grid">
+    ${csrfInput(csrfToken)}
+    <input type="hidden" name="schoolYearId" value="${yearId}" />
+    ${letterEdit ? `<input type="hidden" name="letterGroupId" value="${letterEdit.id}" />` : ''}
+    <div class="form-grid four">
+      <label>Scale Name<input name="name" required maxlength="120" value="${esc(letterEdit?.name || 'Default Letter Grades')}" /></label>
+      <label>Subject<select name="subjectId"><option value="">Any subject</option>${subjectOptions(letterEdit?.subject_id || '')}</select></label>
+      <label>Minimum Grade<select name="minGrade">${gradeOptions(letterEdit?.min_grade || '1')}</select></label>
+      <label>Maximum Grade<select name="maxGrade">${gradeOptions(letterEdit?.max_grade || '12')}</select></label>
+    </div>
+    <div class="table-wrap compact-table"><table class="letter-grade-edit-table">
+      <tr><th>Letter</th><th>Threshold</th></tr>
+      ${letterFormRows.map((row, index) => `<tr>
+        <td><input name="letter_${index}" maxlength="12" value="${esc(row.letter || '')}" placeholder="${index === letterFormRows.length - 1 ? 'Add letter' : ''}" /></td>
+        <td><input type="number" name="threshold_${index}" min="0" max="100" step="0.1" value="${esc(row.threshold ?? '')}" /></td>
+      </tr>`).join('')}
+    </table></div>
+    <button type="submit">${letterEdit ? 'Save Letter Grades' : 'Create Letter Scale'}</button>
+  </form>`;
+  const letterGradesModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Letter Grades</h2>
+      <div class="module-actions"><span class="family-count">${letterGroups.length}</span><a class="page-action compact-action" href="/setup?section=letter-grades&action=add-letter-scale">Add Scale</a></div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-letter-scale' || letterEdit) ? `<div class="subhead"><h3>${letterEdit ? 'Edit Letter Scale' : 'Add Letter Scale'}</h3><a class="secondary-btn compact-action" href="/setup?section=letter-grades">Cancel</a></div>${letterForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Scale</th><th>Grades</th><th>Subject</th><th>Thresholds</th><th></th></tr>
+        ${letterGroups.map((group) => {
+          const items = letterItems.filter((item) => item.group_id === group.id);
+          return `<tr>
+            <td>${esc(group.name)}</td>
+            <td>${esc(group.min_grade)}-${esc(group.max_grade)}</td>
+            <td>${esc(group.subject_name || 'Any')}</td>
+            <td>${items.map((item) => `<span class="badge">${esc(item.letter)} ${compactNumber(item.threshold)}%</span>`).join('')}</td>
+            <td><a class="text-action" href="/setup?section=letter-grades&letterGroupId=${group.id}">Edit</a></td>
+          </tr>`;
+        }).join('') || `<tr><td colspan="5">${emptyState('No letter grade scales yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
   const userEdit = users.find((setupUser) => setupUser.id === asInt(url.searchParams.get('userId')));
   const roleValue = userEdit?.role || ROLE_ADMIN;
   const userForm = `<form method="post" action="/users" class="form-grid two">
@@ -3978,6 +4897,7 @@ function setupPage(selectedYear, csrfToken, url) {
     subjects: subjectsModule,
     years: yearsModule,
     weights: weightsModule,
+    'letter-grades': letterGradesModule,
     users: usersModule,
     settings: settingsModule,
     backups: backupsModule,
@@ -3993,6 +4913,207 @@ function setupPage(selectedYear, csrfToken, url) {
   </div>`;
 }
 
+function gradebookGridView({
+  selectedYear,
+  yearId,
+  periods,
+  selectedPeriodId,
+  selectedGrade,
+  selectedSubjectId,
+  scoreMode,
+  allGrades,
+  subjects,
+  subject,
+  allowed,
+  students,
+  assignments,
+  averageData,
+  letterScale,
+  classAverageBlock,
+  csrfToken
+}) {
+  const gridAssignments = [...assignments].sort((a, b) => {
+    const dateCompare = String(a.assignment_date || '').localeCompare(String(b.assignment_date || ''));
+    return dateCompare || Number(a.id) - Number(b.id);
+  });
+  const assignmentIds = gridAssignments.map((assignment) => asInt(assignment.id)).filter(Boolean);
+  const studentIds = students.map((student) => asInt(student.id)).filter(Boolean);
+  const scoreRows = assignmentIds.length && studentIds.length
+    ? querySql(`SELECT sc.assignment_id, sc.student_id, sc.score,
+        ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
+      FROM os_scores sc
+      JOIN os_assignments a ON a.id = sc.assignment_id
+      WHERE sc.assignment_id IN (${assignmentIds.join(',')})
+        AND sc.student_id IN (${studentIds.join(',')});`)
+    : [];
+  const scoresByCell = new Map(scoreRows.map((row) => [`${asInt(row.assignment_id)}:${asInt(row.student_id)}`, row]));
+  const periodSelect = `<select name="markingPeriodId" required data-auto-submit>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.period_number)}</option>`).join('')}</select>`;
+  const gradeSelect = `<select name="grade" required data-auto-submit><option value="">Grade</option>${allGrades.map((g) => `<option value="${esc(g)}" ${g === selectedGrade ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>`;
+  const subjectSelect = `<select name="subjectId" required data-auto-submit><option value="">Subject</option>${subjects.map((s) => `<option value="${s.id}" ${s.id === selectedSubjectId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
+  const modeSelect = `<select name="mode" data-auto-submit><option value="wrong" ${scoreMode === 'wrong' ? 'selected' : ''}>Errors</option><option value="percent" ${scoreMode === 'percent' ? 'selected' : ''}>Percentages</option></select>`;
+  const subjectLabel = subject ? esc(subject.name) : 'Subject';
+
+  const editIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.25V21h3.75L18.81 9.94l-3.75-3.75L4 17.25Zm16.71-10.04a1 1 0 0 0 0-1.42l-2.5-2.5a1 1 0 0 0-1.42 0l-1.48 1.48 3.75 3.75 1.65-1.31Z"/></svg>';
+  const headerOverlayWidth = (gridAssignments.length + 1) * 54;
+  const headerLines = `${gridAssignments.map((assignment, index) => {
+    const x = index * 54;
+    return `<line x1="${x + 54}" y1="96" x2="${x + 100}" y2="10"></line>`;
+  }).join('')}<line x1="${gridAssignments.length * 54 + 54}" y1="96" x2="${gridAssignments.length * 54 + 100}" y2="10"></line>`;
+  const headerLabels = gridAssignments.map((assignment, index) => {
+    const x = index * 54;
+    return `<text transform="translate(${x + 10} 77) rotate(-48)">${esc(gradebookTitle(assignment.category, assignment.title))}</text>`;
+  }).join('');
+  const headerOverlay = `<svg class="gb-header-svg" viewBox="0 0 ${headerOverlayWidth} 126" aria-hidden="true">${headerLines}${headerLabels}</svg><div class="gb-header-add"><a class="gb-grid-add-btn" href="/gradebook?yearId=${yearId}${selectedPeriodId ? `&markingPeriodId=${selectedPeriodId}` : ''}&grade=${encodeURIComponent(selectedGrade)}&subjectId=${selectedSubjectId}&mode=${scoreMode}&action=add" aria-label="Add assignment">+</a></div>`;
+  const headerCells = gridAssignments.map((assignment, index) => {
+    const categoryClass = gradebookCategoryClass(assignment.category);
+    return `<th class="gb-grid-assignment gb-type-${categoryClass}" style="--gb-header-z:${gridAssignments.length - index + 10}" title="${esc(assignment.title)}">
+    </th>`;
+  }).join('');
+
+  const classAverageCells = gridAssignments.map((assignment) => `<td class="gb-grid-average gb-type-${gradebookCategoryClass(assignment.category)}">${gradebookDisplayScore(assignment.avg_score, letterScale)}</td>`).join('');
+  const pointsCells = gridAssignments.map((assignment) => `<td>${compactNumber(assignment.max_score)}</td>`).join('');
+  const emptyAssignmentCells = gridAssignments.map(() => '<td></td>').join('');
+
+  const studentRows = students.map((student) => {
+    const studentAverage = averageData.studentAverages.get(student.id);
+    const cells = gridAssignments.map((assignment) => {
+      const key = `${asInt(assignment.id)}:${asInt(student.id)}`;
+      const row = scoresByCell.get(key);
+      const displayPercent = row?.percent;
+      const value = scoreValueForMode(row?.score, assignment.max_score, scoreMode);
+      const categoryClass = gradebookCategoryClass(assignment.category);
+      const letter = gradebookLetter(displayPercent, letterScale);
+      return `<td class="gb-grid-score-cell gb-type-${categoryClass}">
+        <input data-score-input data-grid-score-input data-score-points="${compactNumber(asPoints(assignment.max_score))}" data-score-mode="${scoreMode}" data-assignment-id="${assignment.id}" data-student-id="${student.id}" data-original-value="${esc(value)}" name="gridscore_${assignment.id}_${student.id}" type="number" inputmode="decimal" min="0" max="${scoreMode === 'percent' ? '100' : compactNumber(asPoints(assignment.max_score))}" step="0.01" value="${esc(value)}" aria-label="${esc(student.first_name)} ${esc(student.last_name)} ${esc(assignment.title)}" autocomplete="off" />
+        <span class="gb-cell-letter">${esc(letter)}</span>
+        <span class="gb-cell-status" data-grid-save-status></span>
+      </td>`;
+    }).join('');
+    return `<tr>
+      <th class="gb-grid-student">${esc(student.first_name)} <span>${gradebookDisplayScore(studentAverage, letterScale)}</span></th>
+      ${cells}
+      <td class="gb-grid-row-end">${gradebookDisplayScore(studentAverage, letterScale)}</td>
+    </tr>`;
+  }).join('');
+
+  const assignmentDialogs = gridAssignments.map((assignment) => {
+    const category = normalizeCategory(assignment.category);
+    return `<dialog class="assignment-dialog" id="assignment-dialog-${assignment.id}">
+      <form method="post" action="/gradebook" class="assignment-dialog-form">
+        ${csrfInput(csrfToken)}
+        <input type="hidden" name="action" value="update-assignment" />
+        <input type="hidden" name="schoolYearId" value="${yearId}" />
+        <input type="hidden" name="markingPeriodId" value="${selectedPeriodId}" />
+        <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+        <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+        <input type="hidden" name="assignmentId" value="${assignment.id}" />
+        <input type="hidden" name="scoreMode" value="${scoreMode}" />
+        <div class="assignment-dialog-head">
+          <span>${editIcon}</span>
+          <h3>Assignment</h3>
+        </div>
+        <div class="assignment-dialog-body">
+          <label>Work Assigned<input name="title" required maxlength="140" value="${esc(assignment.title)}" /></label>
+          <div class="assignment-dialog-grid">
+            <fieldset>
+              <legend>Assignment Type</legend>
+              ${CATEGORIES.map((cat) => `<label class="assignment-type-radio"><input type="radio" name="category" value="${esc(cat)}" ${cat === category ? 'checked' : ''} /><span class="legend-box ${gradebookCategoryClass(cat)}"></span>${esc(displayCategoryShort(cat))} ${cat === 'Lesson / Homework' ? '(/)' : cat === 'Quiz' ? '(*)' : '(-)'}</label>`).join('')}
+            </fieldset>
+            <label>Points<input name="maxScore" type="number" inputmode="decimal" min="1" step="0.5" value="${compactNumber(assignment.max_score)}" required /></label>
+            <label>Due<input type="date" name="assignmentDate" value="${esc(assignment.assignment_date || '')}" /></label>
+          </div>
+        </div>
+        <div class="assignment-dialog-actions">
+          <button class="secondary-btn danger-action" type="submit" name="deleteAssignment" value="1">Delete</button>
+          <button class="secondary-btn" type="button" data-dialog-close>Cancel</button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>`;
+  }).join('');
+
+  let gridBody = '';
+  if (!allowed) {
+    gridBody = `<div class="panel">${emptyState('This grade is not assigned to your teacher account.')}</div>`;
+  } else if (!selectedGrade || !selectedSubjectId) {
+    gridBody = `<div class="panel">${emptyState('Select a grade and subject to begin.')}</div>`;
+  } else if (!gridAssignments.length) {
+    gridBody = `<div class="panel">${emptyState('No assignments found for this period. Switch Grid off to add the first assignment, or use Assignments to create several at once.')}</div>`;
+  } else {
+    gridBody = `<div class="gb-grid-form" data-grid-autosave data-action="/gradebook">
+      ${csrfInput(csrfToken)}
+      <input type="hidden" name="action" value="grid-scores" />
+      <input type="hidden" name="schoolYearId" value="${yearId}" />
+      <input type="hidden" name="markingPeriodId" value="${selectedPeriodId}" />
+      <input type="hidden" name="gradeLevel" value="${esc(selectedGrade)}" />
+      <input type="hidden" name="subjectId" value="${selectedSubjectId}" />
+      <input type="hidden" name="scoreMode" value="${scoreMode}" />
+      <input type="hidden" name="gridMode" value="on" />
+      ${gridAssignments.map((assignment) => `<input type="hidden" name="assignmentMax_${assignment.id}" value="${compactNumber(asPoints(assignment.max_score))}" />`).join('')}
+      <div class="gb-grid-scroll">
+        <div class="gb-grid-stage" style="--gb-assignment-count:${gridAssignments.length}">
+        <div class="gb-grid-header-overlay">${headerOverlay}</div>
+        <table class="gb-grid-table">
+          <colgroup>
+            <col class="gb-grid-student-col" />
+            ${gridAssignments.map(() => '<col class="gb-grid-score-col" />').join('')}
+            <col class="gb-grid-average-col" />
+          </colgroup>
+          <thead>
+            <tr class="gb-grid-top-row">
+              <th class="gb-grid-year" rowspan="2">
+              </th>
+              ${headerCells}
+              <th class="gb-grid-add" rowspan="2"></th>
+            </tr>
+            <tr class="gb-grid-icon-row">
+              ${gridAssignments.map((assignment) => `<th class="gb-type-${gradebookCategoryClass(assignment.category)}"><button class="gb-edit-icon" type="button" data-dialog-target="assignment-dialog-${assignment.id}" aria-label="Edit ${esc(assignment.title)}">${editIcon}</button></th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="gb-grid-class-row">
+              <th>Class Average <span>${gradebookDisplayScore(averageData.classAverage, letterScale)}</span></th>
+              ${classAverageCells}
+              <td></td>
+            </tr>
+            <tr class="gb-grid-points-row">
+              <th>Points</th>
+              ${pointsCells}
+              <td></td>
+            </tr>
+            ${students.length ? studentRows : `<tr><th>No Students</th>${emptyAssignmentCells}<td></td></tr>`}
+          </tbody>
+        </table>
+        </div>
+      </div>
+      <div class="gb-grid-footer">
+        <span>${students.length} students / ${gridAssignments.length} assignments / ${subjectLabel}</span>
+        <span data-grid-autosave-status>Autosaves changes</span>
+      </div>
+      ${assignmentDialogs}
+    </div>`;
+  }
+
+  return `<section class="gb-grid-shell">
+    <form method="get" action="/gradebook" class="gb-grid-toolbar">
+      <input type="hidden" name="yearId" value="${yearId}" />
+      <input type="hidden" name="grid" value="on" />
+      <label>Period${periodSelect}</label>
+      <label>Grade${gradeSelect}</label>
+      <label>Subject${subjectSelect}</label>
+      <div class="gb-type-legend" aria-label="Grade type legend">
+        <b>Legend</b>
+        <span><i class="legend-box lesson"></i> Homework</span>
+        <span><i class="legend-box quiz"></i> Quiz</span>
+        <span><i class="legend-box test"></i> Test</span>
+      </div>
+      <label>Enter As${modeSelect}</label>
+      <label class="gb-toolbar-check"><span>Display</span><span class="check-row"><input type="checkbox" data-grid-letters-toggle checked /> Letters</span></label>
+    </form>
+    ${gridBody}
+  </section>`;
+}
+
 function gradebookPage(req, url, user, selectedYear, csrfToken) {
   const yearId = asInt(selectedYear.id);
   const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
@@ -4000,8 +5121,12 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
   const selectedPeriodId = asInt(selectedPeriod?.id);
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedSubjectId = asInt(url.searchParams.get('subjectId'));
-  const selectedAssignmentId = asInt(url.searchParams.get('assignmentId'));
+  const requestedAssignmentId = asInt(url.searchParams.get('assignmentId'));
+  const showNewAssignment = url.searchParams.get('action') === 'add';
   const scoreMode = cleanScoreMode(url.searchParams.get('mode'));
+  const gridParam = cleanText(url.searchParams.get('grid'), 12);
+  const savedGridMode = parseCookies(req).gradebookGrid;
+  const gridMode = gridParam ? gridParam !== 'off' : (savedGridMode ? savedGridMode === 'on' : true);
   const allGrades = sortGrades([
     ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level),
     ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((row) => row.grade_level)
@@ -4030,8 +5155,8 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
       AND a.subject_id=${selectedSubjectId}
       ${assignmentPeriodClause(selectedPeriod)}
     GROUP BY a.id
-    ORDER BY a.assignment_date DESC, a.id DESC
-    LIMIT 24;`) : [];
+    ORDER BY a.assignment_date DESC, a.id DESC;`) : [];
+  const selectedAssignmentId = showNewAssignment ? 0 : (requestedAssignmentId || asInt(assignments[0]?.id));
   const selectedAssignment = selectedAssignmentId
     ? (assignments.find((a) => a.id === selectedAssignmentId) || querySql(`SELECT id, title, category, assignment_date, max_score FROM os_assignments WHERE id=${selectedAssignmentId} AND school_year_id=${yearId} LIMIT 1;`)[0])
     : null;
@@ -4041,18 +5166,48 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
 
   const periodParam = selectedPeriodId ? `&markingPeriodId=${selectedPeriodId}` : '';
   const baseParams = `yearId=${yearId}${periodParam}${selectedGrade ? `&grade=${encodeURIComponent(selectedGrade)}` : ''}${selectedSubjectId ? `&subjectId=${selectedSubjectId}` : ''}&mode=${scoreMode}`;
+  const gridOffUrl = `/gradebook?${baseParams}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}&grid=off`;
+  const gridOnUrl = `/gradebook?${baseParams}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}&grid=on`;
+  const layoutToggle = gridModeToggle(gridOffUrl, gridOnUrl, gridMode);
   const periodSelect = `<select name="markingPeriodId" required data-auto-submit>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.period_number)}</option>`).join('')}</select>`;
   const gradeSelect = `<select name="grade" required data-auto-submit><option value="">Grade</option>${allGrades.map((g) => `<option value="${esc(g)}" ${g === selectedGrade ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>`;
   const subjectSelect = `<select name="subjectId" required data-auto-submit><option value="">Subject</option>${subjects.map((s) => `<option value="${s.id}" ${s.id === selectedSubjectId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
-  const percentUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=percent')}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}`;
-  const wrongUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=wrong')}${selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : ''}`;
+  const assignmentModeParam = showNewAssignment ? '&action=add' : (selectedAssignmentId ? `&assignmentId=${selectedAssignmentId}` : '');
+  const percentUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=percent')}${assignmentModeParam}`;
+  const wrongUrl = `/gradebook?${baseParams.replace(`mode=${scoreMode}`, 'mode=wrong')}${assignmentModeParam}`;
   const scoreModeControl = scoreModeToggle(percentUrl, wrongUrl, scoreMode);
   const averageData = selectedGrade && selectedSubjectId && selectedPeriod
     ? periodAverageRows(yearId, selectedGrade, selectedSubjectId, students.map((student) => student.id), selectedPeriod)
     : { classAverage: null, studentAverages: new Map() };
+  const scale = selectedGrade && selectedSubjectId ? letterGradeScale(yearId, selectedGrade, selectedSubjectId) : DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
   const classAverageBlock = selectedGrade && selectedSubjectId && selectedPeriod
     ? `<div class="class-average-callout"><span>Class average</span><b>${formatPercent(averageData.classAverage)}</b></div>`
     : '';
+
+  if (gridMode) {
+    return `<div class="workspace gradebook-grid-workspace">
+      ${schoolYearHead('Gradebook', 'Grid entry with students down the side and assignments across the top.', selectedYear, layoutToggle)}
+      ${gradebookGridView({
+        selectedYear,
+        yearId,
+        periods,
+        selectedPeriodId,
+        selectedGrade,
+        selectedSubjectId,
+        scoreMode,
+        allGrades,
+        subjects,
+        subject,
+        allowed,
+        students,
+        assignments,
+        averageData,
+        letterScale: scale,
+        classAverageBlock,
+        csrfToken
+      })}
+    </div>`;
+  }
 
   // Score entry panel
   let scoreContent = '';
@@ -4062,7 +5217,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
     scoreContent = emptyState('Select a grade and subject to begin.');
   } else {
     const assignmentPicker = `<label class="assignment-picker">Assignment<select name="assignmentId" data-assignment-select data-base-url="/gradebook?${baseParams}">
-      <option value="">— New assignment —</option>
+      <option value="__new__" ${!selectedAssignment ? 'selected' : ''}>New assignment</option>
       ${assignments.map((a) => `<option value="${a.id}" ${a.id === selectedAssignmentId ? 'selected' : ''}>${esc(a.title)} · ${compactNumber(a.max_score)} pts${a.assignment_date ? ` · ${esc(a.assignment_date)}` : ''}</option>`).join('')}
     </select></label>`;
 
@@ -4106,18 +5261,14 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
 
   const historyRows = assignments.map((a) => {
     const active = a.id === selectedAssignmentId;
-    return `<tr class="${active ? 'selected-row' : ''}">
-      <td>${esc(a.assignment_date || '') || '&mdash;'}</td>
-      <td>${esc(a.title)}</td>
-      <td><span class="type-chip">${displayCategoryShort(a.category)}</span></td>
-      <td>${compactNumber(a.max_score)}</td>
-      <td>${a.score_count}</td>
-      <td><span class="badge ${gradeTone(a.avg_score)}">${formatPercent(a.avg_score)}</span></td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="6">${emptyState('No assignment history for this selection yet.')}</td></tr>`;
+    return `<a class="history-link ${active ? 'active' : ''}" href="/gradebook?${baseParams}&assignmentId=${a.id}">
+      <span class="history-main"><b>${esc(a.title)}</b><small>${esc(a.assignment_date || '') || 'No date'} · ${displayCategoryShort(a.category)} · ${compactNumber(a.max_score)} pts</small></span>
+      <span class="history-side"><span class="badge ${gradeTone(a.avg_score)}">${formatPercent(a.avg_score)}</span><small>${a.score_count} scores</small></span>
+    </a>`;
+  }).join('') || emptyState('No assignment history for this selection yet.');
 
   return `<div class="workspace">
-    ${schoolYearHead('Gradebook', 'Choose a grade and subject, pick or create an assignment, then enter scores.', selectedYear)}
+    ${schoolYearHead('Gradebook', 'Choose a grade and subject, pick or create an assignment, then enter scores.', selectedYear, layoutToggle)}
     <section class="panel">
       <form method="get" action="/gradebook" class="filters compact-filters">
         <input type="hidden" name="yearId" value="${yearId}" />
@@ -4129,16 +5280,15 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
       </form>
     </section>
     <div class="split gradebook-split">
-      <section class="panel">
+      <section class="panel gradebook-score-panel">
         <div class="panel-title inline-title"><h2>Enter Scores</h2>${panelMeta ? `<span>- ${panelMeta}</span>` : ''}</div>
         ${scoreContent}
       </section>
-      <section class="ledger">
-        <div class="ledger-head"><h2>Assignment History</h2><p>Recent entries for the loaded grade and subject.</p></div>
-        <div class="table-wrap compact-table"><table class="assignment-history-table">
-          <tr><th>Date</th><th>Assignment</th><th>Type</th><th>Points</th><th>Scores</th><th>Avg</th></tr>
+      <section class="ledger assignment-history-panel">
+        <div class="ledger-head"><h2>Assignment History</h2><p>Select an assignment to enter or revise scores.</p></div>
+        <div class="assignment-history-list">
           ${historyRows}
-        </table></div>
+        </div>
       </section>
     </div>
   </div>`;
@@ -4606,37 +5756,32 @@ function gradeGraphSvg(series, periods) {
 }
 
 function miniSubjectChartSvg(item, periods) {
-  const W = 330, H = 150;
-  const padL = 28, padR = 8, padT = 12, padB = 32;
+  const W = 420, H = 190;
+  const padL = 36, padR = 14, padT = 12, padB = 38;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
-  const periodCount = Math.max(1, periods.length);
-  const slot = chartW / periodCount;
-  const barW = Math.min(24, slot * .42);
-  const toX = (index) => padL + index * slot + slot / 2;
-  const toY = (value) => padT + chartH - (clampPercent(value) / 100) * chartH;
+  const minY = 60;
+  const maxY = 100;
+  const periodCount = Math.max(1, periods.length - 1);
+  const toX = (index) => padL + (periods.length === 1 ? chartW / 2 : (index / periodCount) * chartW);
+  const toY = (value) => {
+    const bounded = Math.max(minY, Math.min(maxY, Number(value)));
+    return padT + chartH - ((bounded - minY) / (maxY - minY)) * chartH;
+  };
   const values = item.values.map((value) => Number.isFinite(Number(value)) ? Number(value) : null);
-  const bars = values.map((value, index) => {
-    if (value === null) return '';
-    const x = toX(index) - barW / 2;
-    const y = toY(value);
-    const h = padT + chartH - y;
-    const colors = ['#ffd7dc', '#ffe5c2', '#fff1a8', '#ccefee', '#d7eaff', '#e4d8ff'];
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${colors[index % colors.length]}" stroke="${item.color}" stroke-width="1" opacity=".72" />`;
-  }).join('');
   const points = values.map((value, index) => ({ value, index })).filter((point) => point.value !== null);
   const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${toX(point.index).toFixed(1)} ${toY(point.value).toFixed(1)}`).join(' ');
-  const dots = points.map((point) => `<circle cx="${toX(point.index).toFixed(1)}" cy="${toY(point.value).toFixed(1)}" r="2.7" fill="${item.color}" />`).join('');
+  const dots = points.map((point) => `<circle cx="${toX(point.index).toFixed(1)}" cy="${toY(point.value).toFixed(1)}" r="3.4" fill="${item.color}" stroke="#fff" stroke-width="1.5" />`).join('');
   const guides = [60, 70, 80, 90, 100].map((value) => {
     const y = toY(value);
-    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="#d7d7d7" stroke-width="1" /><text x="${padL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#555" font-size="8">${value}</text>`;
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="#d7d7d7" stroke-width="1" /><text x="${padL - 7}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#555" font-size="9">${value}</text>`;
   }).join('');
-  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 15}" text-anchor="middle" fill="#555" font-size="7">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
-  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 5}" text-anchor="middle" fill="#555" font-size="7">${Math.round(value)}%</text>`).join('');
+  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 18}" text-anchor="middle" fill="#555" font-size="9">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
+  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="#555" font-size="8">${Math.round(value)}%</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">
     ${guides}
-    ${bars}
-    ${line ? `<path d="${line}" fill="none" stroke="${item.color}" stroke-width="2" />${dots}` : `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#777" font-size="10">No scores</text>`}
+    <line x1="${padL}" y1="${(padT + chartH).toFixed(1)}" x2="${W - padR}" y2="${(padT + chartH).toFixed(1)}" stroke="#aeb7c4" stroke-width="1" />
+    ${line ? `<path d="${line}" fill="none" stroke="${item.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />${dots}` : `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#777" font-size="11">No scores</text>`}
     ${labels}
     ${scoreLabels}
   </svg>`;
@@ -4690,10 +5835,6 @@ function gradeGraphReport(url, yearId, selectedYear) {
     <section class="chart-panel grade-graph">
       <div class="grade-graph-screen">
         <div class="chart-head"><h2>Grade Graph</h2><span>${scope === 'student' && selectedStudent ? esc(studentDisplayName(selectedStudent)) : selectedGrade ? `Grade ${esc(selectedGrade)}` : 'No grade selected'}</span></div>
-        ${gradeGraphSvg(series, graphPeriods)}
-        <div class="graph-legend">
-          ${series.map((item) => `<span><i style="--legend-color:${item.color}"></i>${esc(item.name)}</span>`).join('') || `<span>No subjects with scores yet.</span>`}
-        </div>
       </div>
       <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
         ${series.map((item) => {
@@ -5471,6 +6612,46 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=weights', headers);
   }
 
+  if (p === '/letter-grades') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const schoolYearId = asInt(body.schoolYearId);
+    const groupId = asInt(body.letterGroupId);
+    const name = cleanText(body.name, 120) || 'Letter Grades';
+    const subjectId = asInt(body.subjectId);
+    const minGrade = cleanGrade(body.minGrade) || '1';
+    const maxGrade = cleanGrade(body.maxGrade) || '12';
+    const savedGroupId = groupId || insertReturningId(`INSERT INTO os_letter_grade_groups (school_year_id, name, min_grade, max_grade, subject_id)
+      VALUES (${schoolYearId}, ${sqlValue(name)}, ${sqlValue(minGrade)}, ${sqlValue(maxGrade)}, ${subjectId || 'NULL'})`);
+    if (groupId) {
+      runSql(`UPDATE os_letter_grade_groups
+        SET name=${sqlValue(name)},
+            min_grade=${sqlValue(minGrade)},
+            max_grade=${sqlValue(maxGrade)},
+            subject_id=${subjectId || 'NULL'}
+        WHERE id=${groupId};`);
+      runSql(`DELETE FROM os_letter_grade_items WHERE group_id=${groupId};`);
+    }
+    Object.keys(body)
+      .filter((key) => /^letter_\d+$/.test(key))
+      .map((key) => Number(key.replace('letter_', '')))
+      .sort((a, b) => a - b)
+      .forEach((index) => {
+        const letter = cleanText(body[`letter_${index}`], 12);
+        const threshold = Number(body[`threshold_${index}`]);
+        if (!letter || !Number.isFinite(threshold)) return;
+        runSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
+          VALUES (${savedGroupId}, ${sqlValue(letter)}, ${Math.max(0, Math.min(100, threshold))}, ${index});`);
+      });
+    const itemCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_items WHERE group_id=${savedGroupId};`)[0]?.count || 0;
+    if (!itemCount) {
+      DEFAULT_LETTER_GRADES.forEach(([letter, threshold], index) => {
+        runSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
+          VALUES (${savedGroupId}, ${sqlValue(letter)}, ${Number(threshold)}, ${index});`);
+      });
+    }
+    return redirect(res, '/setup?section=letter-grades', headers);
+  }
+
   if (p === '/system-settings') {
     if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
     const schoolName = cleanText(body.schoolName, 120) || DEFAULT_SCHOOL_NAME;
@@ -5538,6 +6719,79 @@ function handlePost(req, res, p, body, user, headers) {
     const existingAssignmentId = asInt(body.assignmentId);
     const scoreMode = cleanScoreMode(body.scoreMode);
     if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel)) return sendText(res, 403, 'Forbidden');
+    if (body.action === 'grid-score') {
+      const assignmentId = asInt(body.assignmentId);
+      const studentId = asInt(body.studentId);
+      const assignment = querySql(`SELECT id, max_score FROM os_assignments
+        WHERE id=${assignmentId}
+          AND school_year_id=${schoolYearId}
+          AND grade_level=${sqlValue(gradeLevel)}
+          AND subject_id=${subjectId}
+        LIMIT 1;`)[0];
+      if (!assignment || !studentId) return sendJson(res, 400, { ok: false, error: 'Invalid score cell' }, headers);
+      const rawValue = String(body.scoreValue ?? '').trim();
+      let percent = null;
+      if (!rawValue) {
+        runSql(`DELETE FROM os_scores WHERE assignment_id=${assignmentId} AND student_id=${studentId};`);
+      } else {
+        const maxScore = asPoints(assignment.max_score);
+        const score = scoreInputToPoints(rawValue, scoreMode, maxScore);
+        if (score === null) return sendJson(res, 400, { ok: false, error: 'Invalid score' }, headers);
+        runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
+          ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
+        percent = maxScore > 0 ? (score / maxScore) * 100 : null;
+      }
+      const scale = letterGradeScale(schoolYearId, gradeLevel, subjectId);
+      return sendJson(res, 200, { ok: true, percent, letter: gradebookLetter(percent, scale) }, headers);
+    }
+    if (body.action === 'update-assignment') {
+      const assignmentId = asInt(body.assignmentId);
+      const redirectTo = `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&grid=on`;
+      const assignment = querySql(`SELECT id FROM os_assignments
+        WHERE id=${assignmentId}
+          AND school_year_id=${schoolYearId}
+          AND grade_level=${sqlValue(gradeLevel)}
+          AND subject_id=${subjectId}
+        LIMIT 1;`)[0];
+      if (!assignment) return sendText(res, 404, 'Assignment not found');
+      if (body.deleteAssignment) {
+        runSql(`DELETE FROM os_assignments WHERE id=${assignmentId};`);
+        return redirect(res, redirectTo, headers);
+      }
+      runSql(`UPDATE os_assignments
+        SET title=${sqlValue(cleanText(body.title, 140))},
+            category=${sqlValue(normalizeCategory(body.category))},
+            assignment_date=${sqlValue(cleanDate(body.assignmentDate))},
+            max_score=${asPoints(body.maxScore)}
+        WHERE id=${assignmentId};`);
+      return redirect(res, redirectTo, headers);
+    }
+    if (body.action === 'grid-scores') {
+      if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+      const assignmentIds = new Set();
+      Object.keys(body).forEach((key) => {
+        const match = key.match(/^gridscore_(\d+)_(\d+)$/);
+        if (match) assignmentIds.add(asInt(match[1]));
+      });
+      const allowedAssignments = assignmentIds.size ? new Map(querySql(`SELECT id, max_score FROM os_assignments
+        WHERE school_year_id=${schoolYearId}
+          AND grade_level=${sqlValue(gradeLevel)}
+          AND subject_id=${subjectId}
+          AND id IN (${[...assignmentIds].map(asInt).join(',')});`).map((row) => [asInt(row.id), asPoints(row.max_score)])) : new Map();
+      Object.keys(body).forEach((key) => {
+        const match = key.match(/^gridscore_(\d+)_(\d+)$/);
+        if (!match) return;
+        const assignmentId = asInt(match[1]);
+        const studentId = asInt(match[2]);
+        const maxScore = allowedAssignments.get(assignmentId);
+        if (!maxScore) return;
+        const score = scoreInputToPoints(body[key], scoreMode, maxScore);
+        if (score === null) return;
+        runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
+          ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
+      });
+      return redirect(res, `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&grid=on`, headers);
+    }
     const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
     const maxScore = existingAssignmentId
       ? asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${existingAssignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score)
@@ -5553,7 +6807,7 @@ function handlePost(req, res, p, body, user, headers) {
       runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
         ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
     });
-    return redirect(res, `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&assignmentId=${assignmentId}`, headers);
+    return redirect(res, `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&assignmentId=${assignmentId}${body.gridMode === 'on' ? '&grid=on' : ''}`, headers);
   }
 
   if (p === '/assignments') {
@@ -5691,6 +6945,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/gradebook') {
       const markingPeriodId = asInt(url.searchParams.get('markingPeriodId'));
       if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+      const gridParam = cleanText(url.searchParams.get('grid'), 12);
+      if (gridParam === 'on' || gridParam === 'off') appendSetCookie(headers, `gradebookGrid=${gridParam}; Path=/; SameSite=Strict; Max-Age=31536000`);
       return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
     }
     if (p === '/assignments') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Assignments', content: assignmentsPage(req, url, user, selected, csrfToken) }), headers);
