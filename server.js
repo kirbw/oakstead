@@ -472,10 +472,16 @@ CREATE TABLE IF NOT EXISTS os_school_districts (
   name TEXT NOT NULL UNIQUE,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS os_congregations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS os_families (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   family_name TEXT NOT NULL,
   school_district_id INTEGER,
+  congregation_id INTEGER,
   father_name TEXT,
   mother_name TEXT,
   father_phone TEXT,
@@ -484,7 +490,8 @@ CREATE TABLE IF NOT EXISTS os_families (
   email TEXT,
   address TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_district_id) REFERENCES os_school_districts(id)
+  FOREIGN KEY (school_district_id) REFERENCES os_school_districts(id),
+  FOREIGN KEY (congregation_id) REFERENCES os_congregations(id)
 );
 CREATE TABLE IF NOT EXISTS os_students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -708,6 +715,7 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
   ensureColumn('os_school_years', 'school_days', 'school_days INTEGER DEFAULT 180');
   ensureColumn('os_assignments', 'marking_period_id', 'marking_period_id INTEGER');
   ensureColumn('os_families', 'school_district_id', 'school_district_id INTEGER');
+  ensureColumn('os_families', 'congregation_id', 'congregation_id INTEGER');
   ensureColumn('os_families', 'father_phone', 'father_phone TEXT');
   ensureColumn('os_families', 'mother_phone', 'mother_phone TEXT');
   ensureColumn('os_students', 'middle_name', 'middle_name TEXT');
@@ -1224,16 +1232,9 @@ function displayCategoryShort(category) {
   return esc(cat);
 }
 
-function gradebookShortcut(category) {
-  const cat = normalizeCategory(category);
-  if (cat === 'Quiz') return 'Q';
-  if (cat === 'Test') return 'T';
-  return 'H';
-}
-
 function gradebookTitle(category, title) {
   const cleanTitle = cleanText(title, 140);
-  return `${gradebookShortcut(category)}-${cleanTitle || displayCategoryShort(category)}`;
+  return cleanTitle || displayCategoryShort(category);
 }
 
 function gradebookLetter(value, scale = DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }))) {
@@ -1596,6 +1597,28 @@ button, select, input { min-height: 42px; }
 }
 .grid-2, .grid-3, .grid-4 { display: grid; gap: .7rem; grid-template-columns: 1fr; }
 .form-grid { display: grid; gap: .7rem; grid-template-columns: 1fr; }
+.family-form-section {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: .7rem;
+  padding-top: .15rem;
+}
+.family-form-section + .family-form-section {
+  margin-top: .25rem;
+  padding-top: .85rem;
+  border-top: 1px solid var(--line);
+}
+.family-form-section h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: .92rem;
+  letter-spacing: 0;
+}
+.family-form-section-grid {
+  display: grid;
+  gap: .7rem;
+  grid-template-columns: 1fr;
+}
 label { display: grid; gap: .32rem; color: var(--muted); font-size: .86rem; font-weight: 650; }
 input, select, textarea {
   width: 100%;
@@ -1622,6 +1645,14 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
 }
 .primary-btn, .main button[type="submit"], .login button[type="submit"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-height: 42px;
+  height: auto;
+  justify-self: start;
+  align-self: end;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   background: var(--accent);
@@ -1629,6 +1660,9 @@ input:focus, select:focus, textarea:focus {
   font-weight: 800;
   padding: .62rem .85rem;
   cursor: pointer;
+}
+.form-grid button[type="submit"] {
+  grid-column: auto;
 }
 .secondary-btn {
   display: inline-flex;
@@ -1951,8 +1985,7 @@ tr:last-child td { border-bottom: 0; }
 .gb-grid-shell.letters-hidden .gb-cell-letter,
 .gb-grid-shell.letters-hidden .gb-grid-average sup,
 .gb-grid-shell.letters-hidden .gb-grid-student sup,
-.gb-grid-shell.letters-hidden .gb-grid-class-row sup,
-.gb-grid-shell.letters-hidden .gb-grid-row-end sup {
+.gb-grid-shell.letters-hidden .gb-grid-class-row sup {
   display: none;
 }
 .gb-grid-toolbar {
@@ -2083,7 +2116,6 @@ tr:last-child td { border-bottom: 0; }
 }
 .gb-grid-student-col { width: 150px; }
 .gb-grid-score-col { width: 54px; }
-.gb-grid-average-col { width: 54px; }
 .gb-grid-table th,
 .gb-grid-table td {
   width: 54px;
@@ -2252,10 +2284,10 @@ tr:last-child td { border-bottom: 0; }
   background: var(--grade-grid-band) !important;
   font-weight: 850;
 }
-.gb-grid-table tbody tr:nth-child(odd) td:not(.gb-grid-row-end) {
+.gb-grid-table tbody tr:nth-child(odd) td {
   background: color-mix(in srgb, var(--paper-strong) 70%, var(--bg));
 }
-.gb-grid-table tbody tr:nth-child(even) td:not(.gb-grid-row-end) {
+.gb-grid-table tbody tr:nth-child(even) td {
   background: var(--paper);
 }
 .gb-grid-score-cell {
@@ -2340,21 +2372,9 @@ tr:last-child td { border-bottom: 0; }
 }
 .gb-grid-average sup,
 .gb-grid-student sup,
-.gb-grid-class-row sup,
-.gb-grid-row-end sup {
+.gb-grid-class-row sup {
   font-size: .62em;
   margin-left: .05rem;
-}
-.gb-grid-row-end {
-  position: sticky;
-  right: 0;
-  z-index: 3;
-  min-width: 54px !important;
-  width: 54px !important;
-  background: var(--accent-soft) !important;
-  color: var(--accent-dark);
-  font-weight: 900;
-  border-left: 1px solid #c7d2fe !important;
 }
 .gb-grid-footer {
   position: sticky;
@@ -3375,6 +3395,7 @@ tr:last-child td { border-bottom: 0; }
   .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .form-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .family-form-section-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
   .compact-filters { grid-template-columns: repeat(auto-fill, minmax(130px, 180px)); }
@@ -3844,6 +3865,17 @@ function generateReportCardPdf(btn) {
   function gridHidden(container, name) {
     return container.querySelector('input[name="' + name + '"]')?.value || '';
   }
+  function updateGridAverages(result) {
+    if (!result || !result.display) return;
+    const assignmentId = String(result.assignmentId || '');
+    const studentId = String(result.studentId || '');
+    const assignmentAverage = assignmentId ? document.querySelector('[data-grid-assignment-average="' + assignmentId + '"]') : null;
+    const studentAverage = studentId ? document.querySelector('[data-grid-student-average="' + studentId + '"]') : null;
+    const classAverage = document.querySelector('[data-grid-class-average]');
+    if (assignmentAverage && result.display.assignmentAverage !== undefined) assignmentAverage.innerHTML = result.display.assignmentAverage;
+    if (studentAverage && result.display.studentAverage !== undefined) studentAverage.innerHTML = result.display.studentAverage;
+    if (classAverage && result.display.classAverage !== undefined) classAverage.innerHTML = result.display.classAverage;
+  }
   function autosaveGridInput(input) {
     const container = input.closest('[data-grid-autosave]');
     if (!container || input.value === input.dataset.originalValue) return;
@@ -3870,6 +3902,7 @@ function generateReportCardPdf(btn) {
         input.dataset.originalValue = input.value;
         const letter = input.closest('.gb-grid-score-cell')?.querySelector('.gb-cell-letter');
         if (letter && result.letter !== undefined) letter.textContent = result.letter || '';
+        updateGridAverages(result);
         markGridCell(input, 'saved');
         if (status) status.textContent = 'Saved';
       })
@@ -4119,9 +4152,11 @@ function dashboardPage(selectedYear) {
 
 function familiesPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const families = querySql(`SELECT f.*,
+  const congregations = querySql('SELECT * FROM os_congregations ORDER BY name;');
+  const families = querySql(`SELECT f.*, cng.name AS congregation_name,
       COUNT(st.id) AS child_count
     FROM os_families f
+    LEFT JOIN os_congregations cng ON cng.id = f.congregation_id
     LEFT JOIN os_students st ON st.family_id = f.id
     GROUP BY f.id
     ORDER BY f.family_name;`);
@@ -4133,6 +4168,7 @@ function familiesPage(selectedYear, csrfToken, url) {
     ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`);
   const classrooms = querySql(`SELECT id, name FROM os_classrooms WHERE school_year_id=${yearId} ORDER BY name;`);
   const classroomOptions = classrooms.map((room) => `<option value="${room.id}">${esc(room.name)}</option>`).join('');
+  const congregationOptions = (selected = '') => congregations.map((congregation) => `<option value="${congregation.id}" ${selectedAttr(congregation.id, selected)}>${esc(congregation.name)}</option>`).join('');
   const showAddFamily = url.searchParams.get('action') === 'add-family' || families.length === 0;
   const requestedFamilyId = asInt(url.searchParams.get('familyId'));
   const selectedFamily = !showAddFamily
@@ -4154,7 +4190,7 @@ function familiesPage(selectedYear, csrfToken, url) {
       const householdLine = parents ? `${family.family_name}, ${parents}` : family.family_name;
       return `<a class="family-link ${active}" href="/families?familyId=${family.id}">
         <strong>${esc(householdLine)}</strong>
-        <span>${esc(childText)}${contact ? ` / ${esc(contact)}` : ''}</span>
+        <span>${esc(childText)}${family.congregation_name ? ` / ${esc(family.congregation_name)}` : ''}${contact ? ` / ${esc(contact)}` : ''}</span>
       </a>`;
     }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
   </section>`;
@@ -4166,6 +4202,7 @@ function familiesPage(selectedYear, csrfToken, url) {
         ${csrfInput(csrfToken)}
         <label>Family Name<input name="familyName" required maxlength="120" /></label>
         <label>Phone<input name="phone" inputmode="tel" maxlength="40" /></label>
+        <label>Congregation<select name="congregationId"><option value="">Not selected</option>${congregationOptions()}</select></label>
         <label>Father<input name="fatherName" maxlength="120" /></label>
         <label>Mother<input name="motherName" maxlength="120" /></label>
         <label>Email<input name="email" type="email" maxlength="160" /></label>
@@ -4182,8 +4219,9 @@ function familiesPage(selectedYear, csrfToken, url) {
     </div>
     <div class="family-detail-body">
       <div class="detail-grid">
-        <div class="detail-item"><span>Parents</span><strong>${esc([selectedFamily.father_name, selectedFamily.mother_name].filter(Boolean).join(' / ')) || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Parents</span><strong>${esc([firstNameOnly(selectedFamily.father_name), firstNameOnly(selectedFamily.mother_name)].filter(Boolean).join(' / ')) || '&mdash;'}</strong></div>
         <div class="detail-item"><span>Phone</span><strong>${esc(selectedFamily.phone || '') || '&mdash;'}</strong></div>
+        <div class="detail-item"><span>Congregation</span><strong>${esc(selectedFamily.congregation_name || '') || '&mdash;'}</strong></div>
         <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
         <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
       </div>
@@ -4253,13 +4291,14 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'backups', 'updates'];
+  const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'backups', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
   const teachers = querySql('SELECT * FROM os_teachers ORDER BY name;');
   const subjects = querySql('SELECT * FROM os_subjects ORDER BY name;');
   const districts = querySql('SELECT * FROM os_school_districts ORDER BY name;');
+  const congregations = querySql('SELECT * FROM os_congregations ORDER BY name;');
   const roleGroups = querySql('SELECT * FROM os_role_groups ORDER BY name;');
   const roleTypes = querySql('SELECT rt.*, rg.name AS group_name FROM os_role_types rt JOIN os_role_groups rg ON rg.id = rt.group_id ORDER BY rg.name, rt.name;');
   const personRoles = querySql(`SELECT pr.*, rg.name AS group_name, rt.name AS role_name
@@ -4282,10 +4321,11 @@ function setupPage(selectedYear, csrfToken, url) {
     JOIN os_subjects s ON s.id = gs.subject_id
     WHERE gs.school_year_id=${yearId}
     ORDER BY gs.grade_level, s.name;`);
-  const families = querySql(`SELECT f.*, sd.name AS school_district_name,
+  const families = querySql(`SELECT f.*, sd.name AS school_district_name, cng.name AS congregation_name,
       COUNT(st.id) AS child_count
     FROM os_families f
     LEFT JOIN os_school_districts sd ON sd.id = f.school_district_id
+    LEFT JOIN os_congregations cng ON cng.id = f.congregation_id
     LEFT JOIN os_students st ON st.family_id = f.id
     GROUP BY f.id
     ORDER BY f.family_name;`);
@@ -4319,12 +4359,14 @@ function setupPage(selectedYear, csrfToken, url) {
   const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
   const districtOptions = (selected = '') => districts.map((district) => `<option value="${district.id}" ${selectedAttr(district.id, selected)}>${esc(district.name)}</option>`).join('');
+  const congregationOptions = (selected = '') => congregations.map((congregation) => `<option value="${congregation.id}" ${selectedAttr(congregation.id, selected)}>${esc(congregation.name)}</option>`).join('');
   const updateStatus = readUpdateStatus();
   const backups = listDatabaseBackups();
   const backupFreq = backupFrequency(getSetting('backup_frequency', 'manual'));
   const setupLinks = [
     ['families', 'Families', `${families.length} households`],
     ['districts', 'School Districts', `${districts.length} districts`],
+    ['congregations', 'Congregations', `${congregations.length} churches`],
     ['teachers', 'Teachers', `${teachers.length} records`],
     ['classrooms', 'Classrooms', `${classrooms.length} rooms in ${selectedYear.name}`],
     ['subjects', 'Subjects', `${subjects.length} subjects`],
@@ -4364,7 +4406,7 @@ function setupPage(selectedYear, csrfToken, url) {
       const contact = [family.father_phone || family.phone, family.mother_phone].filter(Boolean).join(' / ');
       return `<a class="family-link ${active}" href="/setup?section=families&familyId=${family.id}">
         <strong>${esc(householdLine)}</strong>
-        <span>${esc(childText)}${family.school_district_name ? ` / ${esc(family.school_district_name)}` : ''}${contact ? ` / ${esc(contact)}` : ''}</span>
+        <span>${esc(childText)}${family.school_district_name ? ` / ${esc(family.school_district_name)}` : ''}${family.congregation_name ? ` / ${esc(family.congregation_name)}` : ''}${contact ? ` / ${esc(contact)}` : ''}</span>
       </a>`;
     }).join('') || `<div style="padding:.9rem">${emptyState('No families have been entered yet.')}</div>`}
   </section>`;
@@ -4377,14 +4419,30 @@ function setupPage(selectedYear, csrfToken, url) {
       <form method="post" action="/families" class="form-grid two">
         ${csrfInput(csrfToken)}
         ${familyForForm ? `<input type="hidden" name="familyId" value="${familyForForm.id}" />` : ''}
-        <label>Last Name<input name="familyName" required maxlength="120" value="${esc(familyForForm?.family_name || '')}" /></label>
-        <label>School District<select name="schoolDistrictId"><option value="">Not selected</option>${districtOptions(familyForForm?.school_district_id || '')}</select></label>
-        <label>Father<input name="fatherName" maxlength="120" value="${esc(familyForForm?.father_name || '')}" /></label>
-        <label>Father Phone<input name="fatherPhone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.father_phone || familyForForm?.phone || '')}" /></label>
-        <label>Mother<input name="motherName" maxlength="120" value="${esc(familyForForm?.mother_name || '')}" /></label>
-        <label>Mother Phone<input name="motherPhone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.mother_phone || '')}" /></label>
-        <label>Email<input name="email" type="email" maxlength="160" value="${esc(familyForForm?.email || '')}" /></label>
-        <label>Address<input name="address" maxlength="220" value="${esc(familyForForm?.address || '')}" /></label>
+        <div class="family-form-section">
+          <h3>Household</h3>
+          <div class="family-form-section-grid two">
+            <label>Last Name<input name="familyName" required maxlength="120" value="${esc(familyForForm?.family_name || '')}" /></label>
+            <label>Father<input name="fatherName" maxlength="120" value="${esc(firstNameOnly(familyForForm?.father_name || ''))}" /></label>
+            <label>Mother<input name="motherName" maxlength="120" value="${esc(firstNameOnly(familyForForm?.mother_name || ''))}" /></label>
+          </div>
+        </div>
+        <div class="family-form-section">
+          <h3>Contact</h3>
+          <div class="family-form-section-grid two">
+            <label>Father Phone<input name="fatherPhone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.father_phone || familyForForm?.phone || '')}" /></label>
+            <label>Mother Phone<input name="motherPhone" inputmode="tel" maxlength="40" value="${esc(familyForForm?.mother_phone || '')}" /></label>
+            <label>Email<input name="email" type="email" maxlength="160" value="${esc(familyForForm?.email || '')}" /></label>
+            <label>Address<input name="address" maxlength="220" value="${esc(familyForForm?.address || '')}" /></label>
+          </div>
+        </div>
+        <div class="family-form-section">
+          <h3>Church and District</h3>
+          <div class="family-form-section-grid two">
+            <label>Congregation<select name="congregationId"><option value="">Not selected</option>${congregationOptions(familyForForm?.congregation_id || '')}</select></label>
+            <label>School District<select name="schoolDistrictId"><option value="">Not selected</option>${districtOptions(familyForForm?.school_district_id || '')}</select></label>
+          </div>
+        </div>
         <button type="submit">${familyForForm ? 'Save Changes' : 'Save Family'}</button>
       </form>
     </div>
@@ -4408,18 +4466,24 @@ function setupPage(selectedYear, csrfToken, url) {
       <h2>${esc(selectedFamily.family_name)}</h2>
       <div class="module-actions">
         <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=edit-family">Edit</a>
-        <a class="page-action compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-child">Add Child</a>
       </div>
     </div>
     <div class="family-detail-body">
 	      <div class="detail-grid">
-	        <div class="detail-item"><span>Father</span><strong>${esc(selectedFamily.father_name || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Father</span><strong>${esc(firstNameOnly(selectedFamily.father_name || '')) || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>Mother</span><strong>${esc(firstNameOnly(selectedFamily.mother_name || '')) || '&mdash;'}</strong></div>
+	      </div>
+	      <div class="subhead"><h3>Contact</h3></div>
+	      <div class="detail-grid">
 	        <div class="detail-item"><span>Father Phone</span><strong>${esc(selectedFamily.father_phone || selectedFamily.phone || '') || '&mdash;'}</strong></div>
-	        <div class="detail-item"><span>Mother</span><strong>${esc(selectedFamily.mother_name || '') || '&mdash;'}</strong></div>
 	        <div class="detail-item"><span>Mother Phone</span><strong>${esc(selectedFamily.mother_phone || '') || '&mdash;'}</strong></div>
-	        <div class="detail-item"><span>School District</span><strong>${esc(selectedFamily.school_district_name || '') || '&mdash;'}</strong></div>
 	        <div class="detail-item"><span>Email</span><strong>${esc(selectedFamily.email || '') || '&mdash;'}</strong></div>
 	        <div class="detail-item"><span>Address</span><strong>${esc(selectedFamily.address || '') || '&mdash;'}</strong></div>
+	      </div>
+	      <div class="subhead"><h3>Church and District</h3></div>
+	      <div class="detail-grid">
+	        <div class="detail-item"><span>Congregation</span><strong>${esc(selectedFamily.congregation_name || '') || '&mdash;'}</strong></div>
+	        <div class="detail-item"><span>School District</span><strong>${esc(selectedFamily.school_district_name || '') || '&mdash;'}</strong></div>
 	      </div>
 	      <div class="subhead"><h3>Parent Groups and Roles</h3></div>
 	      <div class="table-wrap compact-table"><table>
@@ -4450,7 +4514,7 @@ function setupPage(selectedYear, csrfToken, url) {
 	        <a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-mother-role">Add Mother Role</a>
 	      </div>
 	      ${(action === 'add-father-role' || action === 'add-mother-role') ? `<div class="subhead"><h3>${action === 'add-father-role' ? 'Add Father Role' : 'Add Mother Role'}</h3><a class="secondary-btn compact-action" href="/setup?section=families&familyId=${selectedFamily.id}">Cancel</a></div>${roleAssignmentForm({ csrfToken, redirectTo: `/setup?section=families&familyId=${selectedFamily.id}`, personType: action === 'add-father-role' ? 'father' : 'mother', personId: selectedFamily.id, roleGroups, roleTypes })}` : ''}
-	      <div class="subhead"><h3>Children</h3><span class="family-count">${esc(selectedYear.name)}</span></div>
+	      <div class="subhead"><h3>Children</h3><div class="module-actions"><span class="family-count">${esc(selectedYear.name)}</span><a class="page-action compact-action" href="/setup?section=families&familyId=${selectedFamily.id}&action=add-child">Add Child</a></div></div>
       <div class="child-list">
         ${selectedChildren.map((student) => `<div class="child-row">
           <div class="child-row-main">
@@ -4512,6 +4576,30 @@ function setupPage(selectedYear, csrfToken, url) {
           const count = families.filter((family) => asInt(family.school_district_id) === asInt(district.id)).length;
           return `<tr><td>${esc(district.name)}</td><td>${count}</td><td><a class="text-action" href="/setup?section=districts&districtId=${district.id}">Edit</a></td></tr>`;
         }).join('') || `<tr><td colspan="3">${emptyState('No school districts yet.')}</td></tr>`}
+      </table></div>
+    </div>
+  </section>`;
+
+  const congregationEdit = congregations.find((congregation) => congregation.id === asInt(url.searchParams.get('congregationId')));
+  const congregationForm = `<form method="post" action="/congregations" class="form-grid two">
+    ${csrfInput(csrfToken)}
+    ${congregationEdit ? `<input type="hidden" name="congregationId" value="${congregationEdit.id}" />` : ''}
+    <label>Church Name<input name="name" required maxlength="140" value="${esc(congregationEdit?.name || '')}" /></label>
+    <button type="submit">${congregationEdit ? 'Save Church' : 'Add Church'}</button>
+  </form>`;
+  const congregationsModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Congregations</h2>
+      <div class="module-actions"><span class="family-count">${congregations.length}</span><a class="page-action compact-action" href="/setup?section=congregations&action=add-congregation">Add Church</a></div>
+    </div>
+    <div class="family-detail-body">
+      ${(action === 'add-congregation' || congregationEdit) ? `<div class="subhead"><h3>${congregationEdit ? 'Edit Church' : 'Add Church'}</h3><a class="secondary-btn compact-action" href="/setup?section=congregations">Cancel</a></div>${congregationForm}` : ''}
+      <div class="table-wrap compact-table"><table>
+        <tr><th>Church</th><th>Families</th><th></th></tr>
+        ${congregations.map((congregation) => {
+          const count = families.filter((family) => asInt(family.congregation_id) === asInt(congregation.id)).length;
+          return `<tr><td>${esc(congregation.name)}</td><td>${count}</td><td><a class="text-action" href="/setup?section=congregations&congregationId=${congregation.id}">Edit</a></td></tr>`;
+        }).join('') || `<tr><td colspan="3">${emptyState('No congregations yet.')}</td></tr>`}
       </table></div>
     </div>
   </section>`;
@@ -4893,6 +4981,7 @@ function setupPage(selectedYear, csrfToken, url) {
   const modules = {
     families: familiesModule,
     districts: districtsModule,
+    congregations: congregationsModule,
     teachers: teachersModule,
     classrooms: classroomsModule,
     subjects: subjectsModule,
@@ -4970,12 +5059,12 @@ function gradebookGridView({
     </th>`;
   }).join('');
 
-  const classAverageCells = gridAssignments.map((assignment) => `<td class="gb-grid-average gb-type-${gradebookCategoryClass(assignment.category)}">${gradebookDisplayScore(assignment.avg_score, letterScale)}</td>`).join('');
+  const classAverageCells = gridAssignments.map((assignment) => `<td class="gb-grid-average gb-type-${gradebookCategoryClass(assignment.category)}" data-grid-assignment-average="${assignment.id}">${gradebookDisplayScore(assignment.avg_score, letterScale)}</td>`).join('');
   const pointsCells = gridAssignments.map((assignment) => `<td>${compactNumber(assignment.max_score)}</td>`).join('');
   const emptyAssignmentCells = gridAssignments.map(() => '<td></td>').join('');
 
   const studentRows = students.map((student) => {
-    const studentAverage = averageData.studentAverages.get(student.id);
+    const studentAverage = averageData.studentAverages.get(asInt(student.id));
     const cells = gridAssignments.map((assignment) => {
       const key = `${asInt(assignment.id)}:${asInt(student.id)}`;
       const row = scoresByCell.get(key);
@@ -4990,9 +5079,8 @@ function gradebookGridView({
       </td>`;
     }).join('');
     return `<tr>
-      <th class="gb-grid-student">${esc(student.first_name)} <span>${gradebookDisplayScore(studentAverage, letterScale)}</span></th>
+      <th class="gb-grid-student">${esc(student.first_name)} <span data-grid-student-average="${student.id}">${gradebookDisplayScore(studentAverage, letterScale)}</span></th>
       ${cells}
-      <td class="gb-grid-row-end">${gradebookDisplayScore(studentAverage, letterScale)}</td>
     </tr>`;
   }).join('');
 
@@ -5054,7 +5142,6 @@ function gradebookGridView({
           <colgroup>
             <col class="gb-grid-student-col" />
             ${gridAssignments.map(() => '<col class="gb-grid-score-col" />').join('')}
-            <col class="gb-grid-average-col" />
           </colgroup>
           <thead>
             <tr class="gb-grid-top-row">
@@ -5062,7 +5149,6 @@ function gradebookGridView({
                 <button class="gb-grid-add-btn" type="button" data-dialog-target="add-assignment-dialog" title="Add assignment" aria-label="Add assignment">+</button>
               </th>
               ${headerCells}
-              <th class="gb-grid-add" rowspan="2"></th>
             </tr>
             <tr class="gb-grid-icon-row">
               ${gridAssignments.map((assignment) => `<th class="gb-type-${gradebookCategoryClass(assignment.category)}"><button class="gb-edit-icon" type="button" data-dialog-target="assignment-dialog-${assignment.id}" aria-label="Edit ${esc(assignment.title)}">${editIcon}</button></th>`).join('')}
@@ -5070,16 +5156,14 @@ function gradebookGridView({
           </thead>
           <tbody>
             <tr class="gb-grid-class-row">
-              <th>Class Average <span>${gradebookDisplayScore(averageData.classAverage, letterScale)}</span></th>
+              <th>Class Average <span data-grid-class-average>${gradebookDisplayScore(averageData.classAverage, letterScale)}</span></th>
               ${classAverageCells}
-              <td></td>
             </tr>
             <tr class="gb-grid-points-row">
               <th>Points</th>
               ${pointsCells}
-              <td></td>
             </tr>
-            ${students.length ? studentRows : `<tr><th>No Students</th>${emptyAssignmentCells}<td></td></tr>`}
+            ${students.length ? studentRows : `<tr><th>No Students</th>${emptyAssignmentCells}</tr>`}
           </tbody>
         </table>
         </div>
@@ -5621,8 +5705,10 @@ function reportOverview(yearId, selectedYear) {
 
 function familiesReport(yearId, selectedYear) {
   const rows = querySql(`SELECT f.id, f.family_name, f.father_name, f.mother_name, f.father_phone, f.mother_phone, f.phone, f.address,
+      cng.name AS congregation_name,
       COUNT(sy.id) AS student_count
     FROM os_families f
+    LEFT JOIN os_congregations cng ON cng.id = f.congregation_id
     LEFT JOIN os_students st ON st.family_id = f.id
     LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId} AND sy.status='enrolled'
     GROUP BY f.id
@@ -5631,16 +5717,17 @@ function familiesReport(yearId, selectedYear) {
   <section class="ledger family-report">
     <div class="ledger-head"><h2>Families</h2><p>Parent names, household contact information, and enrolled student counts.</p></div>
     <div class="table-wrap"><table>
-      <tr><th>Family</th><th>Address</th><th>Contact</th><th>Students</th></tr>
+      <tr><th>Family</th><th>Congregation</th><th>Address</th><th>Contact</th><th>Students</th></tr>
       ${rows.map((row) => {
         const contact = row.father_phone || row.mother_phone || row.phone || '';
         return `<tr>
           <td>${esc(familyReportName(row))}</td>
+          <td>${esc(row.congregation_name || '') || '&mdash;'}</td>
           <td>${esc(row.address || '') || '&mdash;'}</td>
           <td>${esc(contact) || '&mdash;'}</td>
           <td>${Number(row.student_count || 0)}</td>
         </tr>`;
-      }).join('') || `<tr><td colspan="4">${emptyState('No families have been entered yet.')}</td></tr>`}
+      }).join('') || `<tr><td colspan="5">${emptyState('No families have been entered yet.')}</td></tr>`}
     </table></div>
   </section>`;
 }
@@ -6358,8 +6445,9 @@ function handlePost(req, res, p, body, user, headers) {
       runSql(`UPDATE os_families
         SET family_name=${sqlValue(cleanText(body.familyName, 120))},
             school_district_id=${asInt(body.schoolDistrictId) || 'NULL'},
-            father_name=${sqlValue(cleanText(body.fatherName, 120))},
-            mother_name=${sqlValue(cleanText(body.motherName, 120))},
+            congregation_id=${asInt(body.congregationId) || 'NULL'},
+            father_name=${sqlValue(firstNameOnly(body.fatherName))},
+            mother_name=${sqlValue(firstNameOnly(body.motherName))},
             father_phone=${sqlValue(cleanText(body.fatherPhone, 40))},
             mother_phone=${sqlValue(cleanText(body.motherPhone, 40))},
             phone=${sqlValue(cleanText(body.fatherPhone, 40))},
@@ -6368,8 +6456,8 @@ function handlePost(req, res, p, body, user, headers) {
         WHERE id=${familyId};`);
       return redirect(res, `/setup?section=families&familyId=${familyId}`, headers);
     }
-    const newFamilyId = insertReturningId(`INSERT INTO os_families (family_name, school_district_id, father_name, mother_name, father_phone, mother_phone, phone, email, address)
-      VALUES (${sqlValue(cleanText(body.familyName, 120))}, ${asInt(body.schoolDistrictId) || 'NULL'}, ${sqlValue(cleanText(body.fatherName, 120))}, ${sqlValue(cleanText(body.motherName, 120))}, ${sqlValue(cleanText(body.fatherPhone, 40))}, ${sqlValue(cleanText(body.motherPhone, 40))}, ${sqlValue(cleanText(body.fatherPhone, 40))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.address, 220))})`);
+    const newFamilyId = insertReturningId(`INSERT INTO os_families (family_name, school_district_id, congregation_id, father_name, mother_name, father_phone, mother_phone, phone, email, address)
+      VALUES (${sqlValue(cleanText(body.familyName, 120))}, ${asInt(body.schoolDistrictId) || 'NULL'}, ${asInt(body.congregationId) || 'NULL'}, ${sqlValue(firstNameOnly(body.fatherName))}, ${sqlValue(firstNameOnly(body.motherName))}, ${sqlValue(cleanText(body.fatherPhone, 40))}, ${sqlValue(cleanText(body.motherPhone, 40))}, ${sqlValue(cleanText(body.fatherPhone, 40))}, ${sqlValue(cleanText(body.email, 160))}, ${sqlValue(cleanText(body.address, 220))})`);
     return redirect(res, `/setup?section=families&familyId=${newFamilyId}`, headers);
   }
 
@@ -6382,6 +6470,17 @@ function handlePost(req, res, p, body, user, headers) {
     }
     runSql(`INSERT OR IGNORE INTO os_school_districts (name) VALUES (${sqlValue(cleanText(body.name, 140))});`);
     return redirect(res, '/setup?section=districts', headers);
+  }
+
+  if (p === '/congregations') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    const congregationId = asInt(body.congregationId);
+    if (congregationId) {
+      runSql(`UPDATE os_congregations SET name=${sqlValue(cleanText(body.name, 140))} WHERE id=${congregationId};`);
+      return redirect(res, '/setup?section=congregations', headers);
+    }
+    runSql(`INSERT OR IGNORE INTO os_congregations (name) VALUES (${sqlValue(cleanText(body.name, 140))});`);
+    return redirect(res, '/setup?section=congregations', headers);
   }
 
   if (p === '/students') {
@@ -6767,7 +6866,29 @@ function handlePost(req, res, p, body, user, headers) {
         percent = maxScore > 0 ? (score / maxScore) * 100 : null;
       }
       const scale = letterGradeScale(schoolYearId, gradeLevel, subjectId);
-      return sendJson(res, 200, { ok: true, percent, letter: gradebookLetter(percent, scale) }, headers);
+      const period = querySql(`SELECT * FROM os_marking_periods WHERE id=${markingPeriodId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0] || null;
+      const assignmentAverage = querySql(`SELECT ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
+        FROM os_assignments a
+        LEFT JOIN os_scores sc ON sc.assignment_id = a.id
+        WHERE a.id=${assignmentId};`)[0]?.avg_score ?? null;
+      const studentIds = querySql(`SELECT student_id FROM os_student_years
+        WHERE school_year_id=${schoolYearId}
+          AND grade_level=${sqlValue(gradeLevel)}
+          AND status='enrolled';`).map((row) => asInt(row.student_id)).filter(Boolean);
+      const averageData = periodAverageRows(schoolYearId, gradeLevel, subjectId, studentIds, period);
+      const studentAverage = averageData.studentAverages.get(studentId);
+      return sendJson(res, 200, {
+        ok: true,
+        assignmentId,
+        studentId,
+        percent,
+        letter: gradebookLetter(percent, scale),
+        display: {
+          assignmentAverage: gradebookDisplayScore(assignmentAverage, scale),
+          studentAverage: gradebookDisplayScore(studentAverage, scale),
+          classAverage: gradebookDisplayScore(averageData.classAverage, scale)
+        }
+      }, headers);
     }
     if (body.action === 'update-assignment') {
       const assignmentId = asInt(body.assignmentId);

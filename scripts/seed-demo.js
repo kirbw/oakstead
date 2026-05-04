@@ -51,6 +51,7 @@ DELETE FROM os_role_groups;
 DELETE FROM os_emergency_contacts;
 DELETE FROM os_students;
 DELETE FROM os_families;
+DELETE FROM os_congregations;
 DELETE FROM os_school_districts;
 DELETE FROM os_teachers;
 DELETE FROM os_subjects;
@@ -111,6 +112,12 @@ function teacherId(name, phone, email, address) {
     VALUES (${sqlValue(name)}, ${sqlValue(email)}, ${sqlValue(phone)}, ${sqlValue(phone)}, ${sqlValue(address)})`);
 }
 
+function namedRecordId(tableName, name) {
+  const existing = findOne(`SELECT id FROM ${tableName} WHERE name=${sqlValue(name)}`);
+  if (existing) return existing.id;
+  return insertReturningId(`INSERT INTO ${tableName} (name) VALUES (${sqlValue(name)})`);
+}
+
 function classroomId(yearId, grade, teacher) {
   const roomName = `Room ${grade}`;
   const existing = findOne(`SELECT id FROM os_classrooms WHERE school_year_id=${yearId} AND name=${sqlValue(roomName)}`);
@@ -121,11 +128,17 @@ function classroomId(yearId, grade, teacher) {
   return id;
 }
 
-function familyId(family) {
+function familyId(family, schoolDistrictId, congregationId) {
   const existing = findOne(`SELECT id FROM os_families WHERE family_name=${sqlValue(family.last)} AND father_name=${sqlValue(family.father)} AND mother_name=${sqlValue(family.mother)}`);
-  if (existing) return existing.id;
-  return insertReturningId(`INSERT INTO os_families (family_name, father_name, mother_name, father_phone, mother_phone, phone, email, address)
-    VALUES (${sqlValue(family.last)}, ${sqlValue(family.father)}, ${sqlValue(family.mother)}, ${sqlValue(family.phone)}, ${sqlValue(family.motherPhone || '')}, ${sqlValue(family.phone)}, ${sqlValue(family.email)}, ${sqlValue(family.address)})`);
+  if (existing) {
+    run(`UPDATE os_families
+      SET school_district_id=${schoolDistrictId || 'NULL'},
+          congregation_id=${congregationId || 'NULL'}
+      WHERE id=${existing.id};`);
+    return existing.id;
+  }
+  return insertReturningId(`INSERT INTO os_families (family_name, school_district_id, congregation_id, father_name, mother_name, father_phone, mother_phone, phone, email, address)
+    VALUES (${sqlValue(family.last)}, ${schoolDistrictId || 'NULL'}, ${congregationId || 'NULL'}, ${sqlValue(family.father)}, ${sqlValue(family.mother)}, ${sqlValue(family.phone)}, ${sqlValue(family.motherPhone || '')}, ${sqlValue(family.phone)}, ${sqlValue(family.email)}, ${sqlValue(family.address)})`);
 }
 
 function studentId(familyIdValue, student) {
@@ -163,6 +176,24 @@ for (let grade = 1; grade <= 10; grade += 1) {
   subjectIds.forEach(([, id]) => run(`INSERT OR IGNORE INTO os_grade_subjects (school_year_id, grade_level, subject_id) VALUES (${yearId}, ${sqlValue(String(grade))}, ${id});`));
 }
 
+const schoolDistricts = [
+  'Carlisle Area School District',
+  'Big Spring School District',
+  'Cumberland Valley School District',
+  'Shippensburg Area School District',
+  'Mechanicsburg Area School District'
+];
+const congregations = [
+  'Oak Grove Mennonite Church',
+  'Meadow View Fellowship',
+  'Maple Run Church',
+  'Cedar Springs Congregation',
+  'Pleasant Valley Church',
+  'Bethel Christian Fellowship'
+];
+const schoolDistrictIds = schoolDistricts.map((name) => namedRecordId('os_school_districts', name));
+const congregationIds = congregations.map((name) => namedRecordId('os_congregations', name));
+
 [
   ['Grades 1-2', '1', '2', [['Lesson / Homework', 50], ['Quiz', 25], ['Test', 25]]],
   ['Grades 3-10', '3', '10', [['Lesson / Homework', 25], ['Quiz', 25], ['Test', 50]]]
@@ -173,16 +204,16 @@ for (let grade = 1; grade <= 10; grade += 1) {
 });
 
 const families = [
-  { last: 'Brubaker', father: 'Aaron Brubaker', mother: 'Lydia Brubaker', phone: '717-555-2101', email: 'brubaker@example.test', address: '118 Mill Road, Carlisle, PA 17015' },
-  { last: 'Ebersole', father: 'Caleb Ebersole', mother: 'Miriam Ebersole', phone: '717-555-2102', email: 'ebersole@example.test', address: '42 Ridge Avenue, Newville, PA 17241' },
-  { last: 'Fisher', father: 'Derek Fisher', mother: 'Anita Fisher', phone: '717-555-2103', email: 'fisher@example.test', address: '309 Walnut Bottom Road, Carlisle, PA 17015' },
-  { last: 'Good', father: 'Jonas Good', mother: 'Rachel Good', phone: '717-555-2104', email: 'good@example.test', address: '76 Spring Lane, Shippensburg, PA 17257' },
-  { last: 'Hoover', father: 'Matthew Hoover', mother: 'Elaine Hoover', phone: '717-555-2105', email: 'hoover@example.test', address: '551 Schoolhouse Road, Newburg, PA 17240' },
-  { last: 'King', father: 'Nathan King', mother: 'Priscilla King', phone: '717-555-2106', email: 'king@example.test', address: '17 Orchard View Drive, Carlisle, PA 17015' },
-  { last: 'Martin', father: 'Samuel Martin', mother: 'Grace Martin', phone: '717-555-2107', email: 'martin@example.test', address: '904 Creek Bend Road, Newville, PA 17241' },
-  { last: 'Miller', father: 'Philip Miller', mother: 'Joanna Miller', phone: '717-555-2108', email: 'miller@example.test', address: '63 Meadow Brook Lane, Carlisle, PA 17015' },
-  { last: 'Stoltzfus', father: 'Isaac Stoltzfus', mother: 'Naomi Stoltzfus', phone: '717-555-2109', email: 'stoltzfus@example.test', address: '225 Stone Church Road, Carlisle, PA 17015' },
-  { last: 'Yoder', father: 'Benjamin Yoder', mother: 'Kara Yoder', phone: '717-555-2110', email: 'yoder@example.test', address: '810 Locust Point Road, Mechanicsburg, PA 17050' }
+  { last: 'Brubaker', father: 'Aaron', mother: 'Lydia', phone: '717-555-2101', email: 'brubaker@example.test', address: '118 Mill Road, Carlisle, PA 17015' },
+  { last: 'Ebersole', father: 'Caleb', mother: 'Miriam', phone: '717-555-2102', email: 'ebersole@example.test', address: '42 Ridge Avenue, Newville, PA 17241' },
+  { last: 'Fisher', father: 'Derek', mother: 'Anita', phone: '717-555-2103', email: 'fisher@example.test', address: '309 Walnut Bottom Road, Carlisle, PA 17015' },
+  { last: 'Good', father: 'Jonas', mother: 'Rachel', phone: '717-555-2104', email: 'good@example.test', address: '76 Spring Lane, Shippensburg, PA 17257' },
+  { last: 'Hoover', father: 'Matthew', mother: 'Elaine', phone: '717-555-2105', email: 'hoover@example.test', address: '551 Schoolhouse Road, Newburg, PA 17240' },
+  { last: 'King', father: 'Nathan', mother: 'Priscilla', phone: '717-555-2106', email: 'king@example.test', address: '17 Orchard View Drive, Carlisle, PA 17015' },
+  { last: 'Martin', father: 'Samuel', mother: 'Grace', phone: '717-555-2107', email: 'martin@example.test', address: '904 Creek Bend Road, Newville, PA 17241' },
+  { last: 'Miller', father: 'Philip', mother: 'Joanna', phone: '717-555-2108', email: 'miller@example.test', address: '63 Meadow Brook Lane, Carlisle, PA 17015' },
+  { last: 'Stoltzfus', father: 'Isaac', mother: 'Naomi', phone: '717-555-2109', email: 'stoltzfus@example.test', address: '225 Stone Church Road, Carlisle, PA 17015' },
+  { last: 'Yoder', father: 'Benjamin', mother: 'Kara', phone: '717-555-2110', email: 'yoder@example.test', address: '810 Locust Point Road, Mechanicsburg, PA 17050' }
 ];
 
 const children = [
@@ -199,7 +230,11 @@ const children = [
 ];
 
 const familyIdByLast = new Map();
-families.forEach((family) => familyIdByLast.set(family.last, familyId(family)));
+families.forEach((family, index) => {
+  const schoolDistrictId = schoolDistrictIds[(index * 7 + family.last.length) % schoolDistrictIds.length];
+  const congregationId = congregationIds[(index * 5 + family.father.length) % congregationIds.length];
+  familyIdByLast.set(family.last, familyId(family, schoolDistrictId, congregationId));
+});
 
 const studentsByGrade = new Map();
 children.forEach(([last, kids]) => {
