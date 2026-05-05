@@ -21,7 +21,8 @@ Oakstead is a small-school records and gradebook app built for simple daily clas
 - Custom grade weights and letter grade scales by year, grade range, and subject
 - Reports for class averages and student subject averages
 - Printable family reports with congregation, contact, address, and enrolled-student counts
-- Admin and teacher sign-ins with secure sessions and CSRF protection
+- Admin, principal, teacher, and parent sign-ins with secure sessions and CSRF protection
+- Parent portal for household-linked child grade graphs and report cards
 - In-app system updates from GitHub with current release and pre-release channels
 - Static project website page in `website/`
 
@@ -69,6 +70,15 @@ admin / ChangeMeNow!
 ```
 
 Change the default password before using this with real school data.
+
+## User Roles
+
+Oakstead has four app login roles:
+
+- **Admin**: full access, including creating and editing other admins.
+- **Principal**: full school operations access, including setup, reports, backups, updates, teachers, and parent/teacher users, but cannot create or edit admin or principal accounts.
+- **Teacher**: can manage assignments, grades, report cards, and absences for students in classrooms linked to their teacher record. Teachers cannot access School Setup.
+- **Parent**: can use the parent portal for children in their linked family household, including grade graphs and report cards. Parents cannot change school records.
 
 ## Configuration
 
