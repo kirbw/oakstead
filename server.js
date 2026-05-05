@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const https = require('https');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const querystring = require('querystring');
 const { execFileSync, spawn, spawnSync } = require('child_process');
@@ -20,24 +22,63 @@ function loadEnvFile() {
 
 loadEnvFile();
 
-const PORT = Number(process.env.PORT) || 3000;
-const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const UPLOAD_DIR = path.join(PUBLIC_DIR, 'uploads');
-const BACKUP_DIR = path.join(__dirname, 'backups');
-const DEFAULT_LOGO_FILE = path.join(__dirname, 'assets', 'oakleaf.png');
+function parsePort(value, fallback = 3000) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
+}
+
+function cleanBindHost(value, fallback = '127.0.0.1') {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  if (text === 'localhost' || text === '127.0.0.1' || text === '0.0.0.0') return text;
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(text)) return text;
+  return fallback;
+}
+
+function cleanUpdateMode(value) {
+  return String(value || '').toLowerCase() === 'installer' ? 'installer' : 'git';
+}
+
+function normalizeRepositorySlug(value) {
+  const text = String(value || '').trim();
+  const githubMatch = text.match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?(?:[#?].*)?$/i);
+  if (githubMatch) return `${githubMatch[1]}/${githubMatch[2].replace(/\.git$/i, '')}`;
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text) ? text : '';
+}
+
+const APP_ROOT = __dirname;
+const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
+const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
+const DATA_DIR_IS_CUSTOM = Boolean(process.env.OAKSTEAD_DATA_DIR);
+const DATA_DIR = path.resolve(process.env.OAKSTEAD_DATA_DIR || APP_ROOT);
+const DEFAULT_PORT = parsePort(process.env.OAKSTEAD_DEFAULT_PORT, 3000);
+const DEFAULT_HOST = cleanBindHost(process.env.OAKSTEAD_DEFAULT_HOST, '127.0.0.1');
+const DB_FILE = process.env.DB_FILE ? path.resolve(process.env.DB_FILE) : path.join(DATA_DIR, 'school.db');
+const PUBLIC_DIR = path.join(APP_ROOT, 'public');
+const UPLOAD_DIR = DATA_DIR_IS_CUSTOM ? path.join(DATA_DIR, 'uploads') : path.join(PUBLIC_DIR, 'uploads');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const DEFAULT_LOGO_FILE = path.join(APP_ROOT, 'assets', 'oakleaf.png');
 const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
-const UPDATE_STATUS_FILE = path.join(__dirname, '.oakstead-update-status.json');
+const UPDATE_STATUS_FILE = path.join(DATA_DIR, '.oakstead-update-status.json');
+const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
+const UPDATE_MODE = cleanUpdateMode(process.env.OAKSTEAD_UPDATE_MODE || 'git');
+const RELEASE_REPO = normalizeRepositorySlug(process.env.OAKSTEAD_RELEASE_REPO)
+  || normalizeRepositorySlug(typeof PACKAGE_INFO.repository === 'string' ? PACKAGE_INFO.repository : PACKAGE_INFO.repository?.url)
+  || 'kirbw/oakstead';
 const DEFAULT_SCHOOL_NAME = 'Oakstead';
 const MAX_BODY_SIZE = 50_000_000;
 const SESSION_HOURS = 12;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 5;
-const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
 const DEMO_MODE = /^(1|true|yes|on)$/i.test(String(process.env.DEMO_MODE || ''));
 const DEMO_REFRESH_HOURS = Math.max(1, Math.min(24, Number(process.env.DEMO_REFRESH_HOURS) || 2));
+let ACTIVE_NETWORK = {
+  host: DEFAULT_HOST,
+  port: DEFAULT_PORT,
+  hostOverridden: Boolean(process.env.HOST),
+  portOverridden: Boolean(process.env.PORT)
+};
 
 const ROLE_ADMIN = 'admin';
 const ROLE_PRINCIPAL = 'principal';
@@ -60,6 +101,13 @@ const DEFAULT_LETTER_GRADES = [
   ['F', 0]
 ];
 const loginAttempts = new Map();
+
+function ensureRuntimeDirs() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -189,11 +237,11 @@ function normalizeCategory(value) {
 }
 
 function runSql(sql) {
-  return execFileSync('sqlite3', [DB_FILE, sql], { encoding: 'utf8' });
+  return execFileSync(SQLITE_BIN, [DB_FILE, sql], { encoding: 'utf8' });
 }
 
 function querySql(sql) {
-  const out = execFileSync('sqlite3', ['-json', DB_FILE, sql], { encoding: 'utf8' }).trim();
+  const out = execFileSync(SQLITE_BIN, ['-json', DB_FILE, sql], { encoding: 'utf8' }).trim();
   return out ? JSON.parse(out) : [];
 }
 
@@ -238,7 +286,7 @@ function listDatabaseBackups() {
 }
 
 function validateBackupDatabase(filePath) {
-  const output = execFileSync('sqlite3', [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
+  const output = execFileSync(SQLITE_BIN, [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
   if (output !== 'ok') throw new Error('Backup database did not pass integrity check.');
 }
 
@@ -252,7 +300,7 @@ function refreshDemoData(reason = 'scheduled') {
     cwd: __dirname,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 16,
-    env: { ...process.env, DB_FILE }
+    env: { ...process.env, DB_FILE, SQLITE_BIN }
   });
   if (result.stdout) console.log(result.stdout.trim());
   if (result.stderr) console.error(result.stderr.trim());
@@ -729,6 +777,8 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
   ensureColumn('os_users', 'parent_family_id', 'parent_family_id INTEGER');
 
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
   createDefaultRoleGroups();
   migrateLessonHomeworkWeights();
 
@@ -988,6 +1038,52 @@ function backupFrequency(value) {
   return ['manual', 'daily', 'weekly', 'monthly'].includes(clean) ? clean : 'manual';
 }
 
+function desiredNetworkConfig() {
+  const storedHost = getSetting('network_bind_host', DEFAULT_HOST);
+  const storedPort = getSetting('network_port', String(DEFAULT_PORT));
+  return {
+    host: process.env.HOST ? cleanBindHost(process.env.HOST, DEFAULT_HOST) : cleanBindHost(storedHost, DEFAULT_HOST),
+    port: process.env.PORT ? parsePort(process.env.PORT, DEFAULT_PORT) : parsePort(storedPort, DEFAULT_PORT),
+    hostOverridden: Boolean(process.env.HOST),
+    portOverridden: Boolean(process.env.PORT)
+  };
+}
+
+function localNetworkAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((item) => item && item.family === 'IPv4' && !item.internal)
+    .map((item) => item.address)
+    .filter((address, index, addresses) => addresses.indexOf(address) === index)
+    .sort();
+}
+
+function networkAccessLabel(host) {
+  return host === '0.0.0.0' ? 'LAN access' : 'Local only';
+}
+
+function networkUrls(config = ACTIVE_NETWORK) {
+  if (config.host === '0.0.0.0') {
+    const addresses = localNetworkAddresses();
+    return (addresses.length ? addresses : [os.hostname()]).map((host) => `http://${host}:${config.port}`);
+  }
+  return [`http://${config.host === 'localhost' ? '127.0.0.1' : config.host}:${config.port}`];
+}
+
+function networkStatus() {
+  const desired = desiredNetworkConfig();
+  return {
+    desired,
+    active: ACTIVE_NETWORK,
+    hostName: os.hostname(),
+    addresses: localNetworkAddresses(),
+    urls: networkUrls(ACTIVE_NETWORK),
+    desiredUrls: networkUrls(desired),
+    restartRequired: desired.host !== ACTIVE_NETWORK.host || desired.port !== ACTIVE_NETWORK.port,
+    envManaged: desired.hostOverridden || desired.portOverridden
+  };
+}
+
 function backupFrequencyLabel(value) {
   return { manual: 'Manual only', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[backupFrequency(value)];
 }
@@ -1019,13 +1115,18 @@ function defaultUpdateStatus() {
     running: false,
     phase: 'idle',
     percent: 0,
-    message: 'Ready to check for updates.',
+    message: UPDATE_MODE === 'installer' ? 'Ready to check GitHub releases for a Windows installer.' : 'Ready to check for updates.',
+    updateMode: UPDATE_MODE,
     channel: 'stable',
     version: APP_VERSION,
     targetVersion: '',
     latestVersion: '',
     latestTag: '',
     updateAvailable: false,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
     updatedAt: new Date().toISOString(),
     log: []
   };
@@ -1034,7 +1135,13 @@ function defaultUpdateStatus() {
 function readUpdateStatus() {
   try {
     if (!fs.existsSync(UPDATE_STATUS_FILE)) return defaultUpdateStatus();
-    return { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
+    const status = { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
+    if (status.latestVersion && compareVersions(status.latestVersion, APP_VERSION) <= 0) {
+      status.updateAvailable = false;
+      status.downloadUrl = '';
+      status.installerDownloadUrl = '';
+    }
+    return status;
   } catch {
     return defaultUpdateStatus();
   }
@@ -1043,7 +1150,7 @@ function readUpdateStatus() {
 function writeUpdateStatus(patch) {
   const previous = readUpdateStatus();
   const log = patch.log ? [...(previous.log || []), ...patch.log].slice(-80) : previous.log || [];
-  const next = { ...previous, ...patch, log, version: APP_VERSION, updatedAt: new Date().toISOString() };
+  const next = { ...previous, ...patch, log, updateMode: UPDATE_MODE, version: APP_VERSION, updatedAt: new Date().toISOString() };
   fs.writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(next, null, 2));
   return next;
 }
@@ -1052,10 +1159,78 @@ function updateLog(message) {
   return `${new Date().toLocaleTimeString('en-US', { hour12: false })} ${message}`;
 }
 
+function compareVersions(a, b) {
+  const parse = (value) => {
+    const [version, prerelease = ''] = String(value || '').replace(/^v/i, '').split('-', 2);
+    const parts = version.split('.').map((part) => Number(part) || 0);
+    return { parts: [parts[0] || 0, parts[1] || 0, parts[2] || 0], prerelease };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < 3; index += 1) {
+    if (left.parts[index] !== right.parts[index]) return left.parts[index] > right.parts[index] ? 1 : -1;
+  }
+  if (left.prerelease === right.prerelease) return 0;
+  if (!left.prerelease) return 1;
+  if (!right.prerelease) return -1;
+  return left.prerelease.localeCompare(right.prerelease);
+}
+
+function httpsJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `Oakstead/${APP_VERSION}`
+      }
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1024 * 1024 * 4) {
+          request.destroy(new Error('GitHub response was too large.'));
+        }
+      });
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`GitHub returned HTTP ${response.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(new Error(`GitHub returned invalid JSON: ${error.message}`));
+        }
+      });
+    });
+    request.setTimeout(15000, () => request.destroy(new Error('Timed out checking GitHub releases.')));
+    request.on('error', reject);
+  });
+}
+
+async function githubReleaseForChannel(channel) {
+  const releases = await httpsJson(`https://api.github.com/repos/${RELEASE_REPO}/releases?per_page=20`);
+  if (!Array.isArray(releases)) throw new Error('GitHub release list was not an array.');
+  const published = releases.filter((release) => !release.draft);
+  if (channel === 'prerelease') return published.find((release) => release.prerelease) || published.find((release) => !release.prerelease) || null;
+  return published.find((release) => !release.prerelease) || null;
+}
+
+function installerAssetForRelease(release, version) {
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  const escapedVersion = String(version || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionedSetup = new RegExp(`oakstead.*setup.*v?${escapedVersion}.*\\.exe$`, 'i');
+  return assets.find((asset) => versionedSetup.test(asset.name || ''))
+    || assets.find((asset) => /oakstead.*setup.*\.exe$/i.test(asset.name || ''))
+    || assets.find((asset) => /\.exe$/i.test(asset.name || ''))
+    || null;
+}
+
 function runUpdateCommand(label, command, args, options = {}) {
   writeUpdateStatus({ message: label, log: [updateLog(label)] });
   const result = spawnSync(command, args, {
-    cwd: __dirname,
+    cwd: APP_ROOT,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 8,
     ...options
@@ -1078,13 +1253,23 @@ function latestReleaseTag(channel) {
   return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
 }
 
-function checkLatestRelease(channel) {
+function checkLatestGitRelease(channel) {
   const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
-  writeUpdateStatus({ phase: 'checking', percent: 4, channel: updateChannel, message: 'Checking GitHub for available releases.', log: [updateLog(`Checking ${updateChannel} releases`)] });
+  writeUpdateStatus({
+    phase: 'checking',
+    percent: 4,
+    channel: updateChannel,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    message: 'Checking GitHub for available releases.',
+    log: [updateLog(`Checking ${updateChannel} releases`)]
+  });
   runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
   const tag = latestReleaseTag(updateChannel);
   const latestVersion = tag ? tag.replace(/^v/, '') : '';
-  const updateAvailable = Boolean(latestVersion && latestVersion !== APP_VERSION);
+  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
   return writeUpdateStatus({
     running: false,
     phase: 'checked',
@@ -1099,12 +1284,67 @@ function checkLatestRelease(channel) {
   });
 }
 
+async function checkLatestInstallerRelease(channel) {
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({
+    phase: 'checking',
+    percent: 10,
+    channel: updateChannel,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    message: `Checking GitHub releases for ${RELEASE_REPO}.`,
+    log: [updateLog(`Checking ${updateChannel} installer releases from ${RELEASE_REPO}`)]
+  });
+  const release = await githubReleaseForChannel(updateChannel);
+  if (!release) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'checked',
+      percent: 0,
+      updateAvailable: false,
+      message: 'No published GitHub release was found.',
+      log: [updateLog('No published GitHub release was found')]
+    });
+  }
+  const latestVersion = String(release.tag_name || release.name || '').replace(/^v/i, '');
+  const asset = installerAssetForRelease(release, latestVersion);
+  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
+  const hasInstaller = Boolean(asset?.browser_download_url);
+  return writeUpdateStatus({
+    running: false,
+    phase: 'checked',
+    percent: 0,
+    channel: updateChannel,
+    targetVersion: latestVersion,
+    latestVersion,
+    latestTag: release.tag_name || '',
+    updateAvailable,
+    releaseUrl: release.html_url || '',
+    installerAssetName: asset?.name || '',
+    installerDownloadUrl: asset?.browser_download_url || '',
+    downloadUrl: asset?.browser_download_url || '',
+    message: updateAvailable
+      ? (hasInstaller ? `Windows installer available: v${latestVersion}` : `v${latestVersion} is available, but no Windows installer asset was attached.`)
+      : `Already current: v${latestVersion || APP_VERSION}`,
+    log: [
+      updateLog(`Latest ${updateChannel} release is ${release.tag_name || latestVersion || 'unknown'}`),
+      updateLog(hasInstaller ? `Installer asset: ${asset.name}` : 'No installer asset found on the release')
+    ]
+  });
+}
+
+async function checkLatestRelease(channel) {
+  return UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel);
+}
+
 function restartApplication() {
   writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
   const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
   if (!supervised) {
     const child = spawn(process.execPath, [__filename], {
-      cwd: __dirname,
+      cwd: APP_ROOT,
       detached: true,
       stdio: 'ignore',
       env: process.env
@@ -1114,9 +1354,58 @@ function restartApplication() {
   setTimeout(() => process.exit(0), 900);
 }
 
-function startSystemUpdate(channel) {
+async function startInstallerUpdate(channel) {
+  const active = readUpdateStatus();
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  const activeIsCurrent = active.installerDownloadUrl
+    && active.channel === updateChannel
+    && active.latestVersion
+    && compareVersions(active.latestVersion, APP_VERSION) > 0;
+  const status = activeIsCurrent ? active : await checkLatestInstallerRelease(updateChannel);
+  if (!status.updateAvailable) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'checked',
+      percent: 0,
+      channel: updateChannel,
+      message: status.message || 'No installer update is available.',
+      log: [updateLog('Installer update was requested, but no update is available')]
+    });
+  }
+  if (!status.installerDownloadUrl) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'missing installer',
+      percent: 0,
+      channel: updateChannel,
+      message: 'A release is available, but it does not include a Windows installer asset.',
+      log: [updateLog('Installer update cannot continue because no .exe asset was found')]
+    });
+  }
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const backup = createDatabaseBackup('pre-installer-update');
+      writeUpdateStatus({ log: [updateLog(`Created pre-installer backup ${backup.fileName}`)] });
+    }
+  } catch (error) {
+    writeUpdateStatus({ log: [updateLog(`Backup before installer download failed: ${error.message || error}`)] });
+  }
+  return writeUpdateStatus({
+    running: false,
+    phase: 'download ready',
+    percent: 100,
+    channel: updateChannel,
+    message: `Download ${status.installerAssetName || 'the Windows installer'} and run it on this computer to complete the update.`,
+    downloadUrl: status.installerDownloadUrl,
+    installerDownloadUrl: status.installerDownloadUrl,
+    log: [updateLog('Installer download is ready')]
+  });
+}
+
+async function startSystemUpdate(channel) {
   const active = readUpdateStatus();
   if (active.running) return active;
+  if (UPDATE_MODE === 'installer') return startInstallerUpdate(channel);
   const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
   writeUpdateStatus({
     running: true,
@@ -1128,7 +1417,7 @@ function startSystemUpdate(channel) {
     log: [updateLog(`Starting ${updateChannel} update from version ${APP_VERSION}`)]
   });
   const child = spawn(process.execPath, [__filename, '--run-system-update', updateChannel], {
-    cwd: __dirname,
+    cwd: APP_ROOT,
     detached: true,
     stdio: 'ignore',
     env: process.env
@@ -1217,7 +1506,7 @@ function saveUploadedImage(file, basename) {
   const fileName = `${basename}${ext}`;
   const target = path.join(UPLOAD_DIR, fileName);
   fs.writeFileSync(target, file.data);
-  return path.join('uploads', fileName);
+  return `uploads/${fileName}`;
 }
 
 function gradeRank(grade) {
@@ -4070,6 +4359,9 @@ function generateReportCardPdf(btn) {
   const updateStatusPanel = document.querySelector('[data-update-status]');
   const updateForm = document.querySelector('[data-update-form]');
   const updateCheckForm = document.querySelector('[data-update-check-form]');
+  const updateDownloadRow = document.querySelector('[data-update-download-row]');
+  const updateDownloadLink = document.querySelector('[data-update-download]');
+  const updateReleaseLink = document.querySelector('[data-update-release]');
   function renderUpdateStatus(status) {
     if (!updateStatusPanel || !status) return;
     const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
@@ -4083,6 +4375,17 @@ function generateReportCardPdf(btn) {
     if (progress) progress.style.setProperty('--progress-value', percent + '%');
     if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
     if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
+    if (updateDownloadRow && updateDownloadLink) {
+      const downloadUrl = status.downloadUrl || status.installerDownloadUrl || '';
+      updateDownloadRow.style.display = downloadUrl || status.releaseUrl ? 'flex' : 'none';
+      updateDownloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
+      if (downloadUrl) updateDownloadLink.href = downloadUrl;
+      if (status.installerAssetName) updateDownloadLink.textContent = 'Download ' + status.installerAssetName;
+    }
+    if (updateReleaseLink) {
+      updateReleaseLink.style.display = status.releaseUrl ? 'inline-flex' : 'none';
+      if (status.releaseUrl) updateReleaseLink.href = status.releaseUrl;
+    }
     if (updateForm) {
       const button = updateForm.querySelector('button[type="submit"]');
       if (button) button.disabled = Boolean(status.running);
@@ -4111,7 +4414,13 @@ function generateReportCardPdf(btn) {
       if (button) button.disabled = true;
       fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
         .then(function(response) { return response.json(); })
-        .then(function(status) { renderUpdateStatus(status); setTimeout(pollUpdateStatus, 800); })
+        .then(function(status) {
+          renderUpdateStatus(status);
+          if (status && (status.downloadUrl || status.installerDownloadUrl)) {
+            window.location.href = status.downloadUrl || status.installerDownloadUrl;
+          }
+          setTimeout(pollUpdateStatus, 800);
+        })
         .catch(function() { if (button) button.disabled = false; });
     });
     pollUpdateStatus();
@@ -4391,22 +4700,25 @@ function schoolYearHead(title, description, selectedYear, action = '') {
   </header>`;
 }
 
+function uploadedAssetPath(relativePath) {
+  const normalized = String(relativePath || '').replace(/\\/g, '/');
+  if (!normalized.startsWith('uploads/')) return '';
+  const fileName = path.basename(normalized);
+  const dataPath = path.join(UPLOAD_DIR, fileName);
+  if (fs.existsSync(dataPath)) return dataPath;
+  const legacyPath = path.join(PUBLIC_DIR, normalized);
+  return fs.existsSync(legacyPath) ? legacyPath : '';
+}
+
 function logoAsset() {
-  const custom = getSetting('logo_path', '');
-  if (custom) {
-    const customPath = path.join(PUBLIC_DIR, custom);
-    if (fs.existsSync(customPath)) return customPath;
-  }
+  const customPath = uploadedAssetPath(getSetting('logo_path', ''));
+  if (customPath) return customPath;
   return fs.existsSync(DEFAULT_LOGO_FILE) ? DEFAULT_LOGO_FILE : LEGACY_LOGO_FILE;
 }
 
 function faviconAsset() {
-  const custom = getSetting('favicon_path', '');
-  if (custom) {
-    const customPath = path.join(PUBLIC_DIR, custom);
-    if (fs.existsSync(customPath)) return customPath;
-  }
-  return logoAsset();
+  const customPath = uploadedAssetPath(getSetting('favicon_path', ''));
+  return customPath || logoAsset();
 }
 
 function weeklyAverageChart(weekData) {
@@ -4666,7 +4978,7 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url, user) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'backups', 'updates'];
+  const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'network', 'backups', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
@@ -4740,6 +5052,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
   const updateStatus = readUpdateStatus();
   const backups = listDatabaseBackups();
   const backupFreq = backupFrequency(getSetting('backup_frequency', 'manual'));
+  const networkInfo = networkStatus();
   const setupLinks = [
     ['families', 'Families', `${families.length} households`],
     ['districts', 'School Districts', `${districts.length} districts`],
@@ -4752,6 +5065,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
     ['letter-grades', 'Letter Grades', `${letterGroups.length} scales`],
     ['users', 'Users', `${users.length} sign-ins`],
     ['settings', 'System Settings', settings.schoolName],
+    ['network', 'Network Access', networkAccessLabel(networkInfo.desired.host)],
     ['backups', 'Backups', `${backupFrequencyLabel(backupFreq)}`],
     ['updates', 'System Updates', `v${APP_VERSION}`]
   ];
@@ -5280,6 +5594,43 @@ function setupPage(selectedYear, csrfToken, url, user) {
     </div>
   </section>`;
 
+  const networkAccessMode = networkInfo.desired.host === '0.0.0.0' ? 'lan' : 'local';
+  const networkDisabled = networkInfo.envManaged ? 'disabled' : '';
+  const networkModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Network Access</h2>
+      <span class="family-count">${esc(networkAccessLabel(networkInfo.active.host))}</span>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Active Mode</span><strong>${esc(networkAccessLabel(networkInfo.active.host))}</strong></div>
+        <div class="detail-item"><span>Active Port</span><strong>${esc(networkInfo.active.port)}</strong></div>
+        <div class="detail-item"><span>Host Machine</span><strong>${esc(networkInfo.hostName)}</strong></div>
+        <div class="detail-item"><span>Data Directory</span><strong>${esc(DATA_DIR)}</strong></div>
+      </div>
+      ${networkInfo.restartRequired ? '<p class="notice danger">Network settings have changed. Restart Oakstead before other devices use the new address.</p>' : ''}
+      ${networkInfo.envManaged ? '<p class="notice danger">HOST or PORT is set by the runtime environment, so the form below is read-only until those environment variables are removed.</p>' : ''}
+      <form method="post" action="/network-settings" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>Access Mode<select name="accessMode" ${networkDisabled}>
+          <option value="local" ${selectedAttr(networkAccessMode, 'local')}>Local computer only</option>
+          <option value="lan" ${selectedAttr(networkAccessMode, 'lan')}>Local network devices</option>
+        </select></label>
+        <label>Port<input name="port" type="number" min="1" max="65535" value="${esc(networkInfo.desired.port)}" ${networkDisabled} /></label>
+        <button class="secondary-btn compact-action" type="submit" ${networkDisabled}>Save Network Settings</button>
+      </form>
+      <div class="subhead"><h3>Current URLs</h3></div>
+      <div class="backup-list">
+        ${networkInfo.urls.map((item) => `<div class="backup-row"><div><strong>${esc(item)}</strong><span>${networkInfo.active.host === '0.0.0.0' ? 'Open this from another device on the same network.' : 'Open this on the host computer.'}</span></div></div>`).join('')}
+      </div>
+      <div class="subhead"><h3>Detected LAN Addresses</h3></div>
+      <div class="backup-list">
+        ${networkInfo.addresses.length ? networkInfo.addresses.map((item) => `<div class="backup-row"><div><strong>${esc(item)}</strong><span>${networkInfo.active.host === '0.0.0.0' ? esc(`http://${item}:${networkInfo.active.port}`) : 'Enable LAN access to use this address.'}</span></div></div>`).join('') : '<div class="backup-row"><div><strong>No non-local IPv4 address detected</strong><span>Check the host machine network connection.</span></div></div>'}
+      </div>
+      <p class="notice">LAN access should stay on a trusted local network or VPN. Do not expose Oakstead directly to the public internet.</p>
+    </div>
+  </section>`;
+
   const updateLogText = (updateStatus.log || []).slice(-20).join('\n');
   const latestBackup = backups[0] || null;
   const backupsModule = `<section class="family-detail">
@@ -5331,6 +5682,8 @@ function setupPage(selectedYear, csrfToken, url, user) {
       <div class="detail-grid">
         <div class="detail-item"><span>Installed Version</span><strong>v${esc(APP_VERSION)}</strong></div>
         <div class="detail-item"><span>Latest Checked</span><strong>${updateStatus.latestVersion ? `v${esc(updateStatus.latestVersion)}` : 'Not checked yet'}</strong></div>
+        <div class="detail-item"><span>Update Mode</span><strong>${UPDATE_MODE === 'installer' ? 'Windows installer' : 'Git checkout'}</strong></div>
+        <div class="detail-item"><span>Release Source</span><strong>${UPDATE_MODE === 'installer' ? esc(RELEASE_REPO) : 'Configured Git remote'}</strong></div>
       </div>
       <div class="update-actions">
       <form method="post" action="/system-update/check" class="update-actions" data-update-check-form>
@@ -5344,8 +5697,12 @@ function setupPage(selectedYear, csrfToken, url, user) {
       <form method="post" action="/system-update" class="update-actions" data-update-form>
         ${csrfInput(csrfToken)}
         <input type="hidden" name="channel" value="${esc(updateStatus.channel)}" />
-        <button class="page-action compact-action" type="submit" ${updateStatus.running ? 'disabled' : ''}>Download and Install</button>
+        <button class="page-action compact-action" type="submit" ${updateStatus.running ? 'disabled' : ''}>${UPDATE_MODE === 'installer' ? 'Download Installer' : 'Download and Install'}</button>
       </form>
+      </div>
+      <div class="inline-actions" data-update-download-row style="${updateStatus.installerDownloadUrl || updateStatus.releaseUrl ? '' : 'display:none'}">
+        <a class="page-action compact-action" data-update-download href="${esc(updateStatus.installerDownloadUrl || '#')}" style="${updateStatus.installerDownloadUrl ? '' : 'display:none'}">${updateStatus.installerAssetName ? `Download ${esc(updateStatus.installerAssetName)}` : 'Download Windows Installer'}</a>
+        <a class="secondary-btn compact-action" data-update-release href="${esc(updateStatus.releaseUrl || '#')}" style="${updateStatus.releaseUrl ? '' : 'display:none'}">Open Release Page</a>
       </div>
       <div class="update-status" data-update-status>
         <div class="update-status-head">
@@ -5356,7 +5713,9 @@ function setupPage(selectedYear, csrfToken, url, user) {
         <p class="notice" data-update-phase>${esc(updateStatus.phase)}${updateStatus.targetVersion ? ` / target v${esc(updateStatus.targetVersion)}` : ''}</p>
         <pre class="update-log" data-update-log>${esc(updateLogText || 'No update activity yet.')}</pre>
       </div>
-      <p class="notice">Updates are fetched from the configured GitHub remote. Oakstead creates a database backup before updating, installs npm dependencies, validates the server, and restarts after success.</p>
+      <p class="notice">${UPDATE_MODE === 'installer'
+        ? 'Packaged Windows updates are installed by downloading the GitHub release installer, running it on the host computer, and letting it replace app files while preserving the data directory.'
+        : 'Updates are fetched from the configured GitHub remote. Oakstead creates a database backup before updating, installs npm dependencies, validates the server, and restarts after success.'}</p>
     </div>
   </section>`;
 
@@ -5372,6 +5731,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
     'letter-grades': letterGradesModule,
     users: usersModule,
     settings: settingsModule,
+    network: networkModule,
     backups: backupsModule,
     updates: updatesModule
   };
@@ -6906,7 +7266,7 @@ function roleAssignmentForm({ csrfToken, redirectTo, personType, personId, roleG
   </form>`;
 }
 
-function handlePost(req, res, p, body, user, headers) {
+async function handlePost(req, res, p, body, user, headers) {
   if (p === '/login') {
     if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
     const username = cleanText(body.username, 80).toLowerCase();
@@ -7296,6 +7656,17 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=settings', headers);
   }
 
+  if (p === '/network-settings') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    if (process.env.HOST || process.env.PORT) return sendText(res, 400, 'Network settings are managed by HOST or PORT environment variables.');
+    const bindHost = body.accessMode === 'lan' ? '0.0.0.0' : '127.0.0.1';
+    const port = parsePort(body.port, DEFAULT_PORT);
+    setSetting('network_bind_host', bindHost);
+    setSetting('network_port', String(port));
+    setSetting('network_restart_required_at', new Date().toISOString());
+    return redirect(res, '/setup?section=network', headers);
+  }
+
   if (p === '/backup-settings') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     setSetting('backup_frequency', backupFrequency(body.frequency));
@@ -7331,7 +7702,7 @@ function handlePost(req, res, p, body, user, headers) {
   if (p === '/system-update/check') {
     if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
     try {
-      return sendJson(res, 200, checkLatestRelease(cleanText(body.channel, 20)), headers);
+      return sendJson(res, 200, await checkLatestRelease(cleanText(body.channel, 20)), headers);
     } catch (error) {
       const status = writeUpdateStatus({ running: false, phase: 'check failed', percent: 0, message: error.message || 'Update check failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
       return sendJson(res, 500, status, headers);
@@ -7340,8 +7711,13 @@ function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/system-update') {
     if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
-    const status = startSystemUpdate(cleanText(body.channel, 20));
-    return sendJson(res, 202, status, headers);
+    try {
+      const status = await startSystemUpdate(cleanText(body.channel, 20));
+      return sendJson(res, 202, status, headers);
+    } catch (error) {
+      const status = writeUpdateStatus({ running: false, phase: 'update failed', percent: 100, message: error.message || 'Update failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
+      return sendJson(res, 500, status, headers);
+    }
   }
 
   if (p === '/gradebook') {
@@ -7534,11 +7910,24 @@ function handlePost(req, res, p, body, user, headers) {
 }
 
 if (process.argv[2] === '--run-system-update') {
+  ensureRuntimeDirs();
+  if (UPDATE_MODE === 'installer') {
+    writeUpdateStatus({
+      running: false,
+      phase: 'unsupported',
+      percent: 100,
+      message: 'Packaged installs use installer downloads instead of Git updates.',
+      log: [updateLog('Git update worker was skipped in installer mode')]
+    });
+    return;
+  }
   runSystemUpdateWorker(process.argv[3] === 'prerelease' ? 'prerelease' : 'stable');
   return;
 }
 
+ensureRuntimeDirs();
 ensureDb();
+ACTIVE_NETWORK = desiredNetworkConfig();
 if (DEMO_MODE) {
   refreshDemoData('startup');
   setInterval(() => refreshDemoData('scheduled'), DEMO_REFRESH_HOURS * 60 * 60 * 1000).unref();
@@ -7578,7 +7967,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST') {
       const body = await parseBody(req);
-      return handlePost(req, res, p, body, user, headers);
+      return await handlePost(req, res, p, body, user, headers);
     }
 
     if (req.method !== 'GET') return sendText(res, 405, 'Method Not Allowed');
@@ -7666,6 +8055,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Oakstead running on http://localhost:${PORT}`);
+server.listen(ACTIVE_NETWORK.port, ACTIVE_NETWORK.host, () => {
+  const primaryUrl = ACTIVE_NETWORK.host === '0.0.0.0'
+    ? `http://127.0.0.1:${ACTIVE_NETWORK.port}`
+    : `http://${ACTIVE_NETWORK.host}:${ACTIVE_NETWORK.port}`;
+  console.log(`Oakstead running on ${primaryUrl}`);
+  if (ACTIVE_NETWORK.host === '0.0.0.0') {
+    const lanUrls = networkUrls(ACTIVE_NETWORK).join(', ');
+    if (lanUrls) console.log(`LAN access: ${lanUrls}`);
+  }
 });

@@ -1,5 +1,13 @@
 # Release Notes
 
+## 0.0.6
+
+- Added cross-platform runtime configuration for data directories, SQLite executable paths, bind hosts, ports, and update modes.
+- Added School Setup -> Network Access for local-only or trusted-LAN hosting with visible host/IP URLs and restart-gated changes.
+- Added packaged Windows update checks that read GitHub release assets and download installer updates instead of running Git commands.
+- Added Windows installer/service packaging scaffolding with bundled runtime expectations, ProgramData storage, WinSW service config, and Inno Setup script.
+- Added Linux systemd packaging examples that keep source installs on the Git-based updater.
+
 ## 0.0.5
 
 - Added principal and parent roles alongside admins and teachers, with role-scoped navigation and route permissions.
