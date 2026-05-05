@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Oakstead — Rooted Records for Growing Minds</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent:      #2563eb;
+      --accent-dark: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --ink:         #101828;
+      --muted:       #667085;
+      --bg:          #f7f8fb;
+      --paper:       #ffffff;
+      --border:      #e4e7ec;
+      --border-mid:  #cfd4dc;
+      --gold:        #b54708;
+      --radius:      10px;
+      --shadow:      0 4px 20px rgba(16,24,40,0.07);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(255,255,255,0.93);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      font-size: 1.05rem;
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .nav-brand img {
+      height: 26px;
+      width: auto;
+    }
+    .nav-right { display: flex; align-items: center; gap: 12px; }
+    .nav-gh {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .nav-gh:hover { color: var(--ink); }
+    .nav-demo {
+      background: var(--accent);
+      color: #fff;
+      padding: 6px 16px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: background 0.15s;
+    }
+    .nav-demo:hover { background: var(--accent-dark); }
+
+    /* ── HERO ── */
+    .hero {
+      background: var(--paper);
+      border-bottom: 1px solid var(--border);
+      padding: 52px 2rem 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hero-inner {
+      max-width: 700px;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 18px;
+    }
+    .hero-logo {
+      width: 44px;
+      height: 44px;
+      object-fit: contain;
+      margin-bottom: 14px;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .hero h1 {
+      font-size: clamp(1.9rem, 4vw, 2.8rem);
+      font-weight: 800;
+      color: var(--ink);
+      letter-spacing: -0.5px;
+      line-height: 1.15;
+      margin-bottom: 10px;
+    }
+    .hero .tagline {
+      font-size: 1.05rem;
+      color: var(--muted);
+      margin-bottom: 28px;
+    }
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.95rem;
+      padding: 11px 28px;
+      border-radius: 7px;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: var(--accent-dark); }
+    .btn-secondary {
+      display: inline-block;
+      background: var(--paper);
+      color: var(--ink);
+      font-weight: 600;
+      font-size: 0.95rem;
+      padding: 11px 28px;
+      border-radius: 7px;
+      text-decoration: none;
+      border: 1px solid var(--border-mid);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn-secondary:hover { background: var(--bg); border-color: #aab0ba; }
+
+    /* ── LAYOUT ── */
+    section { padding: 64px 2rem; }
+    .container { max-width: 1080px; margin: 0 auto; }
+    .section-eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+    .section-title {
+      font-size: clamp(1.4rem, 2.8vw, 2rem);
+      font-weight: 800;
+      color: var(--ink);
+      margin-bottom: 10px;
+      line-height: 1.2;
+    }
+    .section-desc {
+      color: var(--muted);
+      font-size: 1rem;
+      max-width: 540px;
+      margin-bottom: 44px;
+    }
+
+    /* ── FEATURES ── */
+    .features { background: var(--bg); }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+      gap: 18px;
+    }
+    .feature-card {
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px 22px;
+      box-shadow: var(--shadow);
+      transition: box-shadow 0.15s, transform 0.15s;
+    }
+    .feature-card:hover {
+      box-shadow: 0 8px 28px rgba(16,24,40,0.11);
+      transform: translateY(-2px);
+    }
+    .feature-icon {
+      font-size: 1.6rem;
+      margin-bottom: 12px;
+      display: block;
+    }
+    .feature-card h3 {
+      font-size: 0.98rem;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 6px;
+    }
+    .feature-card p {
+      font-size: 0.88rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    /* ── SCREENSHOTS ── */
+    .screenshots { background: var(--paper); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .screenshot-slot {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .screenshot-slot img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .screenshot-placeholder {
+      aspect-ratio: 16/10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--bg);
+      border-bottom: 1px dashed var(--border-mid);
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .screenshot-placeholder .ph-icon { font-size: 2rem; opacity: 0.5; }
+    .screenshot-caption {
+      padding: 11px 16px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    /* ── INSTALLATION ── */
+    .install { background: var(--bg); }
+    .install-steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 18px;
+      margin-bottom: 36px;
+    }
+    .install-step {
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 20px;
+      box-shadow: var(--shadow);
+    }
+    .step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+      font-size: 0.8rem;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .install-step h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 6px;
+    }
+    .install-step p {
+      font-size: 0.86rem;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .install-step p:last-child { margin-bottom: 0; }
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 6px;
+      padding: 12px 14px;
+      font-size: 0.8rem;
+      overflow-x: auto;
+      line-height: 1.6;
+      margin-top: 10px;
+    }
+    code { font-family: "SF Mono", "Fira Code", Consolas, monospace; }
+    .install-note {
+      background: var(--accent-soft);
+      border: 1px solid #bfdbfe;
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 0.88rem;
+      color: #1e40af;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .install-note strong { font-weight: 700; }
+
+    /* ── AUDIENCE ── */
+    .audience { background: var(--paper); border-top: 1px solid var(--border); }
+    .audience-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .audience-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 18px;
+      font-size: 0.9rem;
+    }
+    .audience-card strong { color: var(--ink); font-weight: 700; display: block; margin-bottom: 4px; }
+    .audience-card span { color: var(--muted); font-size: 0.86rem; }
+
+    /* ── CTA ── */
+    .cta-section {
+      background: var(--accent);
+      color: #fff;
+      text-align: center;
+      padding: 72px 2rem;
+    }
+    .cta-section h2 {
+      font-size: clamp(1.5rem, 3vw, 2.1rem);
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+    .cta-section p {
+      font-size: 1rem;
+      opacity: 0.85;
+      margin-bottom: 30px;
+      max-width: 420px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .cta-btn {
+      display: inline-block;
+      background: #fff;
+      color: var(--accent-dark);
+      font-weight: 700;
+      font-size: 0.97rem;
+      padding: 12px 32px;
+      border-radius: 7px;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .cta-btn:hover { opacity: 0.92; }
+
+    /* ── FOOTER ── */
+    footer {
+      background: var(--ink);
+      color: #667085;
+      text-align: center;
+      padding: 24px 2rem;
+      font-size: 0.82rem;
+    }
+    footer a { color: #93c5fd; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <nav>
+    <a class="nav-brand" href="#">
+      <img src="../assets/oakleaf.png" alt="Oakstead logo" />
+      Oakstead
+    </a>
+    <div class="nav-right">
+      <a class="nav-gh" href="https://github.com/kirbw/oakstead" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-demo" href="https://oakstead.school/demo" target="_blank" rel="noopener">Try the Demo →</a>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-badge">v0.0.4 &middot; Open Source &middot; Self-Hosted</div>
+      <img class="hero-logo" src="../assets/oakleaf.png" alt="Oakstead oak leaf" />
+      <h1>School records that stay out of your way</h1>
+      <p class="tagline">Rooted Records for Growing Minds — a lightweight gradebook and student records app built for small schools.</p>
+      <div class="hero-actions">
+        <a class="btn-primary" href="https://oakstead.school/demo" target="_blank" rel="noopener">Try the Live Demo</a>
+        <a class="btn-secondary" href="https://github.com/kirbw/oakstead" target="_blank" rel="noopener">View on GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- FEATURES -->
+  <section class="features">
+    <div class="container">
+      <p class="section-eyebrow">Features</p>
+      <h2 class="section-title">Everything a small school needs</h2>
+      <p class="section-desc">No bloat, no subscriptions. Families, grades, reports, and backups — all in one responsive interface that works on any device.</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <span class="feature-icon">📚</span>
+          <h3>Gradebook</h3>
+          <p>Fast spreadsheet-style grade entry with custom weights, letter-grade scales, and automatic class and student averages.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">👨‍👩‍👧‍👦</span>
+          <h3>Families &amp; Students</h3>
+          <p>Enroll families and students, track grade placement, and manage classroom assignments across school years.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">🏫</span>
+          <h3>Classrooms &amp; Teachers</h3>
+          <p>Organize teachers and classrooms with separate teacher and admin accounts, each with session-secure logins.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">📅</span>
+          <h3>School-Year Switcher</h3>
+          <p>View and compare current and prior year records without losing a thing. History stays intact as years roll over.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">📊</span>
+          <h3>Reports</h3>
+          <p>Built-in reports for class averages, individual student subjects, and birthday schedules — ready to print or export.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">💾</span>
+          <h3>SQLite &amp; Backups</h3>
+          <p>Your data lives in a single local SQLite file. Create, download, and restore backups right from the admin panel.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">📱</span>
+          <h3>Responsive on Any Device</h3>
+          <p>Works great on iPhones, iPads, and desktops — no app to install, just open the browser.</p>
+        </div>
+        <div class="feature-card">
+          <span class="feature-icon">🔄</span>
+          <h3>Self-Updating</h3>
+          <p>Pull stable or pre-release updates directly from the admin panel without touching the command line.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCREENSHOTS -->
+  <section class="screenshots">
+    <div class="container">
+      <p class="section-eyebrow">Screenshots</p>
+      <h2 class="section-title">See it in action</h2>
+      <p class="section-desc">A clean, no-nonsense interface designed to get out of your way.</p>
+
+      <div class="screenshot-grid">
+        <!-- Replace .screenshot-placeholder with <img src="..."> when you have real screenshots -->
+        <div class="screenshot-slot">
+          <div class="screenshot-placeholder">
+            <span class="ph-icon">🖼️</span>
+            <span>Screenshot coming soon</span>
+          </div>
+          <div class="screenshot-caption">Dashboard — school overview at a glance</div>
+        </div>
+        <div class="screenshot-slot">
+          <div class="screenshot-placeholder">
+            <span class="ph-icon">🖼️</span>
+            <span>Screenshot coming soon</span>
+          </div>
+          <div class="screenshot-caption">Gradebook — fast spreadsheet-style entry</div>
+        </div>
+        <div class="screenshot-slot">
+          <div class="screenshot-placeholder">
+            <span class="ph-icon">🖼️</span>
+            <span>Screenshot coming soon</span>
+          </div>
+          <div class="screenshot-caption">Student records — full enrollment history</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSTALLATION -->
+  <section class="install">
+    <div class="container">
+      <p class="section-eyebrow">Installation</p>
+      <h2 class="section-title">Up and running in minutes</h2>
+      <p class="section-desc">Oakstead runs on Node.js and SQLite — no database server required. Works on a Raspberry Pi, a spare laptop, or any modest server on your local network.</p>
+
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <h3>Clone the repository</h3>
+          <p>You'll need Node.js 18+ and the <code>sqlite3</code> CLI installed.</p>
+          <pre><code>git clone https://github.com/kirbw/oakstead.git
+cd oakstead</code></pre>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <h3>Install dependencies</h3>
+          <p>Oakstead has no npm dependencies — there's nothing to install beyond Node itself.</p>
+          <pre><code># No npm install needed.
+# Just Node.js 18+ and sqlite3 CLI.</code></pre>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <h3>Start the server</h3>
+          <p>The server starts on port 3000 by default. Open your browser and configure your school on first launch.</p>
+          <pre><code>node server.js
+
+# Server running at http://localhost:3000</code></pre>
+        </div>
+        <div class="install-step">
+          <div class="step-num">4</div>
+          <h3>Run as a service (optional)</h3>
+          <p>To keep Oakstead running in the background, use <code>pm2</code> or a systemd service.</p>
+          <pre><code>npm install -g pm2
+pm2 start server.js --name oakstead
+pm2 save</code></pre>
+        </div>
+      </div>
+
+      <div class="install-note">
+        <span>💡</span>
+        <div><strong>Intended for local networks.</strong> Oakstead is designed to run inside your school's network. If you expose it to the public internet, put it behind a reverse proxy with HTTPS (e.g. nginx + Let's Encrypt).</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DESIGNED FOR -->
+  <section class="audience">
+    <div class="container">
+      <p class="section-eyebrow">Designed for</p>
+      <h2 class="section-title">Built for the realities of small schools</h2>
+      <p class="section-desc" style="margin-bottom: 36px;">If you find Google Sheets too loose and enterprise SIS software too heavy, Oakstead is for you.</p>
+      <div class="audience-grid">
+        <div class="audience-card">
+          <strong>Homeschool co-ops</strong>
+          <span>More structure without enterprise complexity</span>
+        </div>
+        <div class="audience-card">
+          <strong>Microschools &amp; cottage schools</strong>
+          <span>A handful of teachers and families, all in one place</span>
+        </div>
+        <div class="audience-card">
+          <strong>Classical &amp; private schools</strong>
+          <span>Own your data — no cloud lock-in, no monthly fees</span>
+        </div>
+        <div class="audience-card">
+          <strong>Anyone moving off spreadsheets</strong>
+          <span>Real gradebooks, real records, real simplicity</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <div class="container">
+      <h2>See it for yourself</h2>
+      <p>The live demo is pre-loaded with realistic sample data. Poke around — nothing will break.</p>
+      <a class="cta-btn" href="https://oakstead.school/demo" target="_blank" rel="noopener">Open the Live Demo →</a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <p>Oakstead &mdash; open source school records &middot;
+      <a href="https://github.com/kirbw/oakstead" target="_blank" rel="noopener">GitHub</a>
+      &middot; MIT License
+    </p>
+  </footer>
+
+</body>
+</html>
