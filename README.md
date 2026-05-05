@@ -2,9 +2,9 @@
 
 **Rooted Records for Growing Minds.**
 
-Current version: **0.0.3**
+Current version: **0.0.4**
 
-Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
+Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, church and district affiliations, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
 
 ## Highlights
 
@@ -12,6 +12,7 @@ Oakstead is a small-school records and gradebook app built for simple daily clas
 - School-year switcher for viewing current or prior-year records
 - Year-specific enrollment history so students can be promoted without losing old grades
 - Family and child entry with birthdays, grade placement, and classroom assignment
+- Congregation and school district tracking for households
 - Teacher, classroom, grade, and subject setup
 - Fast gradebook entry by school year, grade, classroom, subject, and assignment
 - Lesson, quiz, and test categories
@@ -19,8 +20,10 @@ Oakstead is a small-school records and gradebook app built for simple daily clas
 - Spreadsheet-style gradebook grid with inline score saving
 - Custom grade weights and letter grade scales by year, grade range, and subject
 - Reports for class averages and student subject averages
+- Printable family reports with congregation, contact, address, and enrolled-student counts
 - Admin and teacher sign-ins with secure sessions and CSRF protection
 - In-app system updates from GitHub with current release and pre-release channels
+- Static project website page in `website/`
 
 ## Tech
 
@@ -110,6 +113,16 @@ Before updating, commit or clear local code changes. Oakstead creates a database
 ## Release Notes
 
 Release notes are also kept in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+### 0.0.4
+
+- Added congregation tracking with setup management, family assignment, family-list display, and family report columns.
+- Reworked the family setup form into Household, Contact, and Church and District sections for faster data entry.
+- Stored parent names as first names in family workflows while keeping household last names separate.
+- Updated gradebook grid autosave so assignment, student, and class averages refresh immediately after a score is saved.
+- Simplified gradebook assignment display titles by removing generated category prefixes.
+- Expanded demo seed data with school districts, congregations, and first-name parent records.
+- Added a static project website page in `website/`.
 
 ### 0.0.3
 

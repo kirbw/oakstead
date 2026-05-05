@@ -1,5 +1,15 @@
 # Release Notes
 
+## 0.0.4
+
+- Added congregation tracking with setup management, family assignment, family-list display, and family report columns.
+- Reworked the family setup form into Household, Contact, and Church and District sections for faster data entry.
+- Stored parent names as first names in family workflows while keeping household last names separate.
+- Updated gradebook grid autosave so assignment, student, and class averages refresh immediately after a score is saved.
+- Simplified gradebook assignment display titles by removing generated category prefixes.
+- Expanded demo seed data with school districts, congregations, and first-name parent records.
+- Added a static project website page in `website/`.
+
 ## 0.0.3
 
 - Added an optional spreadsheet-style gradebook grid with students down the side, assignments across the top, sticky headers, class averages, per-student averages, and inline score saving.
