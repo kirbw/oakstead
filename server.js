@@ -1597,6 +1597,81 @@ button, select, input { min-height: 42px; }
 }
 .grid-2, .grid-3, .grid-4 { display: grid; gap: .7rem; grid-template-columns: 1fr; }
 .form-grid { display: grid; gap: .7rem; grid-template-columns: 1fr; }
+.absence-form {
+  gap: .85rem .75rem;
+  align-items: end;
+}
+.absence-form fieldset {
+  display: grid;
+  gap: .32rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.absence-form legend {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 650;
+}
+.choice-group {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: .18rem;
+  align-items: center;
+  justify-self: start;
+  min-height: 42px;
+  padding: .18rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+}
+.choice-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  gap: 0;
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 820;
+  cursor: pointer;
+}
+.choice-pill input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.choice-pill span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: .35rem .6rem;
+  border-radius: calc(var(--radius) - 1px);
+  line-height: 1;
+  white-space: nowrap;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+}
+.choice-pill input:checked + span {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.choice-pill input:focus-visible + span {
+  outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.absence-notes-field textarea {
+  min-height: 76px;
+}
 .family-form-section {
   grid-column: 1 / -1;
   display: grid;
@@ -2051,13 +2126,14 @@ tr:last-child td { border-bottom: 0; }
 .gb-grid-scroll {
   width: 100%;
   overflow: auto;
-  background: var(--paper);
+  background: linear-gradient(to bottom, var(--grade-grid-head) 0 126px, var(--paper) 126px);
   scrollbar-color: #a6adba #e5e7eb;
   scrollbar-width: thin;
 }
 .gb-grid-stage {
   position: relative;
   width: max-content;
+  min-width: 100%;
 }
 .gb-grid-header-overlay {
   position: absolute;
@@ -3395,6 +3471,12 @@ tr:last-child td { border-bottom: 0; }
   .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .form-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .absence-form {
+    grid-template-columns: 170px minmax(260px, 1fr);
+  }
+  .absence-date-field { grid-column: 1; }
+  .absence-student-field { grid-column: 2; }
+  .absence-notes-field { grid-column: 1 / -1; }
   .family-form-section-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
@@ -3427,6 +3509,18 @@ tr:last-child td { border-bottom: 0; }
   .gradebook-split {
     grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
     grid-template-areas: "scores history";
+  }
+  .absence-form {
+    grid-template-columns: 170px minmax(260px, 420px) max-content 104px max-content;
+  }
+  .absence-notes-field {
+    grid-column: 1 / 3;
+    max-width: 620px;
+  }
+  .absence-submit {
+    grid-column: 3;
+    justify-self: start;
+    min-width: 136px;
   }
   .gradebook-score-panel { grid-area: scores; }
   .assignment-history-panel { grid-area: history; }
@@ -6291,16 +6385,28 @@ function absencesPage(url, selectedYear, csrfToken) {
   const addForm = `<section class="family-detail">
     <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="/absences">Cancel</a></div>
     <div class="family-detail-body">
-      <form method="post" action="/absences" class="form-grid two">
+      <form method="post" action="/absences" class="form-grid absence-form">
         ${csrfInput(csrfToken)}
         <input type="hidden" name="schoolYearId" value="${yearId}" />
-        <label>Date<input type="date" name="absenceDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
-        <label>Student<select name="studentId" required><option value="">Choose student</option>${studentOptions}</select></label>
-        <label>Type<select name="kind"><option value="absence">Absence</option><option value="tardy">Tardy</option></select></label>
-        <label>Amount<input type="number" name="amount" min="0" max="30" step="0.25" value="1" required /></label>
-        <label>Unit<select name="unit"><option value="days">Days</option><option value="hours">Hours</option></select></label>
-        <label>Notes<textarea name="notes" maxlength="400"></textarea></label>
-        <button type="submit">Save Absence</button>
+        <label class="absence-date-field">Date<input type="date" name="absenceDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
+        <label class="absence-student-field">Student<select name="studentId" required><option value="">Choose student</option>${studentOptions}</select></label>
+        <fieldset class="choice-field">
+          <legend>Type</legend>
+          <div class="choice-group">
+            <label class="choice-pill"><input type="radio" name="kind" value="absence" checked /><span>Absence</span></label>
+            <label class="choice-pill"><input type="radio" name="kind" value="tardy" /><span>Tardy</span></label>
+          </div>
+        </fieldset>
+        <label class="absence-amount-field">Amount<input type="number" name="amount" min="0" max="30" step="0.25" value="1" required /></label>
+        <fieldset class="choice-field">
+          <legend>Unit</legend>
+          <div class="choice-group">
+            <label class="choice-pill"><input type="radio" name="unit" value="days" checked /><span>Days</span></label>
+            <label class="choice-pill"><input type="radio" name="unit" value="hours" /><span>Hours</span></label>
+          </div>
+        </fieldset>
+        <label class="absence-notes-field">Notes<textarea name="notes" maxlength="400"></textarea></label>
+        <button class="absence-submit" type="submit">Save Absence</button>
       </form>
     </div>
   </section>`;
