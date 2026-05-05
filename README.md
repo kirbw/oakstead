@@ -2,7 +2,7 @@
 
 **Rooted Records for Growing Minds.**
 
-Current version: **0.0.4**
+Current version: **0.0.5**
 
 Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, church and district affiliations, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
 
@@ -123,6 +123,16 @@ Before updating, commit or clear local code changes. Oakstead creates a database
 ## Release Notes
 
 Release notes are also kept in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+### 0.0.5
+
+- Added principal and parent roles alongside admins and teachers, with role-scoped navigation and route permissions.
+- Added a parent portal for household-linked child grade graphs and report cards.
+- Scoped teacher academic workflows to assigned classrooms, including assignments, gradebook scores, report cards, reports, and absences.
+- Expanded user management with teacher and parent-family links, plus admin-only protection for admin and principal accounts.
+- Improved the responsive app shell with a compact mobile top bar, dropdown navigation, sticky desktop sidebar, safe-area spacing, and better small-screen table handling.
+- Refined absence entry with segmented type and unit controls plus responsive form layout.
+- Added demo principal, teacher, and parent users to the demo seed data for role testing.
 
 ### 0.0.4
 
