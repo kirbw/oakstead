@@ -40,8 +40,10 @@ const DEMO_MODE = /^(1|true|yes|on)$/i.test(String(process.env.DEMO_MODE || ''))
 const DEMO_REFRESH_HOURS = Math.max(1, Math.min(24, Number(process.env.DEMO_REFRESH_HOURS) || 2));
 
 const ROLE_ADMIN = 'admin';
+const ROLE_PRINCIPAL = 'principal';
 const ROLE_TEACHER = 'teacher';
-const ROLES = [ROLE_ADMIN, ROLE_TEACHER];
+const ROLE_PARENT = 'parent';
+const ROLES = [ROLE_ADMIN, ROLE_PRINCIPAL, ROLE_TEACHER, ROLE_PARENT];
 const CATEGORIES = ['Lesson / Homework', 'Quiz', 'Test'];
 const DEFAULT_LETTER_GRADES = [
   ['A+', 100],
@@ -627,8 +629,10 @@ CREATE TABLE IF NOT EXISTS os_users (
   role TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   teacher_id INTEGER,
+  parent_family_id INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id),
+  FOREIGN KEY (parent_family_id) REFERENCES os_families(id)
 );
 CREATE TABLE IF NOT EXISTS os_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -722,6 +726,7 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
   ensureColumn('os_students', 'gender', 'gender TEXT');
   ensureColumn('os_teachers', 'mobile_phone', 'mobile_phone TEXT');
   ensureColumn('os_teachers', 'address', 'address TEXT');
+  ensureColumn('os_users', 'parent_family_id', 'parent_family_id INTEGER');
 
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
   createDefaultRoleGroups();
@@ -827,10 +832,10 @@ function clearSession(req, headers) {
 }
 
 function currentUser(req) {
-  if (DEMO_MODE) return { id: 0, name: 'Demo Admin', username: 'demo', role: ROLE_ADMIN, teacher_id: null };
+  if (DEMO_MODE) return { id: 0, name: 'Demo Admin', username: 'demo', role: ROLE_ADMIN, teacher_id: null, parent_family_id: null };
   const token = parseCookies(req).sessionToken;
   if (!token) return null;
-  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id
+  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id
     FROM os_sessions s
     JOIN os_users u ON u.id = s.user_id
     WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
@@ -842,8 +847,93 @@ function isAdmin(user) {
   return user?.role === ROLE_ADMIN;
 }
 
+function isPrincipal(user) {
+  return user?.role === ROLE_PRINCIPAL;
+}
+
+function isTeacher(user) {
+  return user?.role === ROLE_TEACHER;
+}
+
+function isParent(user) {
+  return user?.role === ROLE_PARENT;
+}
+
+function canAccessSetup(user) {
+  return isAdmin(user) || isPrincipal(user);
+}
+
+function canManageAdminUsers(user) {
+  return isAdmin(user);
+}
+
+function canManageSchoolUsers(user) {
+  return isAdmin(user) || isPrincipal(user);
+}
+
+function canManageSchoolSetup(user) {
+  return isAdmin(user) || isPrincipal(user);
+}
+
+function canManageAcademicRecords(user) {
+  return isAdmin(user) || isPrincipal(user) || isTeacher(user);
+}
+
+function teacherStudentClause(user, yearId, alias = 'sy') {
+  return isTeacher(user) ? `AND ${alias}.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${asInt(yearId)})` : '';
+}
+
+function studentAccessClause(user, yearId, studentAlias = 'st', enrollmentAlias = 'sy') {
+  if (isAdmin(user) || isPrincipal(user)) return '';
+  if (isTeacher(user)) return teacherStudentClause(user, yearId, enrollmentAlias);
+  if (isParent(user)) return `AND ${studentAlias}.family_id=${asInt(user.parent_family_id)}`;
+  return 'AND 1=0';
+}
+
+function canViewStudent(user, studentId, yearId) {
+  if (isAdmin(user) || isPrincipal(user)) return true;
+  if (!studentId || !yearId) return false;
+  if (isTeacher(user)) {
+    const rows = querySql(`SELECT sy.student_id
+      FROM os_student_years sy
+      JOIN os_classrooms c ON c.id = sy.classroom_id
+      WHERE sy.student_id=${asInt(studentId)}
+        AND sy.school_year_id=${asInt(yearId)}
+        AND sy.status='enrolled'
+        AND c.teacher_id=${asInt(user.teacher_id)}
+      LIMIT 1;`);
+    return Boolean(rows.length);
+  }
+  if (isParent(user)) {
+    const rows = querySql(`SELECT st.id
+      FROM os_students st
+      JOIN os_student_years sy ON sy.student_id = st.id
+      WHERE st.id=${asInt(studentId)}
+        AND st.family_id=${asInt(user.parent_family_id)}
+        AND sy.school_year_id=${asInt(yearId)}
+        AND sy.status='enrolled'
+      LIMIT 1;`);
+    return Boolean(rows.length);
+  }
+  return false;
+}
+
+function canModifyStudentAcademicRecord(user, studentId, yearId) {
+  if (isAdmin(user) || isPrincipal(user)) return true;
+  if (!isTeacher(user)) return false;
+  return canViewStudent(user, studentId, yearId);
+}
+
+function roleOptionsForUser(user, selected = '') {
+  const roles = canManageAdminUsers(user) ? ROLES : [ROLE_TEACHER, ROLE_PARENT];
+  return roles.map((role) => `<option value="${role}" ${selectedAttr(role, selected)}>${roleLabel(role)}</option>`).join('');
+}
+
 function roleLabel(role) {
-  return role === ROLE_ADMIN ? 'Admin' : 'Teacher';
+  if (role === ROLE_ADMIN) return 'Admin';
+  if (role === ROLE_PRINCIPAL) return 'Principal';
+  if (role === ROLE_PARENT) return 'Parent';
+  return 'Teacher';
 }
 
 function getSchoolYears() {
@@ -1284,7 +1374,9 @@ function letterGradeScale(yearId, grade, subjectId) {
 }
 
 function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
-  if (!user || user.role !== ROLE_TEACHER) return true;
+  if (!user) return false;
+  if (isAdmin(user) || isPrincipal(user)) return true;
+  if (!isTeacher(user)) return false;
   if (!user.teacher_id) return false;
   const roomClause = classroomId ? `AND c.id=${asInt(classroomId)}` : '';
   const rows = querySql(`SELECT c.id
@@ -1317,9 +1409,26 @@ const NAV_ICONS = {
   reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
 };
 
+function navItemActive(pathname, currentPath) {
+  return currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
+}
+
 function navLink(pathname, currentPath, label, iconKey) {
-  const active = currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
+  const active = navItemActive(pathname, currentPath);
   return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
+}
+
+function navItemsForUser(user) {
+  if (isParent(user)) return [{ pathname: '/parent', label: 'Parent Portal', iconKey: 'reports' }];
+  return [
+    { pathname: '/', label: 'Dashboard', iconKey: 'dashboard' },
+    { pathname: '/assignments', label: 'Assignments', iconKey: 'assignments' },
+    { pathname: '/gradebook', label: 'Gradebook', iconKey: 'gradebook' },
+    { pathname: '/absences', label: 'Absences', iconKey: 'absences' },
+    { pathname: '/reports', label: 'Reports', iconKey: 'reports' },
+    { pathname: '/report-cards', label: 'Report Card', iconKey: 'reportcards' },
+    ...(canAccessSetup(user) ? [{ pathname: '/setup', label: 'School Setup', iconKey: 'setup' }] : [])
+  ];
 }
 
 function actionPanel(title, body, meta = '') {
@@ -1335,13 +1444,16 @@ function emptyState(text) {
 
 function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
   const settings = appSettings();
-  const yearSwitcher = user && selectedYear ? `<form class="year-form" method="post" action="/switch-year">
+  const yearSwitcher = (extraClass = '') => user && selectedYear ? `<form class="year-form ${extraClass}" method="post" action="/switch-year">
       ${csrfInput(csrfToken)}
       <select name="yearId" aria-label="School year">
         ${years.map((year) => `<option value="${year.id}" ${year.id === selectedYear.id ? 'selected' : ''}>${esc(year.name)}</option>`).join('')}
       </select>
       <button class="sr-only" type="submit">Switch school year</button>
     </form>` : '';
+  const navItems = user ? navItemsForUser(user) : [];
+  const navMarkup = navItems.map((item) => navLink(item.pathname, currentPath, item.label, item.iconKey)).join('');
+  const activeNav = navItems.find((item) => navItemActive(item.pathname, currentPath)) || navItems[0] || null;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1373,6 +1485,9 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
   --grade-grid-band-ink: #172554;
   --shadow: 0 18px 48px rgba(16, 24, 40, .07);
   --radius: 4px;
+  --demo-offset: ${DEMO_MODE ? '34px' : '0px'};
+  --topbar-height: 66px;
+  --mobile-strip-height: 50px;
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -1446,53 +1561,130 @@ button, select, input { min-height: 42px; }
 }
 .topbar {
   position: sticky;
-  top: ${DEMO_MODE ? '34px' : '0'};
-  z-index: 20;
-  display: flex;
+  top: var(--demo-offset);
+  z-index: 24;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  min-height: 76px;
-  padding: .75rem max(1rem, env(safe-area-inset-left)) .75rem max(1rem, env(safe-area-inset-right));
+  gap: .75rem;
+  min-height: var(--topbar-height);
+  padding: .55rem max(.85rem, env(safe-area-inset-left)) .55rem max(.85rem, env(safe-area-inset-right));
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 94%, transparent);
   backdrop-filter: blur(16px);
 }
-.brand-row, .top-actions, .year-form, .user-chip { display: flex; align-items: center; gap: .6rem; }
-.brand-row { justify-content: space-between; min-width: 0; }
+.brand-row, .top-actions, .year-form, .user-chip { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.brand-row { justify-content: space-between; }
 .brand { display: flex; align-items: center; gap: .65rem; min-width: 0; text-decoration: none; }
-.brand img { width: 50px; height: 38px; object-fit: contain; }
-.brand-text strong { display: block; font-size: 1.05rem; font-weight: 760; letter-spacing: 0; line-height: 1.2; }
+.brand img { width: 44px; height: 34px; object-fit: contain; flex: 0 0 auto; }
+.brand-text { min-width: 0; }
+.brand-text strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.02rem; font-weight: 760; letter-spacing: 0; line-height: 1.2; }
 .brand-text span { display: block; color: var(--muted); font-size: .82rem; margin-top: .05rem; line-height: 1.35; }
 .top-actions { justify-content: flex-end; flex-wrap: nowrap; margin-left: auto; }
 .year-form { flex: 0 0 auto; }
-.year-form select { width: 190px; border-color: var(--line); background: var(--paper); }
+.year-form select { min-height: 38px; width: 150px; border-color: var(--line); background: var(--paper); font-size: .84rem; font-weight: 700; padding: .42rem .54rem; }
 .year-form button, .icon-btn, .logout-btn {
   border: 1px solid var(--line);
   background: var(--paper-strong);
   color: var(--ink);
   border-radius: var(--radius);
-  padding: .48rem .68rem;
+  padding: .42rem .58rem;
   cursor: pointer;
 }
 .logout-form { margin: 0; }
-.user-chip { color: var(--muted); font-size: .84rem; white-space: nowrap; }
-.app-version { color: var(--muted); font-size: .78rem; font-weight: 800; white-space: nowrap; }
+.logout-btn {
+  min-height: 36px;
+  font-size: .82rem;
+  font-weight: 760;
+  white-space: nowrap;
+}
+.user-chip {
+  min-height: 34px;
+  max-width: 170px;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.user-name { overflow: hidden; text-overflow: ellipsis; }
+.user-role::before { content: " · "; }
+.mobile-nav-strip {
+  grid-column: 1 / -1;
+  position: sticky;
+  top: calc(var(--demo-offset) + var(--topbar-height));
+  z-index: 22;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(108px, 140px);
+  gap: .5rem;
+  min-height: var(--mobile-strip-height);
+  padding: .42rem max(.75rem, env(safe-area-inset-left)) .42rem max(.75rem, env(safe-area-inset-right));
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 96%, transparent);
+  backdrop-filter: blur(16px);
+}
+.nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  min-width: 0;
+  min-height: 38px;
+  padding: .42rem .58rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 800;
+}
+.nav-toggle-main {
+  display: inline-flex;
+  align-items: center;
+  gap: .48rem;
+  min-width: 0;
+}
+.nav-toggle-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-toggle svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+.nav-toggle-chevron {
+  transition: transform .16s ease;
+}
+.nav-open .nav-toggle-chevron {
+  transform: rotate(180deg);
+}
+.mobile-year-form { justify-content: end; }
+.mobile-year-form select {
+  width: 100%;
+  min-width: 0;
+}
 .sidebar {
   position: sticky;
-  top: 117px;
-  z-index: 10;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
-  gap: .45rem;
-  overflow-x: auto;
-  padding: .55rem .85rem;
+  top: calc(var(--demo-offset) + var(--topbar-height) + var(--mobile-strip-height));
+  z-index: 21;
+  display: none;
+  gap: .35rem;
+  max-height: calc(100svh - var(--demo-offset) - var(--topbar-height) - var(--mobile-strip-height));
+  overflow: auto;
+  padding: .48rem .65rem .65rem;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 94%, transparent);
   scrollbar-width: none;
 }
-.sidebar::-webkit-scrollbar { display: none; }
+.nav-open .sidebar { display: grid; }
+.sidebar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.sidebar-context { display: none; }
+.nav-links {
+  display: grid;
+  gap: .28rem;
+}
 .nav-link {
   display: flex;
   align-items: center;
@@ -1502,8 +1694,8 @@ button, select, input { min-height: 42px; }
   border-left: 3px solid transparent;
   background: transparent;
   color: var(--muted);
-  border-radius: 0;
-  padding: .68rem .75rem;
+  border-radius: var(--radius);
+  padding: .7rem .75rem;
   font-weight: 650;
   font-size: .88rem;
   white-space: nowrap;
@@ -1526,8 +1718,9 @@ button, select, input { min-height: 42px; }
   border-top: 0;
 }
 .theme-icon-btn {
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1541,6 +1734,26 @@ button, select, input { min-height: 42px; }
 .main {
   padding: 1rem .85rem 3.5rem;
 }
+.app-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .8rem max(.85rem, env(safe-area-inset-left)) max(.9rem, env(safe-area-inset-bottom)) max(.85rem, env(safe-area-inset-right));
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  font-size: .78rem;
+  font-weight: 750;
+}
+.app-footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-footer strong { color: var(--ink); font-weight: 850; }
 .workspace {
   display: grid;
   gap: 1rem;
@@ -1597,6 +1810,81 @@ button, select, input { min-height: 42px; }
 }
 .grid-2, .grid-3, .grid-4 { display: grid; gap: .7rem; grid-template-columns: 1fr; }
 .form-grid { display: grid; gap: .7rem; grid-template-columns: 1fr; }
+.absence-form {
+  gap: .85rem .75rem;
+  align-items: end;
+}
+.absence-form fieldset {
+  display: grid;
+  gap: .32rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.absence-form legend {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 650;
+}
+.choice-group {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: .18rem;
+  align-items: center;
+  justify-self: start;
+  min-height: 42px;
+  padding: .18rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+}
+.choice-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  gap: 0;
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 820;
+  cursor: pointer;
+}
+.choice-pill input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.choice-pill span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: .35rem .6rem;
+  border-radius: calc(var(--radius) - 1px);
+  line-height: 1;
+  white-space: nowrap;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+}
+.choice-pill input:checked + span {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.choice-pill input:focus-visible + span {
+  outline: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.absence-notes-field textarea {
+  min-height: 76px;
+}
 .family-form-section {
   grid-column: 1 / -1;
   display: grid;
@@ -2051,13 +2339,14 @@ tr:last-child td { border-bottom: 0; }
 .gb-grid-scroll {
   width: 100%;
   overflow: auto;
-  background: var(--paper);
+  background: linear-gradient(to bottom, var(--grade-grid-head) 0 126px, var(--paper) 126px);
   scrollbar-color: #a6adba #e5e7eb;
   scrollbar-width: thin;
 }
 .gb-grid-stage {
   position: relative;
   width: max-content;
+  min-width: 100%;
 }
 .gb-grid-header-overlay {
   position: absolute;
@@ -3384,9 +3673,7 @@ tr:last-child td { border-bottom: 0; }
   vertical-align: middle;
 }
   @media (min-width: 720px) {
-  .topbar { top: ${DEMO_MODE ? '34px' : '0'}; }
   .top-actions { justify-content: end; }
-  .sidebar { top: ${DEMO_MODE ? '104px' : '70px'}; padding-inline: 1rem; }
   .main { padding: 1.2rem 1rem 4rem; }
   .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -3395,6 +3682,12 @@ tr:last-child td { border-bottom: 0; }
   .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .form-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .absence-form {
+    grid-template-columns: 170px minmax(260px, 1fr);
+  }
+  .absence-date-field { grid-column: 1; }
+  .absence-student-field { grid-column: 2; }
+  .absence-notes-field { grid-column: 1 / -1; }
   .family-form-section-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
@@ -3409,10 +3702,13 @@ tr:last-child td { border-bottom: 0; }
 @media (min-width: 1040px) {
   .app { grid-template-columns: 168px 1fr; max-width: none; }
   .topbar { grid-column: 1 / -1; }
+  .mobile-nav-strip { display: none; }
   .sidebar {
+    display: grid;
     position: sticky;
-    top: ${DEMO_MODE ? '104px' : '70px'};
-    height: calc(100svh - ${DEMO_MODE ? '104px' : '70px'});
+    top: calc(var(--demo-offset) + var(--topbar-height));
+    height: calc(100svh - var(--demo-offset) - var(--topbar-height));
+    max-height: none;
     align-self: start;
     grid-auto-flow: row;
     grid-auto-columns: auto;
@@ -3421,12 +3717,33 @@ tr:last-child td { border-bottom: 0; }
     border-bottom: 0;
     padding: .8rem .65rem;
   }
+  .sidebar-context {
+    display: grid;
+    gap: .55rem;
+    margin-bottom: .35rem;
+    padding: .05rem .1rem .75rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .sidebar-context .year-form select { width: 100%; }
   .nav-link { border-radius: var(--radius); }
   .main { padding: 1.35rem 1.35rem 4rem; }
+  .app-footer { grid-column: 2; }
   .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
   .gradebook-split {
     grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
     grid-template-areas: "scores history";
+  }
+  .absence-form {
+    grid-template-columns: 170px minmax(260px, 420px) max-content 104px max-content;
+  }
+  .absence-notes-field {
+    grid-column: 1 / 3;
+    max-width: 620px;
+  }
+  .absence-submit {
+    grid-column: 3;
+    justify-self: start;
+    min-width: 136px;
   }
   .gradebook-score-panel { grid-area: scores; }
   .assignment-history-panel { grid-area: history; }
@@ -3441,19 +3758,45 @@ tr:last-child td { border-bottom: 0; }
   .assignments-layout { grid-template-columns: minmax(280px, 32%) minmax(0, 1fr); }
 }
 @media (max-width: 820px) {
-  .topbar { align-items: stretch; flex-direction: column; }
-  .top-actions { justify-content: stretch; flex-wrap: wrap; margin-left: 0; }
-  .year-form { flex: 1 1 100%; }
-  .year-form select { width: 100%; max-width: none; }
-  .user-chip { white-space: normal; }
+  .topbar { gap: .5rem; }
+  .brand { gap: .5rem; }
+  .brand img { width: 34px; height: 30px; }
+  .brand-text span { display: none; }
+  .top-actions { gap: .35rem; }
+  .user-chip { max-width: 112px; }
+  .user-role { display: none; }
+  .logout-btn { padding: .36rem .5rem; }
   .page-head { align-items: stretch; flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .main { padding: .8rem .7rem 2.4rem; }
+  .workspace { gap: .8rem; }
+  .page-head { gap: .45rem; padding-top: .15rem; }
+  .page-head h1 { font-size: 1.42rem; }
+  .page-head p { font-size: .94rem; line-height: 1.38; }
+  .panel, .ledger, .chart-panel, .family-list, .family-detail, .setup-nav { border-radius: 10px; }
+  .kpis { gap: .55rem; }
+  .kpi { padding: .72rem; border-radius: 10px; }
+  .kpi strong { font-size: 1.36rem; }
+  .kpi span { font-size: .78rem; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-wrap table { min-width: 620px; }
+  .compact-table table { min-width: 0; }
+  .chart-head { align-items: start; }
+  .mobile-nav-strip { grid-template-columns: minmax(0, 1fr) minmax(104px, 124px); }
+}
+@media (max-width: 390px) {
+  .topbar { padding-inline: max(.65rem, env(safe-area-inset-left)) max(.65rem, env(safe-area-inset-right)); }
+  .user-chip { max-width: 86px; font-size: .78rem; }
+  .logout-btn { font-size: .78rem; padding-inline: .42rem; }
+  .mobile-nav-strip { padding-inline: max(.65rem, env(safe-area-inset-left)) max(.65rem, env(safe-area-inset-right)); grid-template-columns: minmax(0, 1fr) 108px; }
 }
 @media print {
   @page { size: letter portrait; margin: .48in .55in; }
   @page report-card-page { size: letter landscape; margin: 0; }
   html, body { width: auto; margin: 0; background: #fff; color: #000; }
-  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
+  .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
   .workspace { gap: .22in; }
@@ -3634,19 +3977,27 @@ tr:last-child td { border-bottom: 0; }
       </a>
     </div>
     <div class="top-actions">
-      ${yearSwitcher}
-      ${user ? `<span class="app-version">v${esc(APP_VERSION)}</span><span class="user-chip">${esc(user.name)} &middot; ${roleLabel(user.role)}</span>
+      ${user ? `<span class="user-chip"><span class="user-name">${esc(user.name)}</span><span class="user-role">${roleLabel(user.role)}</span></span>
         <form class="logout-form" method="post" action="/logout">${csrfInput(csrfToken)}<button class="logout-btn" type="submit">Log out</button></form>` : ''}
     </div>
   </header>
-  ${user ? `<nav class="sidebar" aria-label="Primary">
-    ${navLink('/', currentPath, 'Dashboard', 'dashboard')}
-    ${navLink('/assignments', currentPath, 'Assignments', 'assignments')}
-    ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
-    ${navLink('/absences', currentPath, 'Absences', 'absences')}
-    ${navLink('/reports', currentPath, 'Reports', 'reports')}
-    ${navLink('/report-cards', currentPath, 'Report Card', 'reportcards')}
-    ${navLink('/setup', currentPath, 'School Setup', 'setup')}
+  ${user ? `<div class="mobile-nav-strip">
+    <button id="navToggle" class="nav-toggle" type="button" aria-expanded="false" aria-controls="primaryNav">
+      <span class="nav-toggle-main">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"></path></svg>
+        <span>${esc(activeNav?.label || 'Menu')}</span>
+      </span>
+      <svg class="nav-toggle-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5H7Z"></path></svg>
+    </button>
+    ${yearSwitcher('mobile-year-form')}
+  </div>
+  <nav id="primaryNav" class="sidebar" aria-label="Primary">
+    <div class="sidebar-context">
+      ${yearSwitcher('sidebar-year-form')}
+    </div>
+    <div class="nav-links">
+      ${navMarkup}
+    </div>
     <div class="sidebar-utility">
       <button id="themeToggle" class="theme-icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg>
@@ -3654,6 +4005,7 @@ tr:last-child td { border-bottom: 0; }
     </div>
   </nav>` : ''}
   <main class="main">${content}</main>
+  <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><strong>Oakstead</strong> v${esc(APP_VERSION)}</span></footer>
 </div>
 <script>
 function generateReportCardPdf(btn) {
@@ -3680,6 +4032,29 @@ function generateReportCardPdf(btn) {
       const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
       root.setAttribute('data-theme', next === 'dark' ? 'dark' : '');
       localStorage.setItem('oakstead-theme', next);
+    });
+  }
+  const navToggle = document.getElementById('navToggle');
+  const primaryNav = document.getElementById('primaryNav');
+  function setMobileNav(open) {
+    document.body.classList.toggle('nav-open', open);
+    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (navToggle && primaryNav) {
+    navToggle.addEventListener('click', function(event) {
+      event.stopPropagation();
+      setMobileNav(!document.body.classList.contains('nav-open'));
+    });
+    primaryNav.addEventListener('click', function(event) {
+      if (event.target.closest('a')) setMobileNav(false);
+    });
+    document.addEventListener('click', function(event) {
+      if (!document.body.classList.contains('nav-open')) return;
+      if (primaryNav.contains(event.target) || navToggle.contains(event.target)) return;
+      setMobileNav(false);
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') setMobileNav(false);
     });
   }
   document.querySelectorAll('.year-form select').forEach(function(select) {
@@ -4289,7 +4664,7 @@ function selectedAttr(value, selected) {
   return String(value || '') === String(selected || '') ? 'selected' : '';
 }
 
-function setupPage(selectedYear, csrfToken, url) {
+function setupPage(selectedYear, csrfToken, url, user) {
   const yearId = asInt(selectedYear.id);
   const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'backups', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
@@ -4335,9 +4710,10 @@ function setupPage(selectedYear, csrfToken, url) {
     LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
     LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
     ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`);
-  const users = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, t.name AS teacher_name
+  const users = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id, t.name AS teacher_name, f.family_name AS parent_family_name
     FROM os_users u
     LEFT JOIN os_teachers t ON t.id = u.teacher_id
+    LEFT JOIN os_families f ON f.id = u.parent_family_id
     ORDER BY u.name;`);
   const weightGroups = querySql(`SELECT wg.*, s.name AS subject_name
     FROM os_grade_weight_groups wg
@@ -4356,6 +4732,7 @@ function setupPage(selectedYear, csrfToken, url) {
     WHERE group_id IN (SELECT id FROM os_letter_grade_groups WHERE school_year_id=${yearId})
     ORDER BY threshold DESC, sort_order, letter;`);
   const teacherOptions = (selected = '') => teachers.map((teacher) => `<option value="${teacher.id}" ${selectedAttr(teacher.id, selected)}>${esc(teacher.name)}</option>`).join('');
+  const familyOptions = (selected = '') => families.map((family) => `<option value="${family.id}" ${selectedAttr(family.id, selected)}>${esc(familyReportName(family))}</option>`).join('');
   const subjectOptions = (selected = '') => subjects.map((subject) => `<option value="${subject.id}" ${selectedAttr(subject.id, selected)}>${esc(subject.name)}</option>`).join('');
   const classroomOptions = (selected = '') => classrooms.map((room) => `<option value="${room.id}" ${selectedAttr(room.id, selected)}>${esc(room.name)}</option>`).join('');
   const districtOptions = (selected = '') => districts.map((district) => `<option value="${district.id}" ${selectedAttr(district.id, selected)}>${esc(district.name)}</option>`).join('');
@@ -4847,14 +5224,16 @@ function setupPage(selectedYear, csrfToken, url) {
   </section>`;
 
   const userEdit = users.find((setupUser) => setupUser.id === asInt(url.searchParams.get('userId')));
-  const roleValue = userEdit?.role || ROLE_ADMIN;
-  const userForm = `<form method="post" action="/users" class="form-grid two">
+  const protectedAdminEdit = [ROLE_ADMIN, ROLE_PRINCIPAL].includes(userEdit?.role) && !canManageAdminUsers(user);
+  const roleValue = userEdit?.role || (canManageAdminUsers(user) ? ROLE_ADMIN : ROLE_TEACHER);
+  const userForm = protectedAdminEdit ? '<p class="notice danger">Only admins can edit admin or principal users.</p>' : `<form method="post" action="/users" class="form-grid two">
     ${csrfInput(csrfToken)}
     ${userEdit ? `<input type="hidden" name="userId" value="${userEdit.id}" />` : ''}
     <label>Name<input name="name" required maxlength="120" value="${esc(userEdit?.name || '')}" /></label>
     <label>Username<input name="username" required maxlength="80" value="${esc(userEdit?.username || '')}" /></label>
-    <label>Role<select name="role"><option value="${ROLE_ADMIN}" ${selectedAttr(roleValue, ROLE_ADMIN)}>Admin</option><option value="${ROLE_TEACHER}" ${selectedAttr(roleValue, ROLE_TEACHER)}>Teacher</option></select></label>
+    <label>Role<select name="role">${roleOptionsForUser(user, roleValue)}</select></label>
     <label>Teacher Link<select name="teacherId"><option value="">None</option>${teacherOptions(userEdit?.teacher_id || '')}</select></label>
+    <label>Parent Family<select name="parentFamilyId"><option value="">None</option>${familyOptions(userEdit?.parent_family_id || '')}</select></label>
     <label>Password<input type="password" name="password" ${userEdit ? '' : 'required'} maxlength="120" autocomplete="new-password" /></label>
     <button type="submit">${userEdit ? 'Save Changes' : 'Create User'}</button>
   </form>`;
@@ -4866,8 +5245,11 @@ function setupPage(selectedYear, csrfToken, url) {
     <div class="family-detail-body">
       ${(action === 'add-user' || userEdit) ? `<div class="subhead"><h3>${userEdit ? 'Edit User' : 'Add User'}</h3><a class="secondary-btn compact-action" href="/setup?section=users">Cancel</a></div>${userForm}` : ''}
       <div class="table-wrap compact-table"><table>
-        <tr><th>Name</th><th>Username</th><th>Role</th><th>Teacher</th><th></th></tr>
-        ${users.map((setupUser) => `<tr><td>${esc(setupUser.name)}</td><td>${esc(setupUser.username)}</td><td>${roleLabel(setupUser.role)}</td><td>${esc(setupUser.teacher_name || '') || '&mdash;'}</td><td><a class="text-action" href="/setup?section=users&userId=${setupUser.id}">Edit</a></td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No users yet.')}</td></tr>`}
+        <tr><th>Name</th><th>Username</th><th>Role</th><th>Teacher</th><th>Family</th><th></th></tr>
+        ${users.map((setupUser) => {
+          const canEditUser = ![ROLE_ADMIN, ROLE_PRINCIPAL].includes(setupUser.role) || canManageAdminUsers(user);
+          return `<tr><td>${esc(setupUser.name)}</td><td>${esc(setupUser.username)}</td><td>${roleLabel(setupUser.role)}</td><td>${esc(setupUser.teacher_name || '') || '&mdash;'}</td><td>${esc(setupUser.parent_family_name || '') || '&mdash;'}</td><td>${canEditUser ? `<a class="text-action" href="/setup?section=users&userId=${setupUser.id}">Edit</a>` : '&mdash;'}</td></tr>`;
+        }).join('') || `<tr><td colspan="6">${emptyState('No users yet.')}</td></tr>`}
       </table></div>
     </div>
   </section>`;
@@ -5254,7 +5636,7 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
         AND sy.status='enrolled'
         ${teacherStudentClause}
       ORDER BY st.last_name, st.first_name;`) : [];
-  const assignments = selectedGrade && selectedSubjectId ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
+  const assignments = selectedGrade && selectedSubjectId && allowed ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
       COUNT(sc.id) AS score_count,
       ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
@@ -5419,8 +5801,9 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
     ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)} ORDER BY s.name;`)
     : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
   const subject = subjects.find((s) => s.id === selectedSubjectId);
+  const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, 0);
 
-  const assignments = selectedGrade && selectedSubjectId ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
+  const assignments = selectedGrade && selectedSubjectId && allowed ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
       COUNT(sc.id) AS score_count,
       ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
@@ -5436,7 +5819,7 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
     : null;
 
   const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
-  const students = selectedGrade ? querySql(`SELECT st.id, st.first_name, st.last_name
+  const students = selectedGrade && allowed ? querySql(`SELECT st.id, st.first_name, st.last_name
     FROM os_student_years sy
     JOIN os_students st ON st.id = sy.student_id
     WHERE sy.school_year_id=${yearId}
@@ -5466,7 +5849,9 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
     : `<div style="padding:.9rem">${emptyState(selectedGrade && selectedSubjectId ? 'No assignments yet.' : 'Select a grade and subject.')}</div>`;
 
   let rightPanel = '';
-  if (selectedAssignment) {
+  if (!allowed) {
+    rightPanel = `<section class="family-detail assignment-editor"><div class="family-detail-head"><h2>Assignments</h2></div><div class="family-detail-body">${emptyState('This grade is not assigned to your teacher account.')}</div></section>`;
+  } else if (selectedAssignment) {
     const maxScore = asPoints(selectedAssignment.max_score);
     const scoreModeControl = scoreModeToggle(
       `/assignments?${modeBaseParams}percent&assignmentId=${selectedAssignment.id}`,
@@ -5644,20 +6029,31 @@ function printReportHead(title, selectedYear, detail = '') {
   </header>`;
 }
 
-function reportOverview(yearId, selectedYear) {
+function reportOverview(yearId, selectedYear, user) {
+  const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
   const kpis = {
-    families: querySql('SELECT COUNT(*) AS count FROM os_families;')[0]?.count || 0,
-    students: querySql(`SELECT COUNT(*) AS count FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`)[0]?.count || 0,
-    classrooms: querySql(`SELECT COUNT(*) AS count FROM os_classrooms WHERE school_year_id=${yearId};`)[0]?.count || 0,
-    board: querySql(`SELECT COUNT(*) AS count
+    families: canAccessSetup(user) ? querySql('SELECT COUNT(*) AS count FROM os_families;')[0]?.count || 0 : 0,
+    students: querySql(`SELECT COUNT(*) AS count
+      FROM os_student_years sy
+      JOIN os_students st ON st.id = sy.student_id
+      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+        ${accessClause};`)[0]?.count || 0,
+    classrooms: canAccessSetup(user) ? querySql(`SELECT COUNT(*) AS count FROM os_classrooms WHERE school_year_id=${yearId};`)[0]?.count || 0 : querySql(`SELECT COUNT(DISTINCT sy.classroom_id) AS count
+      FROM os_student_years sy
+      JOIN os_students st ON st.id = sy.student_id
+      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+        ${accessClause};`)[0]?.count || 0,
+    board: canAccessSetup(user) ? querySql(`SELECT COUNT(*) AS count
       FROM os_person_roles pr
       JOIN os_role_groups rg ON rg.id = pr.group_id
-      WHERE rg.name='Board Members';`)[0]?.count || 0
+      WHERE rg.name='Board Members';`)[0]?.count || 0 : 0
   };
-  const gradeRows = querySql(`SELECT grade_level, COUNT(*) AS count
-    FROM os_student_years
-    WHERE school_year_id=${yearId} AND status='enrolled'
-    GROUP BY grade_level;`);
+  const gradeRows = querySql(`SELECT sy.grade_level AS grade_level, COUNT(*) AS count
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      ${accessClause}
+    GROUP BY sy.grade_level;`);
   const sortedGrades = sortGrades(gradeRows.map((row) => row.grade_level));
   const gradesByName = new Map(gradeRows.map((row) => [row.grade_level, Number(row.count || 0)]));
   const largestGrade = Math.max(1, ...gradeRows.map((row) => Number(row.count || 0)));
@@ -5665,6 +6061,7 @@ function reportOverview(yearId, selectedYear) {
     FROM os_students st
     JOIN os_student_years sy ON sy.student_id = st.id
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
+      ${accessClause}
     GROUP BY month;`);
   const birthdayByMonth = new Map(birthdayRows.map((row) => [Number(row.month), Number(row.count || 0)]));
   const largestMonth = Math.max(1, ...birthdayRows.map((row) => Number(row.count || 0)));
@@ -5732,10 +6129,15 @@ function familiesReport(yearId, selectedYear) {
   </section>`;
 }
 
-function studentsReport(url, yearId, selectedYear) {
+function studentsReport(url, yearId, selectedYear, user) {
   const selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const gradeClause = selectedGrade ? `AND sy.grade_level=${sqlValue(selectedGrade)}` : '';
-  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
+  const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+  const grades = sortGrades(querySql(`SELECT DISTINCT sy.grade_level
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      ${accessClause};`).map((row) => row.grade_level));
   const rows = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, st.birth_date,
       sy.grade_level, c.name AS classroom_name, t.name AS teacher_name
     FROM os_student_years sy
@@ -5743,6 +6145,7 @@ function studentsReport(url, yearId, selectedYear) {
     LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
     LEFT JOIN os_teachers t ON t.id = c.teacher_id
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' ${gradeClause}
+      ${accessClause}
     ORDER BY st.last_name, st.first_name;`);
   const groupedGrades = sortGrades(rows.map((row) => row.grade_level));
   return `<div class="workspace">
@@ -5803,7 +6206,8 @@ function schoolBoardReport(selectedYear) {
   </section>`;
 }
 
-function birthdaysReport(yearId, selectedYear) {
+function birthdaysReport(yearId, selectedYear, user) {
+  const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
   const rows = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, st.birth_date,
       CAST(strftime('%m', st.birth_date) AS INTEGER) AS birth_month,
       CAST(strftime('%d', st.birth_date) AS INTEGER) AS birth_day,
@@ -5812,6 +6216,7 @@ function birthdaysReport(yearId, selectedYear) {
     JOIN os_student_years sy ON sy.student_id = st.id
     LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
+      ${accessClause}
     ORDER BY birth_month, birth_day, st.last_name, st.first_name;`);
   return `${printReportHead('Student Birthdays', selectedYear)}
   <section class="ledger birthday-report">
@@ -5899,8 +6304,13 @@ function miniSubjectChartSvg(item, periods) {
   </svg>`;
 }
 
-function gradeGraphReport(url, yearId, selectedYear) {
-  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
+function gradeGraphReport(url, yearId, selectedYear, user) {
+  const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+  const grades = sortGrades(querySql(`SELECT DISTINCT sy.grade_level
+    FROM os_student_years sy
+    JOIN os_students st ON st.id = sy.student_id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      ${accessClause};`).map((row) => row.grade_level));
   const selectedGrade = cleanGrade(url.searchParams.get('grade')) || grades[0] || '';
   const requestedScope = cleanText(url.searchParams.get('scope'), 12);
   const scope = requestedScope === 'student' ? 'student' : 'grade';
@@ -5908,6 +6318,7 @@ function gradeGraphReport(url, yearId, selectedYear) {
     FROM os_student_years sy
     JOIN os_students st ON st.id = sy.student_id
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND sy.grade_level=${sqlValue(selectedGrade)}
+      ${accessClause}
     ORDER BY st.last_name, st.first_name;`) : [];
   const selectedStudentId = scope === 'student' ? (asInt(url.searchParams.get('studentId')) || asInt(students[0]?.id)) : 0;
   const selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || null;
@@ -5961,17 +6372,83 @@ function gradeGraphReport(url, yearId, selectedYear) {
   </div>`;
 }
 
-function reportsPage(url, selectedYear) {
+function studentGradeGraphPanel(student, yearId, selectedYear) {
+  if (!student) return emptyState('No child is linked to this parent account for the selected school year.');
+  const selectedGrade = cleanGrade(student.grade_level);
+  const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+  const graphPeriods = periods.length ? periods : [{ id: 0, name: 'Current', start_date: '', end_date: '' }];
+  const subjects = selectedGrade ? querySql(`SELECT DISTINCT s.id, s.name
+    FROM os_assignments a
+    JOIN os_subjects s ON s.id = a.subject_id
+    WHERE a.school_year_id=${yearId} AND a.grade_level=${sqlValue(selectedGrade)}
+    ORDER BY s.name;`) : [];
+  const series = subjects.map((subject, index) => ({
+    id: subject.id,
+    name: subject.name,
+    color: graphColor(index),
+    values: graphPeriods.map((period) => {
+      const result = periodAverageRows(yearId, selectedGrade, asInt(subject.id), [asInt(student.id)], period);
+      return result.studentAverages.get(asInt(student.id)) ?? null;
+    })
+  }));
+  return `<section class="chart-panel grade-graph">
+    <div class="grade-graph-screen">
+      <div class="chart-head"><h2>Grade Graph</h2><span>${esc(studentDisplayName(student))} / Grade ${esc(selectedGrade)}</span></div>
+    </div>
+    <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
+      ${series.map((item) => {
+        const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
+        return `<section class="mini-subject-chart">
+          <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
+          ${miniSubjectChartSvg(item, graphPeriods)}
+        </section>`;
+      }).join('') || emptyState('No subjects with scores yet.')}
+    </div>
+  </section>`;
+}
+
+function parentPage(url, user, selectedYear) {
+  const yearId = asInt(selectedYear.id);
+  if (!asInt(user.parent_family_id)) {
+    return `<div class="workspace">${schoolYearHead('Parent Portal', 'Your account is not linked to a family yet.', selectedYear)}${emptyState('Ask a principal or admin to link this sign-in to your family record.')}</div>`;
+  }
+  const children = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, sy.grade_level
+    FROM os_students st
+    JOIN os_student_years sy ON sy.student_id = st.id
+    WHERE st.family_id=${asInt(user.parent_family_id)}
+      AND sy.school_year_id=${yearId}
+      AND sy.status='enrolled'
+    ORDER BY st.birth_date, st.last_name, st.first_name;`);
+  const selectedStudentId = asInt(url.searchParams.get('studentId')) || asInt(children[0]?.id);
+  const selectedStudent = children.find((student) => asInt(student.id) === selectedStudentId) || children[0] || null;
+  const graph = studentGradeGraphPanel(selectedStudent, yearId, selectedYear);
+  const reportCards = reportCardsPage(url, selectedYear, user, {
+    formAction: '/parent',
+    title: 'Report Card',
+    description: 'View printable report cards for your children.',
+    childPicker: true
+  });
+  return `<div class="workspace">
+    ${schoolYearHead('Parent Portal', 'View grades and report cards for your children.', selectedYear)}
+    ${graph}
+  </div>
+  ${reportCards}`;
+}
+
+function reportsPage(url, selectedYear, user) {
   const yearId = asInt(selectedYear.id);
   const activeReport = reportDefinitions().some((report) => report.key === url.searchParams.get('report')) ? url.searchParams.get('report') : '';
   const title = activeReport ? reportDefinitions().find((report) => report.key === activeReport).title : 'Reports';
+  if (!canAccessSetup(user) && ['families', 'school-board'].includes(activeReport)) {
+    return `<div class="workspace">${schoolYearHead('Reports', 'This report is only available to principals and admins.', selectedYear)}${emptyState('Choose a student or grade report instead.')}</div>`;
+  }
   let content = '';
   if (activeReport === 'families') content = familiesReport(yearId, selectedYear);
-  if (activeReport === 'students') content = studentsReport(url, yearId, selectedYear);
+  if (activeReport === 'students') content = studentsReport(url, yearId, selectedYear, user);
   if (activeReport === 'school-board') content = schoolBoardReport(selectedYear);
-  if (activeReport === 'birthdays') content = birthdaysReport(yearId, selectedYear);
-  if (activeReport === 'grade-graph') content = gradeGraphReport(url, yearId, selectedYear);
-  if (!activeReport) return reportOverview(yearId, selectedYear);
+  if (activeReport === 'birthdays') content = birthdaysReport(yearId, selectedYear, user);
+  if (activeReport === 'grade-graph') content = gradeGraphReport(url, yearId, selectedYear, user);
+  if (!activeReport) return reportOverview(yearId, selectedYear, user);
 
   return `<div class="workspace">
     ${schoolYearHead(title, reportDefinitions().find((report) => report.key === activeReport).description, selectedYear, '<button class="secondary-btn" type="button" onclick="window.print()">Print</button>')}
@@ -6105,21 +6582,29 @@ function periodAverageRows(yearId, grade, subjectId, studentIds, period) {
   };
 }
 
-function reportCardsPage(url, selectedYear) {
+function reportCardsPage(url, selectedYear, user, options = {}) {
   const yearId = asInt(selectedYear.id);
   const settings = appSettings();
-  const selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  let selectedGrade = cleanGrade(url.searchParams.get('grade'));
   const selectedStudentId = asInt(url.searchParams.get('studentId'));
   const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
-  const grades = sortGrades(querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`).map((row) => row.grade_level));
-  const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
-  const selectedPeriod = periods.find((period) => period.id === selectedPeriodId) || null;
-  const students = selectedGrade ? querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
+  const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+  const allAccessibleStudents = querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
     FROM os_student_years sy
     JOIN os_students st ON st.id = sy.student_id
-    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND sy.grade_level=${sqlValue(selectedGrade)}
-    ORDER BY st.last_name, st.first_name;`) : [];
-  const selectedStudent = students.find((student) => student.id === selectedStudentId) || null;
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      ${accessClause}
+    ORDER BY st.last_name, st.first_name;`);
+  const grades = sortGrades(allAccessibleStudents.map((row) => row.grade_level));
+  if (options.childPicker && !selectedStudentId && allAccessibleStudents[0]) selectedGrade = allAccessibleStudents[0].grade_level;
+  if (options.childPicker && selectedStudentId) selectedGrade = allAccessibleStudents.find((student) => asInt(student.id) === selectedStudentId)?.grade_level || '';
+  const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+  const selectedPeriod = periods.find((period) => period.id === selectedPeriodId) || (options.childPicker ? periods[0] : null);
+  const students = options.childPicker ? allAccessibleStudents : allAccessibleStudents.filter((student) => student.grade_level === selectedGrade);
+  const selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || (options.childPicker ? students[0] : null);
+  if (selectedStudent) selectedGrade = selectedStudent.grade_level;
+  const effectiveSelectedStudentId = asInt(selectedStudent?.id);
+  const effectiveSelectedPeriodId = asInt(selectedPeriod?.id);
   const subjects = selectedGrade ? querySql(`SELECT s.id, s.name
     FROM os_grade_subjects gs
     JOIN os_subjects s ON s.id = gs.subject_id
@@ -6162,8 +6647,8 @@ function reportCardsPage(url, selectedYear) {
     return { subject, periodScores };
   });
   const gradeSelect = `<select name="grade" data-auto-submit required><option value="">Grade</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
-  const studentSelect = `<select name="studentId" required><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${student.id === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
-  const periodSelect = `<select name="markingPeriodId" required><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
+  const studentSelect = `<select name="studentId" required data-auto-submit><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${asInt(student.id) === effectiveSelectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
+  const periodSelect = `<select name="markingPeriodId" required data-auto-submit><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${asInt(period.id) === effectiveSelectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
   const pdfFilename = selectedStudent && selectedPeriod
     ? `report-card-${selectedStudent.last_name}-${selectedStudent.first_name}-${selectedPeriod.name}.pdf`.replace(/[^a-z0-9._-]/gi, '-').toLowerCase()
     : 'report-card.pdf';
@@ -6257,11 +6742,11 @@ function reportCardsPage(url, selectedYear) {
   </div>` : emptyState('Select a grade, student, and marking period to build a report card.');
 
   return `<div class="workspace">
-    ${schoolYearHead('Report Cards', 'Generate printable report cards from marking periods and grade weights.', selectedYear)}
+    ${schoolYearHead(options.title || 'Report Cards', options.description || 'Generate printable report cards from marking periods and grade weights.', selectedYear)}
     <section class="panel">
-      <form method="get" action="/report-cards" class="filters">
+      <form method="get" action="${esc(options.formAction || '/report-cards')}" class="filters">
         <input type="hidden" name="yearId" value="${yearId}" />
-        <label>Grade${gradeSelect}</label>
+        ${options.childPicker ? '' : `<label>Grade${gradeSelect}</label>`}
         <label>Student${studentSelect}</label>
         <label>Marking Period${periodSelect}</label>
         <button type="submit">Load Report Card</button>
@@ -6272,35 +6757,50 @@ function reportCardsPage(url, selectedYear) {
   </div>`;
 }
 
-function absencesPage(url, selectedYear, csrfToken) {
+function absencesPage(url, selectedYear, csrfToken, user) {
   const yearId = asInt(selectedYear.id);
   const action = cleanText(url.searchParams.get('action'), 40);
+  const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
   const students = querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
     FROM os_student_years sy
     JOIN os_students st ON st.id = sy.student_id
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      ${accessClause}
     ORDER BY sy.grade_level, st.last_name, st.first_name;`);
   const absences = querySql(`SELECT a.*, st.first_name, st.last_name, sy.grade_level
     FROM os_absences a
     JOIN os_students st ON st.id = a.student_id
     LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id
     WHERE a.school_year_id=${yearId}
+      ${accessClause}
     ORDER BY a.absence_date DESC, st.last_name, st.first_name
     LIMIT 80;`);
   const studentOptions = students.map((student) => `<option value="${student.id}">${esc(student.last_name)}, ${esc(student.first_name)} - Grade ${esc(student.grade_level)}</option>`).join('');
   const addForm = `<section class="family-detail">
     <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="/absences">Cancel</a></div>
     <div class="family-detail-body">
-      <form method="post" action="/absences" class="form-grid two">
+      <form method="post" action="/absences" class="form-grid absence-form">
         ${csrfInput(csrfToken)}
         <input type="hidden" name="schoolYearId" value="${yearId}" />
-        <label>Date<input type="date" name="absenceDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
-        <label>Student<select name="studentId" required><option value="">Choose student</option>${studentOptions}</select></label>
-        <label>Type<select name="kind"><option value="absence">Absence</option><option value="tardy">Tardy</option></select></label>
-        <label>Amount<input type="number" name="amount" min="0" max="30" step="0.25" value="1" required /></label>
-        <label>Unit<select name="unit"><option value="days">Days</option><option value="hours">Hours</option></select></label>
-        <label>Notes<textarea name="notes" maxlength="400"></textarea></label>
-        <button type="submit">Save Absence</button>
+        <label class="absence-date-field">Date<input type="date" name="absenceDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
+        <label class="absence-student-field">Student<select name="studentId" required><option value="">Choose student</option>${studentOptions}</select></label>
+        <fieldset class="choice-field">
+          <legend>Type</legend>
+          <div class="choice-group">
+            <label class="choice-pill"><input type="radio" name="kind" value="absence" checked /><span>Absence</span></label>
+            <label class="choice-pill"><input type="radio" name="kind" value="tardy" /><span>Tardy</span></label>
+          </div>
+        </fieldset>
+        <label class="absence-amount-field">Amount<input type="number" name="amount" min="0" max="30" step="0.25" value="1" required /></label>
+        <fieldset class="choice-field">
+          <legend>Unit</legend>
+          <div class="choice-group">
+            <label class="choice-pill"><input type="radio" name="unit" value="days" checked /><span>Days</span></label>
+            <label class="choice-pill"><input type="radio" name="unit" value="hours" /><span>Hours</span></label>
+          </div>
+        </fieldset>
+        <label class="absence-notes-field">Notes<textarea name="notes" maxlength="400"></textarea></label>
+        <button class="absence-submit" type="submit">Save Absence</button>
       </form>
     </div>
   </section>`;
@@ -6439,7 +6939,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/families') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const familyId = asInt(body.familyId);
     if (familyId) {
       runSql(`UPDATE os_families
@@ -6462,7 +6962,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/school-districts') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const districtId = asInt(body.districtId);
     if (districtId) {
       runSql(`UPDATE os_school_districts SET name=${sqlValue(cleanText(body.name, 140))} WHERE id=${districtId};`);
@@ -6473,7 +6973,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/congregations') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const congregationId = asInt(body.congregationId);
     if (congregationId) {
       runSql(`UPDATE os_congregations SET name=${sqlValue(cleanText(body.name, 140))} WHERE id=${congregationId};`);
@@ -6484,7 +6984,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/students') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
     const existingStudentId = asInt(body.studentId);
     if (existingStudentId) {
@@ -6508,7 +7008,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/emergency-contacts') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const familyId = asInt(body.familyId);
     const contactId = asInt(body.contactId);
     const priority = Math.max(1, Math.min(20, asInt(body.priority) || 1));
@@ -6528,7 +7028,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/enrollments') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     runSql(`INSERT OR REPLACE INTO os_student_years (student_id, school_year_id, grade_level, classroom_id, status)
       VALUES (${asInt(body.studentId)}, ${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'}, 'enrolled');`);
     const family = querySql(`SELECT family_id FROM os_students WHERE id=${asInt(body.studentId)} LIMIT 1;`)[0];
@@ -6536,7 +7036,8 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/absences') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+    if (!canModifyStudentAcademicRecord(user, asInt(body.studentId), asInt(body.schoolYearId))) return sendText(res, 403, 'Forbidden');
     const kind = cleanText(body.kind, 20).toLowerCase() === 'tardy' ? 'tardy' : 'absence';
     const unit = cleanText(body.unit, 20).toLowerCase() === 'hours' ? 'hours' : 'days';
     const amount = Math.max(0, Math.min(30, Number(body.amount) || 0));
@@ -6546,7 +7047,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/teachers') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const teacherId = asInt(body.teacherId);
     if (teacherId) {
       runSql(`UPDATE os_teachers
@@ -6564,7 +7065,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/person-roles') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const redirectRaw = cleanText(body.redirectTo, 240);
     const redirectTo = redirectRaw.startsWith('/') && !redirectRaw.startsWith('//') ? redirectRaw : '/setup';
     if (body.action === 'delete') {
@@ -6582,7 +7083,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/classrooms') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const classroomId = asInt(body.classroomId) || insertReturningId(`INSERT INTO os_classrooms (school_year_id, name, teacher_id)
       VALUES (${asInt(body.schoolYearId)}, ${sqlValue(cleanText(body.name, 120))}, ${asInt(body.teacherId) || 'NULL'})`);
     if (asInt(body.classroomId)) {
@@ -6601,7 +7102,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/subjects') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     let subjectId = asInt(body.subjectId);
     const schoolYearId = asInt(body.schoolYearId);
     const subjectName = cleanText(body.name, 120);
@@ -6622,14 +7123,14 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/grade-subjects') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     runSql(`INSERT OR IGNORE INTO os_grade_subjects (school_year_id, grade_level, subject_id)
       VALUES (${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.subjectId)});`);
     return redirect(res, '/setup?section=subjects', headers);
   }
 
   if (p === '/school-years') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const existingYearId = asInt(body.yearId);
     if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
     if (existingYearId) {
@@ -6653,7 +7154,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/marking-periods') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
     const schoolDays = Math.max(1, Math.min(260, asInt(body.schoolDays) || 180));
     const periodCount = Math.max(1, Math.min(12, asInt(body.periodCount) || 6));
@@ -6666,7 +7167,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/promote-year') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const fromYearId = asInt(body.fromYearId);
     if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
     const newYearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
@@ -6683,10 +7184,17 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/users') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolUsers(user)) return sendText(res, 403, 'Forbidden');
     const role = cleanText(body.role, 20).toLowerCase();
     if (!ROLES.includes(role)) return sendText(res, 400, 'Invalid role');
+    if ([ROLE_ADMIN, ROLE_PRINCIPAL].includes(role) && !canManageAdminUsers(user)) return sendText(res, 403, 'Only admins can manage admin or principal users.');
     const userId = asInt(body.userId);
+    const existingUser = userId ? querySql(`SELECT id, role FROM os_users WHERE id=${userId} LIMIT 1;`)[0] : null;
+    if ([ROLE_ADMIN, ROLE_PRINCIPAL].includes(existingUser?.role) && !canManageAdminUsers(user)) return sendText(res, 403, 'Only admins can manage admin or principal users.');
+    const teacherId = role === ROLE_TEACHER ? asInt(body.teacherId) : 0;
+    const parentFamilyId = role === ROLE_PARENT ? asInt(body.parentFamilyId) : 0;
+    if (role === ROLE_TEACHER && !teacherId) return sendText(res, 400, 'Teacher users require a teacher link.');
+    if (role === ROLE_PARENT && !parentFamilyId) return sendText(res, 400, 'Parent users require a family link.');
     if (userId) {
       const password = String(body.password || '').slice(0, 120);
       const passwordSql = password ? `, password_hash=${sqlValue(hashPassword(password))}` : '';
@@ -6694,18 +7202,19 @@ function handlePost(req, res, p, body, user, headers) {
         SET name=${sqlValue(cleanText(body.name, 120))},
             username=${sqlValue(cleanText(body.username, 80).toLowerCase())},
             role=${sqlValue(role)},
-            teacher_id=${role === ROLE_TEACHER ? (asInt(body.teacherId) || 'NULL') : 'NULL'}
+            teacher_id=${role === ROLE_TEACHER ? teacherId : 'NULL'},
+            parent_family_id=${role === ROLE_PARENT ? parentFamilyId : 'NULL'}
             ${passwordSql}
         WHERE id=${userId};`);
       return redirect(res, '/setup?section=users', headers);
     }
-    runSql(`INSERT INTO os_users (name, username, role, password_hash, teacher_id)
-      VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.username, 80).toLowerCase())}, ${sqlValue(role)}, ${sqlValue(hashPassword(String(body.password || '').slice(0, 120)))}, ${role === ROLE_TEACHER ? (asInt(body.teacherId) || 'NULL') : 'NULL'});`);
+    runSql(`INSERT INTO os_users (name, username, role, password_hash, teacher_id, parent_family_id)
+      VALUES (${sqlValue(cleanText(body.name, 120))}, ${sqlValue(cleanText(body.username, 80).toLowerCase())}, ${sqlValue(role)}, ${sqlValue(hashPassword(String(body.password || '').slice(0, 120)))}, ${role === ROLE_TEACHER ? teacherId : 'NULL'}, ${role === ROLE_PARENT ? parentFamilyId : 'NULL'});`);
     return redirect(res, '/setup?section=users', headers);
   }
 
   if (p === '/grade-weights') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
     const groupId = asInt(body.weightGroupId);
     const name = cleanText(body.name, 120) || 'Grade Weight Group';
@@ -6737,7 +7246,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/letter-grades') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
     const groupId = asInt(body.letterGroupId);
     const name = cleanText(body.name, 120) || 'Letter Grades';
@@ -6777,7 +7286,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/system-settings') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const schoolName = cleanText(body.schoolName, 120) || DEFAULT_SCHOOL_NAME;
     setSetting('school_name', schoolName);
     const logoPath = saveUploadedImage(body.logo, 'logo');
@@ -6788,19 +7297,19 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/backup-settings') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     setSetting('backup_frequency', backupFrequency(body.frequency));
     return redirect(res, '/setup?section=backups', headers);
   }
 
   if (p === '/backup/create') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     createDatabaseBackup('manual');
     return redirect(res, '/setup?section=backups', headers);
   }
 
   if (p === '/backup/restore') {
-    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     createDatabaseBackup('pre-restore');
     const uploaded = body.backupFile?.data?.length ? body.backupFile : null;
     let source = '';
@@ -6820,7 +7329,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/system-update/check') {
-    if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' });
+    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
     try {
       return sendJson(res, 200, checkLatestRelease(cleanText(body.channel, 20)), headers);
     } catch (error) {
@@ -6830,12 +7339,13 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/system-update') {
-    if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' });
+    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
     const status = startSystemUpdate(cleanText(body.channel, 20));
     return sendJson(res, 202, status, headers);
   }
 
   if (p === '/gradebook') {
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
     const markingPeriodId = asInt(body.markingPeriodId);
     const gradeLevel = cleanGrade(body.gradeLevel);
@@ -6846,6 +7356,7 @@ function handlePost(req, res, p, body, user, headers) {
     if (body.action === 'grid-score') {
       const assignmentId = asInt(body.assignmentId);
       const studentId = asInt(body.studentId);
+      if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return sendJson(res, 403, { ok: false, error: 'Forbidden' }, headers);
       const assignment = querySql(`SELECT id, max_score FROM os_assignments
         WHERE id=${assignmentId}
           AND school_year_id=${schoolYearId}
@@ -6872,9 +7383,11 @@ function handlePost(req, res, p, body, user, headers) {
         LEFT JOIN os_scores sc ON sc.assignment_id = a.id
         WHERE a.id=${assignmentId};`)[0]?.avg_score ?? null;
       const studentIds = querySql(`SELECT student_id FROM os_student_years
+        JOIN os_students st ON st.id = os_student_years.student_id
         WHERE school_year_id=${schoolYearId}
           AND grade_level=${sqlValue(gradeLevel)}
-          AND status='enrolled';`).map((row) => asInt(row.student_id)).filter(Boolean);
+          AND status='enrolled'
+          ${studentAccessClause(user, schoolYearId, 'st', 'os_student_years')};`).map((row) => asInt(row.student_id)).filter(Boolean);
       const averageData = periodAverageRows(schoolYearId, gradeLevel, subjectId, studentIds, period);
       const studentAverage = averageData.studentAverages.get(studentId);
       return sendJson(res, 200, {
@@ -6927,6 +7440,11 @@ function handlePost(req, res, p, body, user, headers) {
         const match = key.match(/^gridscore_(\d+)_(\d+)$/);
         if (match) assignmentIds.add(asInt(match[1]));
       });
+      const submittedStudentIds = Object.keys(body).map((key) => {
+        const match = key.match(/^gridscore_(\d+)_(\d+)$/);
+        return match ? asInt(match[2]) : 0;
+      }).filter(Boolean);
+      if (submittedStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
       const allowedAssignments = assignmentIds.size ? new Map(querySql(`SELECT id, max_score FROM os_assignments
         WHERE school_year_id=${schoolYearId}
           AND grade_level=${sqlValue(gradeLevel)}
@@ -6953,9 +7471,12 @@ function handlePost(req, res, p, body, user, headers) {
     if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
     const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
       VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
+    const scoreStudentIds = Object.keys(body).filter((key) => key.startsWith('score_')).map((key) => asInt(key.replace('score_', ''))).filter(Boolean);
+    if (scoreStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
     Object.keys(body).forEach((key) => {
       if (!key.startsWith('score_')) return;
       const studentId = asInt(key.replace('score_', ''));
+      if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return;
       const score = scoreInputToPoints(body[key], scoreMode, maxScore);
       if (score === null) return;
       runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
@@ -6965,6 +7486,7 @@ function handlePost(req, res, p, body, user, headers) {
   }
 
   if (p === '/assignments') {
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
     const action = body.action;
     const schoolYearId = asInt(body.schoolYearId);
     const gradeLevel = cleanGrade(body.gradeLevel);
@@ -6991,9 +7513,12 @@ function handlePost(req, res, p, body, user, headers) {
       const assignmentId = asInt(body.assignmentId);
       const scoreMode = cleanScoreMode(body.scoreMode);
       const maxScore = asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${assignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score);
+      const scoreStudentIds = Object.keys(body).filter((key) => key.startsWith('score_')).map((key) => asInt(key.replace('score_', ''))).filter(Boolean);
+      if (scoreStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
       Object.keys(body).forEach((key) => {
         if (!key.startsWith('score_')) return;
         const studentId = asInt(key.replace('score_', ''));
+        if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return;
         const score = scoreInputToPoints(body[key], scoreMode, maxScore);
         if (score === null) return;
         runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
@@ -7066,7 +7591,7 @@ const server = http.createServer(async (req, res) => {
     if (!user) return redirect(res, '/login', headers);
 
     if (p === '/backup/download') {
-      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
       const target = backupPath(url.searchParams.get('file'));
       if (!target || !fs.existsSync(target)) return sendText(res, 404, 'Backup not found');
       const fileName = path.basename(target);
@@ -7079,7 +7604,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/system-update/status') {
-      if (!isAdmin(user)) return sendJson(res, 403, { error: 'Forbidden' }, headers);
+      if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' }, headers);
       return sendJson(res, 200, readUpdateStatus(), headers);
     }
 
@@ -7087,31 +7612,48 @@ const server = http.createServer(async (req, res) => {
     if (!selected) return sendText(res, 500, 'No school year configured');
     const pageArgs = { csrfToken, user, years, selectedYear: selected, currentPath: p };
 
-    if (p === '/') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Dashboard', content: dashboardPage(selected) }), headers);
+    if (p === '/') {
+      if (isParent(user)) return redirect(res, '/parent', headers);
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Dashboard', content: dashboardPage(selected) }), headers);
+    }
+    if (p === '/parent') {
+      if (!isParent(user)) return redirect(res, '/', headers);
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Parent Portal', content: parentPage(url, user, selected) }), headers);
+    }
     if (p === '/families') {
-      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
       return redirect(res, '/setup?section=families', headers);
     }
     if (p === '/setup') {
-      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url) }), headers);
+      if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url, user) }), headers);
     }
     if (p === '/gradebook') {
+      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
       const markingPeriodId = asInt(url.searchParams.get('markingPeriodId'));
       if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
       const gridParam = cleanText(url.searchParams.get('grid'), 12);
       if (gridParam === 'on' || gridParam === 'off') appendSetCookie(headers, `gradebookGrid=${gridParam}; Path=/; SameSite=Strict; Max-Age=31536000`);
       return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
     }
-    if (p === '/assignments') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Assignments', content: assignmentsPage(req, url, user, selected, csrfToken) }), headers);
-    if (p === '/report-cards') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Report Cards', content: reportCardsPage(url, selected) }), headers);
-    if (p === '/absences') {
-      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Absences', content: absencesPage(url, selected, csrfToken) }), headers);
+    if (p === '/assignments') {
+      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Assignments', content: assignmentsPage(req, url, user, selected, csrfToken) }), headers);
     }
-    if (p === '/reports') return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Reports', content: reportsPage(url, selected) }), headers);
+    if (p === '/report-cards') {
+      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Report Cards', content: reportCardsPage(url, selected, user) }), headers);
+    }
+    if (p === '/absences') {
+      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Absences', content: absencesPage(url, selected, csrfToken, user) }), headers);
+    }
+    if (p === '/reports') {
+      if (isParent(user)) return sendText(res, 403, 'Forbidden');
+      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Reports', content: reportsPage(url, selected, user) }), headers);
+    }
     if (p === '/users') {
-      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      if (!canManageSchoolUsers(user)) return sendText(res, 403, 'Forbidden');
       return redirect(res, '/setup?section=users', headers);
     }
 

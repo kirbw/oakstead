@@ -1,5 +1,15 @@
 # Release Notes
 
+## 0.0.5
+
+- Added principal and parent roles alongside admins and teachers, with role-scoped navigation and route permissions.
+- Added a parent portal for household-linked child grade graphs and report cards.
+- Scoped teacher academic workflows to assigned classrooms, including assignments, gradebook scores, report cards, reports, and absences.
+- Expanded user management with teacher and parent-family links, plus admin-only protection for admin and principal accounts.
+- Improved the responsive app shell with a compact mobile top bar, dropdown navigation, sticky desktop sidebar, safe-area spacing, and better small-screen table handling.
+- Refined absence entry with segmented type and unit controls plus responsive form layout.
+- Added demo principal, teacher, and parent users to the demo seed data for role testing.
+
 ## 0.0.4
 
 - Added congregation tracking with setup management, family assignment, family-list display, and family report columns.

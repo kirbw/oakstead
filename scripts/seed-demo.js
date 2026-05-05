@@ -236,6 +236,13 @@ families.forEach((family, index) => {
   familyIdByLast.set(family.last, familyId(family, schoolDistrictId, congregationId));
 });
 
+run(`INSERT INTO os_users (name, username, role, password_hash, teacher_id, parent_family_id)
+  VALUES ('Demo Principal', 'principal', 'principal', 'demo-mode-disabled-login', NULL, NULL);`);
+run(`INSERT INTO os_users (name, username, role, password_hash, teacher_id, parent_family_id)
+  VALUES ('Demo Teacher', 'teacher', 'teacher', 'demo-mode-disabled-login', ${teachers[0]}, NULL);`);
+run(`INSERT INTO os_users (name, username, role, password_hash, teacher_id, parent_family_id)
+  VALUES ('Demo Parent', 'parent', 'parent', 'demo-mode-disabled-login', NULL, ${familyIdByLast.get('Brubaker')});`);
+
 const studentsByGrade = new Map();
 children.forEach(([last, kids]) => {
   const fid = familyIdByLast.get(last);
