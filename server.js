@@ -1409,9 +1409,26 @@ const NAV_ICONS = {
   reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
 };
 
+function navItemActive(pathname, currentPath) {
+  return currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
+}
+
 function navLink(pathname, currentPath, label, iconKey) {
-  const active = currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
+  const active = navItemActive(pathname, currentPath);
   return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
+}
+
+function navItemsForUser(user) {
+  if (isParent(user)) return [{ pathname: '/parent', label: 'Parent Portal', iconKey: 'reports' }];
+  return [
+    { pathname: '/', label: 'Dashboard', iconKey: 'dashboard' },
+    { pathname: '/assignments', label: 'Assignments', iconKey: 'assignments' },
+    { pathname: '/gradebook', label: 'Gradebook', iconKey: 'gradebook' },
+    { pathname: '/absences', label: 'Absences', iconKey: 'absences' },
+    { pathname: '/reports', label: 'Reports', iconKey: 'reports' },
+    { pathname: '/report-cards', label: 'Report Card', iconKey: 'reportcards' },
+    ...(canAccessSetup(user) ? [{ pathname: '/setup', label: 'School Setup', iconKey: 'setup' }] : [])
+  ];
 }
 
 function actionPanel(title, body, meta = '') {
@@ -1427,13 +1444,16 @@ function emptyState(text) {
 
 function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
   const settings = appSettings();
-  const yearSwitcher = user && selectedYear ? `<form class="year-form" method="post" action="/switch-year">
+  const yearSwitcher = (extraClass = '') => user && selectedYear ? `<form class="year-form ${extraClass}" method="post" action="/switch-year">
       ${csrfInput(csrfToken)}
       <select name="yearId" aria-label="School year">
         ${years.map((year) => `<option value="${year.id}" ${year.id === selectedYear.id ? 'selected' : ''}>${esc(year.name)}</option>`).join('')}
       </select>
       <button class="sr-only" type="submit">Switch school year</button>
     </form>` : '';
+  const navItems = user ? navItemsForUser(user) : [];
+  const navMarkup = navItems.map((item) => navLink(item.pathname, currentPath, item.label, item.iconKey)).join('');
+  const activeNav = navItems.find((item) => navItemActive(item.pathname, currentPath)) || navItems[0] || null;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1465,6 +1485,9 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
   --grade-grid-band-ink: #172554;
   --shadow: 0 18px 48px rgba(16, 24, 40, .07);
   --radius: 4px;
+  --demo-offset: ${DEMO_MODE ? '34px' : '0px'};
+  --topbar-height: 66px;
+  --mobile-strip-height: 50px;
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -1538,53 +1561,130 @@ button, select, input { min-height: 42px; }
 }
 .topbar {
   position: sticky;
-  top: ${DEMO_MODE ? '34px' : '0'};
-  z-index: 20;
-  display: flex;
+  top: var(--demo-offset);
+  z-index: 24;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  min-height: 76px;
-  padding: .75rem max(1rem, env(safe-area-inset-left)) .75rem max(1rem, env(safe-area-inset-right));
+  gap: .75rem;
+  min-height: var(--topbar-height);
+  padding: .55rem max(.85rem, env(safe-area-inset-left)) .55rem max(.85rem, env(safe-area-inset-right));
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 94%, transparent);
   backdrop-filter: blur(16px);
 }
-.brand-row, .top-actions, .year-form, .user-chip { display: flex; align-items: center; gap: .6rem; }
-.brand-row { justify-content: space-between; min-width: 0; }
+.brand-row, .top-actions, .year-form, .user-chip { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.brand-row { justify-content: space-between; }
 .brand { display: flex; align-items: center; gap: .65rem; min-width: 0; text-decoration: none; }
-.brand img { width: 50px; height: 38px; object-fit: contain; }
-.brand-text strong { display: block; font-size: 1.05rem; font-weight: 760; letter-spacing: 0; line-height: 1.2; }
+.brand img { width: 44px; height: 34px; object-fit: contain; flex: 0 0 auto; }
+.brand-text { min-width: 0; }
+.brand-text strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.02rem; font-weight: 760; letter-spacing: 0; line-height: 1.2; }
 .brand-text span { display: block; color: var(--muted); font-size: .82rem; margin-top: .05rem; line-height: 1.35; }
 .top-actions { justify-content: flex-end; flex-wrap: nowrap; margin-left: auto; }
 .year-form { flex: 0 0 auto; }
-.year-form select { width: 190px; border-color: var(--line); background: var(--paper); }
+.year-form select { min-height: 38px; width: 150px; border-color: var(--line); background: var(--paper); font-size: .84rem; font-weight: 700; padding: .42rem .54rem; }
 .year-form button, .icon-btn, .logout-btn {
   border: 1px solid var(--line);
   background: var(--paper-strong);
   color: var(--ink);
   border-radius: var(--radius);
-  padding: .48rem .68rem;
+  padding: .42rem .58rem;
   cursor: pointer;
 }
 .logout-form { margin: 0; }
-.user-chip { color: var(--muted); font-size: .84rem; white-space: nowrap; }
-.app-version { color: var(--muted); font-size: .78rem; font-weight: 800; white-space: nowrap; }
+.logout-btn {
+  min-height: 36px;
+  font-size: .82rem;
+  font-weight: 760;
+  white-space: nowrap;
+}
+.user-chip {
+  min-height: 34px;
+  max-width: 170px;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.user-name { overflow: hidden; text-overflow: ellipsis; }
+.user-role::before { content: " · "; }
+.mobile-nav-strip {
+  grid-column: 1 / -1;
+  position: sticky;
+  top: calc(var(--demo-offset) + var(--topbar-height));
+  z-index: 22;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(108px, 140px);
+  gap: .5rem;
+  min-height: var(--mobile-strip-height);
+  padding: .42rem max(.75rem, env(safe-area-inset-left)) .42rem max(.75rem, env(safe-area-inset-right));
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 96%, transparent);
+  backdrop-filter: blur(16px);
+}
+.nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  min-width: 0;
+  min-height: 38px;
+  padding: .42rem .58rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-strong);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 800;
+}
+.nav-toggle-main {
+  display: inline-flex;
+  align-items: center;
+  gap: .48rem;
+  min-width: 0;
+}
+.nav-toggle-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-toggle svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+.nav-toggle-chevron {
+  transition: transform .16s ease;
+}
+.nav-open .nav-toggle-chevron {
+  transform: rotate(180deg);
+}
+.mobile-year-form { justify-content: end; }
+.mobile-year-form select {
+  width: 100%;
+  min-width: 0;
+}
 .sidebar {
   position: sticky;
-  top: 117px;
-  z-index: 10;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
-  gap: .45rem;
-  overflow-x: auto;
-  padding: .55rem .85rem;
+  top: calc(var(--demo-offset) + var(--topbar-height) + var(--mobile-strip-height));
+  z-index: 21;
+  display: none;
+  gap: .35rem;
+  max-height: calc(100svh - var(--demo-offset) - var(--topbar-height) - var(--mobile-strip-height));
+  overflow: auto;
+  padding: .48rem .65rem .65rem;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 94%, transparent);
   scrollbar-width: none;
 }
-.sidebar::-webkit-scrollbar { display: none; }
+.nav-open .sidebar { display: grid; }
+.sidebar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.sidebar-context { display: none; }
+.nav-links {
+  display: grid;
+  gap: .28rem;
+}
 .nav-link {
   display: flex;
   align-items: center;
@@ -1594,8 +1694,8 @@ button, select, input { min-height: 42px; }
   border-left: 3px solid transparent;
   background: transparent;
   color: var(--muted);
-  border-radius: 0;
-  padding: .68rem .75rem;
+  border-radius: var(--radius);
+  padding: .7rem .75rem;
   font-weight: 650;
   font-size: .88rem;
   white-space: nowrap;
@@ -1618,8 +1718,9 @@ button, select, input { min-height: 42px; }
   border-top: 0;
 }
 .theme-icon-btn {
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1633,6 +1734,26 @@ button, select, input { min-height: 42px; }
 .main {
   padding: 1rem .85rem 3.5rem;
 }
+.app-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .8rem max(.85rem, env(safe-area-inset-left)) max(.9rem, env(safe-area-inset-bottom)) max(.85rem, env(safe-area-inset-right));
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  font-size: .78rem;
+  font-weight: 750;
+}
+.app-footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-footer strong { color: var(--ink); font-weight: 850; }
 .workspace {
   display: grid;
   gap: 1rem;
@@ -3552,9 +3673,7 @@ tr:last-child td { border-bottom: 0; }
   vertical-align: middle;
 }
   @media (min-width: 720px) {
-  .topbar { top: ${DEMO_MODE ? '34px' : '0'}; }
   .top-actions { justify-content: end; }
-  .sidebar { top: ${DEMO_MODE ? '104px' : '70px'}; padding-inline: 1rem; }
   .main { padding: 1.2rem 1rem 4rem; }
   .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -3583,10 +3702,13 @@ tr:last-child td { border-bottom: 0; }
 @media (min-width: 1040px) {
   .app { grid-template-columns: 168px 1fr; max-width: none; }
   .topbar { grid-column: 1 / -1; }
+  .mobile-nav-strip { display: none; }
   .sidebar {
+    display: grid;
     position: sticky;
-    top: ${DEMO_MODE ? '104px' : '70px'};
-    height: calc(100svh - ${DEMO_MODE ? '104px' : '70px'});
+    top: calc(var(--demo-offset) + var(--topbar-height));
+    height: calc(100svh - var(--demo-offset) - var(--topbar-height));
+    max-height: none;
     align-self: start;
     grid-auto-flow: row;
     grid-auto-columns: auto;
@@ -3595,8 +3717,17 @@ tr:last-child td { border-bottom: 0; }
     border-bottom: 0;
     padding: .8rem .65rem;
   }
+  .sidebar-context {
+    display: grid;
+    gap: .55rem;
+    margin-bottom: .35rem;
+    padding: .05rem .1rem .75rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .sidebar-context .year-form select { width: 100%; }
   .nav-link { border-radius: var(--radius); }
   .main { padding: 1.35rem 1.35rem 4rem; }
+  .app-footer { grid-column: 2; }
   .split { grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); align-items: start; }
   .gradebook-split {
     grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
@@ -3627,19 +3758,45 @@ tr:last-child td { border-bottom: 0; }
   .assignments-layout { grid-template-columns: minmax(280px, 32%) minmax(0, 1fr); }
 }
 @media (max-width: 820px) {
-  .topbar { align-items: stretch; flex-direction: column; }
-  .top-actions { justify-content: stretch; flex-wrap: wrap; margin-left: 0; }
-  .year-form { flex: 1 1 100%; }
-  .year-form select { width: 100%; max-width: none; }
-  .user-chip { white-space: normal; }
+  .topbar { gap: .5rem; }
+  .brand { gap: .5rem; }
+  .brand img { width: 34px; height: 30px; }
+  .brand-text span { display: none; }
+  .top-actions { gap: .35rem; }
+  .user-chip { max-width: 112px; }
+  .user-role { display: none; }
+  .logout-btn { padding: .36rem .5rem; }
   .page-head { align-items: stretch; flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .main { padding: .8rem .7rem 2.4rem; }
+  .workspace { gap: .8rem; }
+  .page-head { gap: .45rem; padding-top: .15rem; }
+  .page-head h1 { font-size: 1.42rem; }
+  .page-head p { font-size: .94rem; line-height: 1.38; }
+  .panel, .ledger, .chart-panel, .family-list, .family-detail, .setup-nav { border-radius: 10px; }
+  .kpis { gap: .55rem; }
+  .kpi { padding: .72rem; border-radius: 10px; }
+  .kpi strong { font-size: 1.36rem; }
+  .kpi span { font-size: .78rem; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-wrap table { min-width: 620px; }
+  .compact-table table { min-width: 0; }
+  .chart-head { align-items: start; }
+  .mobile-nav-strip { grid-template-columns: minmax(0, 1fr) minmax(104px, 124px); }
+}
+@media (max-width: 390px) {
+  .topbar { padding-inline: max(.65rem, env(safe-area-inset-left)) max(.65rem, env(safe-area-inset-right)); }
+  .user-chip { max-width: 86px; font-size: .78rem; }
+  .logout-btn { font-size: .78rem; padding-inline: .42rem; }
+  .mobile-nav-strip { padding-inline: max(.65rem, env(safe-area-inset-left)) max(.65rem, env(safe-area-inset-right)); grid-template-columns: minmax(0, 1fr) 108px; }
 }
 @media print {
   @page { size: letter portrait; margin: .48in .55in; }
   @page report-card-page { size: letter landscape; margin: 0; }
   html, body { width: auto; margin: 0; background: #fff; color: #000; }
-  .topbar, .sidebar, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
+  .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
   .workspace { gap: .22in; }
@@ -3820,20 +3977,27 @@ tr:last-child td { border-bottom: 0; }
       </a>
     </div>
     <div class="top-actions">
-      ${yearSwitcher}
-      ${user ? `<span class="app-version">v${esc(APP_VERSION)}</span><span class="user-chip">${esc(user.name)} &middot; ${roleLabel(user.role)}</span>
+      ${user ? `<span class="user-chip"><span class="user-name">${esc(user.name)}</span><span class="user-role">${roleLabel(user.role)}</span></span>
         <form class="logout-form" method="post" action="/logout">${csrfInput(csrfToken)}<button class="logout-btn" type="submit">Log out</button></form>` : ''}
     </div>
   </header>
-  ${user ? `<nav class="sidebar" aria-label="Primary">
-    ${isParent(user) ? navLink('/parent', currentPath, 'Parent Portal', 'reports') : `
-    ${navLink('/', currentPath, 'Dashboard', 'dashboard')}
-    ${navLink('/assignments', currentPath, 'Assignments', 'assignments')}
-    ${navLink('/gradebook', currentPath, 'Gradebook', 'gradebook')}
-    ${navLink('/absences', currentPath, 'Absences', 'absences')}
-    ${navLink('/reports', currentPath, 'Reports', 'reports')}
-    ${navLink('/report-cards', currentPath, 'Report Card', 'reportcards')}
-    ${canAccessSetup(user) ? navLink('/setup', currentPath, 'School Setup', 'setup') : ''}`}
+  ${user ? `<div class="mobile-nav-strip">
+    <button id="navToggle" class="nav-toggle" type="button" aria-expanded="false" aria-controls="primaryNav">
+      <span class="nav-toggle-main">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"></path></svg>
+        <span>${esc(activeNav?.label || 'Menu')}</span>
+      </span>
+      <svg class="nav-toggle-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5H7Z"></path></svg>
+    </button>
+    ${yearSwitcher('mobile-year-form')}
+  </div>
+  <nav id="primaryNav" class="sidebar" aria-label="Primary">
+    <div class="sidebar-context">
+      ${yearSwitcher('sidebar-year-form')}
+    </div>
+    <div class="nav-links">
+      ${navMarkup}
+    </div>
     <div class="sidebar-utility">
       <button id="themeToggle" class="theme-icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg>
@@ -3841,6 +4005,7 @@ tr:last-child td { border-bottom: 0; }
     </div>
   </nav>` : ''}
   <main class="main">${content}</main>
+  <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><strong>Oakstead</strong> v${esc(APP_VERSION)}</span></footer>
 </div>
 <script>
 function generateReportCardPdf(btn) {
@@ -3867,6 +4032,29 @@ function generateReportCardPdf(btn) {
       const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
       root.setAttribute('data-theme', next === 'dark' ? 'dark' : '');
       localStorage.setItem('oakstead-theme', next);
+    });
+  }
+  const navToggle = document.getElementById('navToggle');
+  const primaryNav = document.getElementById('primaryNav');
+  function setMobileNav(open) {
+    document.body.classList.toggle('nav-open', open);
+    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (navToggle && primaryNav) {
+    navToggle.addEventListener('click', function(event) {
+      event.stopPropagation();
+      setMobileNav(!document.body.classList.contains('nav-open'));
+    });
+    primaryNav.addEventListener('click', function(event) {
+      if (event.target.closest('a')) setMobileNav(false);
+    });
+    document.addEventListener('click', function(event) {
+      if (!document.body.classList.contains('nav-open')) return;
+      if (primaryNav.contains(event.target) || navToggle.contains(event.target)) return;
+      setMobileNav(false);
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') setMobileNav(false);
     });
   }
   document.querySelectorAll('.year-form select').forEach(function(select) {
