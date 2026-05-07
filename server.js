@@ -1698,6 +1698,16 @@ const NAV_ICONS = {
   reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
 };
 
+const REPORT_ICONS = {
+  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20v-1a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v1"/><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 12.5a3 3 0 0 0 0-6"/><path d="M18.5 20v-1a4 4 0 0 0-2-3.46"/></svg>',
+  students: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12.2V17c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.8"/><path d="M22 10v6"/></svg>',
+  'school-board': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8"/><path d="M9 4v5l-4 7"/><path d="M15 4v5l4 7"/><path d="M5 16h14"/><path d="M7 20h10"/><path d="M12 9v11"/></svg>',
+  birthdays: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11h16v9H4z"/><path d="M4 15c1.4 0 1.4-1 2.8-1s1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1"/><path d="M8 11V8"/><path d="M12 11V8"/><path d="M16 11V8"/><path d="M8 5l.8 1L8 7 7.2 6 8 5Z"/><path d="m12 5 .8 1-.8 1-.8-1L12 5Z"/><path d="m16 5 .8 1-.8 1-.8-1L16 5Z"/></svg>',
+  'grade-graph': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m6 15 4-4 3 3 5-7"/><path d="M10 11h.01"/><path d="M13 14h.01"/><path d="M18 7h.01"/></svg>'
+};
+
+const REPORT_METER_COLORS = ['#2f6f5e', '#2563eb', '#a16207', '#be123c', '#6d28d9', '#0e7490', '#7c2d12', '#4d7c0f'];
+
 function navItemActive(pathname, currentPath) {
   return currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
 }
@@ -3424,42 +3434,69 @@ tr:last-child td { border-bottom: 0; }
 }
 .chart-head h2 { margin: 0; font-size: 1rem; }
 .chart-head span { color: var(--muted); font-size: .8rem; font-weight: 800; }
-.bar-list { display: grid; gap: .7rem; }
-.bar-row {
+.bar-list,
+.distribution {
   display: grid;
-  grid-template-columns: minmax(92px, .45fr) minmax(0, 1fr) 58px;
+  gap: .55rem;
+}
+.bar-row,
+.distribution-row {
+  --bar-color: var(--accent);
+  display: grid;
+  grid-template-columns: minmax(92px, .42fr) minmax(0, 1fr) minmax(34px, auto);
   align-items: center;
   gap: .65rem;
+  min-height: 34px;
+  padding: .26rem .36rem;
+  border: 1px solid color-mix(in srgb, var(--bar-color) 16%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bar-color) 5%, var(--paper));
 }
-.bar-row b { font-size: .84rem; overflow-wrap: anywhere; }
+.distribution-row {
+  grid-template-columns: 56px minmax(0, 1fr) minmax(34px, auto);
+}
+.bar-row b,
+.distribution-row b {
+  color: var(--ink);
+  font-size: .84rem;
+  font-weight: 820;
+  overflow-wrap: anywhere;
+}
 .bar-track {
-  height: 12px;
+  height: 18px;
   overflow: hidden;
-  border: 1px solid var(--line);
-  background: var(--paper-strong);
+  border: 1px solid color-mix(in srgb, var(--bar-color) 22%, var(--line));
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--bar-color) 8%, transparent), transparent),
+    var(--paper-strong);
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, .08);
 }
 .bar-fill {
   height: 100%;
   width: var(--bar-value);
-  background: var(--accent);
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--bar-color), color-mix(in srgb, var(--bar-color) 76%, #111827));
   transition: width .35s ease;
 }
-.bar-fill.good { background: var(--accent); }
-.bar-fill.watch { background: var(--gold); }
-.bar-fill.low { background: var(--red); }
-.bar-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
-.distribution {
-  display: grid;
-  gap: .65rem;
+.bar-fill.good { --bar-color: var(--accent); }
+.bar-fill.watch { --bar-color: var(--gold); }
+.bar-fill.low { --bar-color: var(--red); }
+.bar-row span,
+.distribution-row span {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 2rem;
+  padding: .12rem .42rem;
+  border: 1px solid color-mix(in srgb, var(--bar-color) 24%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bar-color) 10%, var(--paper-strong));
+  color: var(--ink);
+  font-size: .78rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
-.distribution-row {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr) 38px;
-  gap: .65rem;
-  align-items: center;
-}
-.distribution-row b { font-size: .84rem; }
-.distribution-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
 .report-nav-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -3467,7 +3504,9 @@ tr:last-child td { border-bottom: 0; }
 }
 .report-tile {
   display: grid;
-  gap: .35rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: .72rem;
   min-height: 104px;
   padding: .85rem;
   border: 1px solid var(--line);
@@ -3486,8 +3525,38 @@ tr:last-child td { border-bottom: 0; }
   border-color: color-mix(in srgb, var(--accent) 56%, var(--line));
   background: var(--accent-soft);
 }
+.report-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-soft) 56%, var(--paper));
+  color: var(--accent-dark);
+}
+.report-tile-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.report-tile:hover .report-tile-icon,
+.report-tile.active .report-tile-icon {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: var(--paper);
+}
+.report-tile-copy {
+  display: grid;
+  gap: .28rem;
+  min-width: 0;
+}
 .report-tile strong { font-size: .95rem; }
-.report-tile span { color: var(--muted); font-size: .82rem; line-height: 1.4; }
+.report-tile-copy span { color: var(--muted); font-size: .82rem; line-height: 1.4; }
 .report-kpis {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3632,27 +3701,34 @@ tr:last-child td { border-bottom: 0; }
 }
 .mini-subject-chart {
   display: grid;
-  gap: .35rem;
+  gap: .42rem;
   min-width: 0;
-  padding: .8rem;
+  padding: .82rem;
   border: 1px solid var(--line);
+  border-left: 4px solid var(--subject-color, var(--accent));
   border-radius: 8px;
-  background: var(--paper-strong);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--subject-color, var(--accent)) 5%, transparent), transparent 46%),
+    var(--paper-strong);
 }
 .mini-subject-chart header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: .5rem;
+  padding-bottom: .12rem;
   border-bottom: 1px solid var(--line-strong);
 }
 .mini-subject-chart h3 {
   margin: 0;
-  font-size: .9rem;
+  color: var(--ink);
+  font-size: .92rem;
 }
 .mini-subject-chart span {
   color: var(--muted);
   font-size: .76rem;
+  font-weight: 750;
+  white-space: nowrap;
 }
 .mini-subject-chart svg {
   width: 100%;
@@ -4085,10 +4161,11 @@ tr:last-child td { border-bottom: 0; }
   @page { size: letter portrait; margin: .48in .55in; }
   @page report-card-page { size: letter landscape; margin: 0; }
   html, body { width: auto; margin: 0; background: #fff; color: #000; }
-  .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
+  .demo-banner, .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
   .workspace { gap: .22in; }
+  .grade-graph-report { gap: .12in; }
   .print-report-head {
     display: block;
     margin: 0 0 .22in;
@@ -4111,6 +4188,13 @@ tr:last-child td { border-bottom: 0; }
     border: 0;
     border-radius: 0;
     background: transparent;
+  }
+  .grade-graph.chart-panel {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .grade-graph-report .print-report-head {
+    margin-bottom: .1in;
   }
   .ledger-head, .chart-head { display: none; }
   th, td {
@@ -4214,7 +4298,9 @@ tr:last-child td { border-bottom: 0; }
   .grade-graph-print-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .2in .34in;
+    gap: .12in .28in;
+    break-before: avoid;
+    page-break-before: avoid;
   }
   .grade-graph-print-grid.single {
     grid-template-columns: 1fr;
@@ -6327,10 +6413,19 @@ function reportPath(key, yearId, extra = '') {
 function reportsNav(activeReport, yearId) {
   return `<section class="report-nav-grid">
     ${reportDefinitions().map((report) => `<a class="report-tile ${activeReport === report.key ? 'active' : ''}" href="${reportPath(report.key, yearId)}">
-      <strong>${esc(report.title)}</strong>
-      <span>${esc(report.description)}</span>
+      <span class="report-tile-icon">${REPORT_ICONS[report.key] || REPORT_ICONS['grade-graph']}</span>
+      <span class="report-tile-copy">
+        <strong>${esc(report.title)}</strong>
+        <span>${esc(report.description)}</span>
+      </span>
     </a>`).join('')}
   </section>`;
+}
+
+function reportMeterStyle(index, ratio) {
+  const width = Math.max(0, Math.min(100, Math.round((Number(ratio) || 0) * 100)));
+  const color = REPORT_METER_COLORS[index % REPORT_METER_COLORS.length];
+  return `--bar-value:${width}%;--bar-color:${color};`;
 }
 
 function firstNameOnly(value) {
@@ -6440,9 +6535,9 @@ function reportOverview(yearId, selectedYear, user) {
       <section class="chart-panel">
         <div class="chart-head"><h2>Students by Grade</h2><span>${kpis.students} enrolled</span></div>
         <div class="bar-list">
-          ${sortedGrades.map((grade) => {
+          ${sortedGrades.map((grade, index) => {
             const count = gradesByName.get(grade) || 0;
-            return `<div class="bar-row"><b>Grade ${esc(grade)}</b><div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((count / largestGrade) * 100)}%"></div></div><span>${count}</span></div>`;
+            return `<div class="bar-row" style="${reportMeterStyle(index, count / largestGrade)}"><b>Grade ${esc(grade)}</b><div class="bar-track"><div class="bar-fill"></div></div><span>${count}</span></div>`;
           }).join('') || emptyState('No enrolled students for this school year.')}
         </div>
       </section>
@@ -6452,7 +6547,7 @@ function reportOverview(yearId, selectedYear, user) {
           ${Array.from({ length: 12 }, (_, index) => {
             const month = index + 1;
             const count = birthdayByMonth.get(month) || 0;
-            return `<div class="distribution-row"><b>${monthName(month).slice(0, 3)}</b><div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((count / largestMonth) * 100)}%"></div></div><span>${count}</span></div>`;
+            return `<div class="distribution-row" style="${reportMeterStyle(index + 2, count / largestMonth)}"><b>${monthName(month).slice(0, 3)}</b><div class="bar-track"><div class="bar-fill"></div></div><span>${count}</span></div>`;
           }).join('')}
         </div>
       </section>
@@ -6599,7 +6694,7 @@ function birthdaysReport(yearId, selectedYear, user) {
 }
 
 function graphColor(index) {
-  return ['#2563eb', '#0f766e', '#b54708', '#be185d', '#6d28d9', '#4d7c0f', '#0369a1', '#b42318'][index % 8];
+  return REPORT_METER_COLORS[index % REPORT_METER_COLORS.length];
 }
 
 function gradeGraphSvg(series, periods) {
@@ -6633,8 +6728,8 @@ function gradeGraphSvg(series, periods) {
 }
 
 function miniSubjectChartSvg(item, periods) {
-  const W = 420, H = 190;
-  const padL = 36, padR = 14, padT = 12, padB = 38;
+  const W = 420, H = 174;
+  const padL = 36, padR = 14, padT = 12, padB = 34;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const minY = 60;
@@ -6704,7 +6799,7 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
     })
   }));
   const studentOptions = students.map((student) => `<option value="${student.id}" ${asInt(student.id) === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('');
-  return `<div class="workspace">
+  return `<div class="workspace grade-graph-report">
     <section class="panel">
       <form method="get" action="/reports" class="filters">
         <input type="hidden" name="yearId" value="${yearId}" />
@@ -6722,7 +6817,7 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
       <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
         ${series.map((item) => {
           const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
-          return `<section class="mini-subject-chart">
+          return `<section class="mini-subject-chart" style="--subject-color:${item.color}">
             <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
             ${miniSubjectChartSvg(item, graphPeriods)}
           </section>`;
@@ -6758,7 +6853,7 @@ function studentGradeGraphPanel(student, yearId, selectedYear) {
     <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
       ${series.map((item) => {
         const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
-        return `<section class="mini-subject-chart">
+        return `<section class="mini-subject-chart" style="--subject-color:${item.color}">
           <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
           ${miniSubjectChartSvg(item, graphPeriods)}
         </section>`;
