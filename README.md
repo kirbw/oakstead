@@ -2,7 +2,7 @@
 
 **Rooted Records for Growing Minds.**
 
-Current version: **0.0.5**
+Current version: **0.0.7**
 
 Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, church and district affiliations, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
 
@@ -20,10 +20,15 @@ Oakstead is a small-school records and gradebook app built for simple daily clas
 - Spreadsheet-style gradebook grid with inline score saving
 - Custom grade weights and letter grade scales by year, grade range, and subject
 - Reports for class averages and student subject averages
+- Polished report dashboard charts, report icons, and cleaner printable grade graphs
 - Printable family reports with congregation, contact, address, and enrolled-student counts
+- Absence tracking with grade and student filters, formatted type labels, and role-scoped visibility
 - Admin, principal, teacher, and parent sign-ins with secure sessions and CSRF protection
 - Parent portal for household-linked child grade graphs and report cards
+- Smoother app-shell navigation for internal pages and filters
 - In-app system updates from GitHub with current release and pre-release channels
+- Local-only or trusted-LAN hosting modes with visible host URLs
+- Windows installer packaging support with service, bundled SQLite, and release-asset update checks
 - Static project website page in `website/`
 
 ## Tech
@@ -40,11 +45,13 @@ DB_FILE=/tmp/oakstead-test.db PORT=3001 npm start
 
 ## Requirements
 
-- Node.js with npm available on the server.
-- The `sqlite3` command-line program available in `PATH`. Oakstead shells out to the SQLite CLI for database reads, writes, backup validation, and restore checks.
-- A writable project directory for `school.db`, `backups/`, `public/uploads/`, `.oakstead-update-status.json`, and any custom uploaded school assets.
+- Node.js with npm available on the server for source installs.
+- The `sqlite3` command-line program available in `PATH`, or set `SQLITE_BIN` to an explicit executable path. Oakstead shells out to the SQLite CLI for database reads, writes, backup validation, and restore checks.
+- A writable runtime data directory for `school.db`, `backups/`, uploads, `.oakstead-update-status.json`, and any custom school assets.
 - Git available in `PATH` if you want to use in-app system updates from a GitHub remote.
 - A trusted local network, VPN, or protective reverse proxy. Oakstead should not be exposed directly to the public internet.
+
+Packaged Windows installs bundle Node.js and SQLite, run as a Windows service, and store runtime data outside the install folder.
 
 On Debian or Ubuntu, the system packages usually look like:
 
@@ -85,7 +92,14 @@ Oakstead has four app login roles:
 Oakstead loads environment variables from a local `.env` file when present. Common settings:
 
 - `PORT`: HTTP port. Defaults to `3000`.
-- `DB_FILE`: SQLite database path. Defaults to `school.db` in the project directory.
+- `HOST`: Explicit bind host. Use `127.0.0.1` for local-only access or `0.0.0.0` for LAN access. If set, it overrides the in-app Network Access setting.
+- `OAKSTEAD_DEFAULT_HOST`: Default bind host used when `HOST` is not set. Defaults to `127.0.0.1`.
+- `OAKSTEAD_DEFAULT_PORT`: Default port used when `PORT` is not set. Defaults to `3000`.
+- `OAKSTEAD_DATA_DIR`: Runtime data directory for `school.db`, backups, uploads, and update status. Defaults to the project directory for source installs.
+- `DB_FILE`: SQLite database path. Defaults to `school.db` inside `OAKSTEAD_DATA_DIR`.
+- `SQLITE_BIN`: SQLite CLI executable. Defaults to `sqlite3`.
+- `OAKSTEAD_UPDATE_MODE`: `git` for source installs or `installer` for packaged Windows installs. Defaults to `git`.
+- `OAKSTEAD_RELEASE_REPO`: GitHub release repository slug for installer updates, for example `kirbw/oakstead`.
 - `DEMO_MODE`: Set to `1`, `true`, `yes`, or `on` to run demo mode.
 - `DEMO_REFRESH_HOURS`: Demo reset interval from 1 to 24 hours. Defaults to `2`.
 
@@ -93,7 +107,8 @@ Example `.env`:
 
 ```bash
 PORT=3000
-DB_FILE=/srv/oakstead/school.db
+OAKSTEAD_DATA_DIR=/srv/oakstead
+SQLITE_BIN=/usr/bin/sqlite3
 ```
 
 Use the included demo seed script only for demo or disposable data:
@@ -108,6 +123,26 @@ Oakstead stores sensitive student and family records. Do not publish it directly
 
 For production installs, run Oakstead under a supervisor such as systemd or pm2 so the app starts after reboots and can restart cleanly after in-app updates. Back up `school.db`, `backups/`, and uploaded assets before server maintenance or version upgrades.
 
+## Windows Installer and LAN Access
+
+Windows packaging files live in `packaging/windows/`. The installer path stages Oakstead with:
+
+- App files under `Program Files\Oakstead`.
+- Runtime data under `%ProgramData%\Oakstead`.
+- A Windows service that starts Oakstead on boot.
+- Bundled Node.js and `sqlite3.exe`.
+- Optional Windows Firewall rule for TCP port `3000`.
+
+Prepare the package after adding the local vendor runtimes described in `packaging/windows/README.md`:
+
+```bash
+npm run prepare:windows
+```
+
+Then compile `packaging/windows/Oakstead.iss` with Inno Setup. The service uses installer-update mode, so creating a new GitHub release should include an asset named like `Oakstead-Setup-v0.0.7.exe`.
+
+Admins can use **School Setup -> Network Access** to switch between local-only access and LAN access. LAN mode binds Oakstead to `0.0.0.0`; other devices use the host machine IP shown on that page.
+
 ## Validate
 
 ```bash
@@ -116,13 +151,35 @@ npm run check
 
 ## System Updates
 
-Administrators can update Oakstead from **School Setup -> System Updates**. Choose **Current release** for the latest stable version, or **Pre-release** to install the newest pre-release tag when one is available. The updater fetches GitHub tags from the configured `origin` remote, checks out the selected release, runs `npm install`, validates the server with `npm run check`, and restarts the app.
+Administrators can update Oakstead from **School Setup -> System Updates**. Choose **Current release** for the latest stable version, or **Pre-release** to install the newest pre-release when one is available.
+
+Source installs use `OAKSTEAD_UPDATE_MODE=git`: the updater fetches GitHub tags from the configured `origin` remote, checks out the selected release, runs `npm install`, validates the server with `npm run check`, and restarts the app.
+
+Packaged Windows installs use `OAKSTEAD_UPDATE_MODE=installer`: the updater checks GitHub Releases for a Windows installer asset, creates a pre-installer backup, and gives the admin the installer download. Running the installer replaces app files while preserving the data directory.
 
 Before updating, commit or clear local code changes. Oakstead creates a database backup before updating, but you should still keep an external backup plan for production data.
 
 ## Release Notes
 
 Release notes are also kept in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+### 0.0.7
+
+- Improved the Reports dashboard with clearer visual summaries, more readable chart styling, and report-specific icons.
+- Cleaned up printable reports by removing the demo-mode banner from print output.
+- Fixed grade graph report pagination so the report content starts correctly and avoids extra blank pages.
+- Refined grade graph print charts with a more compact layout that fits the grade report more reliably.
+- Improved the Absences page with compact grade and student filters in the list header, a dedicated Grade column, formatted absence/tardy labels, and cleaner amount display.
+- Enforced teacher-scoped absence visibility so teachers only see students in the grades and classrooms they are responsible for.
+- Added smoother app-shell navigation for internal pages and GET filters so the header, logo, and sidebar stay in place while main content updates.
+
+### 0.0.6
+
+- Added cross-platform runtime configuration for data directories, SQLite executable paths, bind hosts, ports, and update modes.
+- Added School Setup -> Network Access for local-only or trusted-LAN hosting with visible host/IP URLs and restart-gated changes.
+- Added packaged Windows update checks that read GitHub release assets and download installer updates instead of running Git commands.
+- Added Windows installer/service packaging scaffolding with bundled runtime expectations, ProgramData storage, WinSW service config, and Inno Setup script.
+- Added Linux systemd packaging examples that keep source installs on the Git-based updater.
 
 ### 0.0.5
 

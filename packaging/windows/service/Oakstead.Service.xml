@@ -1,0 +1,21 @@
+<service>
+  <id>Oakstead</id>
+  <name>Oakstead</name>
+  <description>Oakstead school records and gradebook server.</description>
+  <executable>%BASE%\..\runtime\node\node.exe</executable>
+  <arguments>"%BASE%\..\app\server.js"</arguments>
+  <workingdirectory>%BASE%\..\app</workingdirectory>
+  <env name="OAKSTEAD_UPDATE_MODE" value="installer" />
+  <env name="OAKSTEAD_DATA_DIR" value="%ProgramData%\Oakstead" />
+  <env name="OAKSTEAD_DEFAULT_HOST" value="0.0.0.0" />
+  <env name="OAKSTEAD_DEFAULT_PORT" value="3000" />
+  <env name="SQLITE_BIN" value="%BASE%\..\runtime\sqlite\sqlite3.exe" />
+  <logpath>%ProgramData%\Oakstead\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <resetfailure>1 hour</resetfailure>
+</service>

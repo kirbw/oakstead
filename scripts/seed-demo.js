@@ -2,6 +2,7 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'school.db');
+const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
 const SHOULD_RESET = process.argv.includes('--reset');
 
 function sqlValue(value) {
@@ -10,7 +11,7 @@ function sqlValue(value) {
 }
 
 function run(sql) {
-  execFileSync('sqlite3', [DB_FILE, sql], { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 });
+  execFileSync(SQLITE_BIN, [DB_FILE, sql], { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 });
 }
 
 function runStatementsInChunks(statements, chunkSize = 300) {
@@ -20,7 +21,7 @@ function runStatementsInChunks(statements, chunkSize = 300) {
 }
 
 function query(sql) {
-  const out = execFileSync('sqlite3', ['-json', DB_FILE, sql], { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 }).trim();
+  const out = execFileSync(SQLITE_BIN, ['-json', DB_FILE, sql], { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 }).trim();
   return out ? JSON.parse(out) : [];
 }
 

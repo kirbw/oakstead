@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const https = require('https');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const querystring = require('querystring');
 const { execFileSync, spawn, spawnSync } = require('child_process');
@@ -20,24 +22,63 @@ function loadEnvFile() {
 
 loadEnvFile();
 
-const PORT = Number(process.env.PORT) || 3000;
-const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'school.db');
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const UPLOAD_DIR = path.join(PUBLIC_DIR, 'uploads');
-const BACKUP_DIR = path.join(__dirname, 'backups');
-const DEFAULT_LOGO_FILE = path.join(__dirname, 'assets', 'oakleaf.png');
+function parsePort(value, fallback = 3000) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
+}
+
+function cleanBindHost(value, fallback = '127.0.0.1') {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  if (text === 'localhost' || text === '127.0.0.1' || text === '0.0.0.0') return text;
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(text)) return text;
+  return fallback;
+}
+
+function cleanUpdateMode(value) {
+  return String(value || '').toLowerCase() === 'installer' ? 'installer' : 'git';
+}
+
+function normalizeRepositorySlug(value) {
+  const text = String(value || '').trim();
+  const githubMatch = text.match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?(?:[#?].*)?$/i);
+  if (githubMatch) return `${githubMatch[1]}/${githubMatch[2].replace(/\.git$/i, '')}`;
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text) ? text : '';
+}
+
+const APP_ROOT = __dirname;
+const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
+const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
+const DATA_DIR_IS_CUSTOM = Boolean(process.env.OAKSTEAD_DATA_DIR);
+const DATA_DIR = path.resolve(process.env.OAKSTEAD_DATA_DIR || APP_ROOT);
+const DEFAULT_PORT = parsePort(process.env.OAKSTEAD_DEFAULT_PORT, 3000);
+const DEFAULT_HOST = cleanBindHost(process.env.OAKSTEAD_DEFAULT_HOST, '127.0.0.1');
+const DB_FILE = process.env.DB_FILE ? path.resolve(process.env.DB_FILE) : path.join(DATA_DIR, 'school.db');
+const PUBLIC_DIR = path.join(APP_ROOT, 'public');
+const UPLOAD_DIR = DATA_DIR_IS_CUSTOM ? path.join(DATA_DIR, 'uploads') : path.join(PUBLIC_DIR, 'uploads');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const DEFAULT_LOGO_FILE = path.join(APP_ROOT, 'assets', 'oakleaf.png');
 const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
-const UPDATE_STATUS_FILE = path.join(__dirname, '.oakstead-update-status.json');
+const UPDATE_STATUS_FILE = path.join(DATA_DIR, '.oakstead-update-status.json');
+const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
+const UPDATE_MODE = cleanUpdateMode(process.env.OAKSTEAD_UPDATE_MODE || 'git');
+const RELEASE_REPO = normalizeRepositorySlug(process.env.OAKSTEAD_RELEASE_REPO)
+  || normalizeRepositorySlug(typeof PACKAGE_INFO.repository === 'string' ? PACKAGE_INFO.repository : PACKAGE_INFO.repository?.url)
+  || 'kirbw/oakstead';
 const DEFAULT_SCHOOL_NAME = 'Oakstead';
 const MAX_BODY_SIZE = 50_000_000;
 const SESSION_HOURS = 12;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 5;
-const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
 const DEMO_MODE = /^(1|true|yes|on)$/i.test(String(process.env.DEMO_MODE || ''));
 const DEMO_REFRESH_HOURS = Math.max(1, Math.min(24, Number(process.env.DEMO_REFRESH_HOURS) || 2));
+let ACTIVE_NETWORK = {
+  host: DEFAULT_HOST,
+  port: DEFAULT_PORT,
+  hostOverridden: Boolean(process.env.HOST),
+  portOverridden: Boolean(process.env.PORT)
+};
 
 const ROLE_ADMIN = 'admin';
 const ROLE_PRINCIPAL = 'principal';
@@ -60,6 +101,13 @@ const DEFAULT_LETTER_GRADES = [
   ['F', 0]
 ];
 const loginAttempts = new Map();
+
+function ensureRuntimeDirs() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -189,11 +237,11 @@ function normalizeCategory(value) {
 }
 
 function runSql(sql) {
-  return execFileSync('sqlite3', [DB_FILE, sql], { encoding: 'utf8' });
+  return execFileSync(SQLITE_BIN, [DB_FILE, sql], { encoding: 'utf8' });
 }
 
 function querySql(sql) {
-  const out = execFileSync('sqlite3', ['-json', DB_FILE, sql], { encoding: 'utf8' }).trim();
+  const out = execFileSync(SQLITE_BIN, ['-json', DB_FILE, sql], { encoding: 'utf8' }).trim();
   return out ? JSON.parse(out) : [];
 }
 
@@ -238,7 +286,7 @@ function listDatabaseBackups() {
 }
 
 function validateBackupDatabase(filePath) {
-  const output = execFileSync('sqlite3', [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
+  const output = execFileSync(SQLITE_BIN, [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
   if (output !== 'ok') throw new Error('Backup database did not pass integrity check.');
 }
 
@@ -252,7 +300,7 @@ function refreshDemoData(reason = 'scheduled') {
     cwd: __dirname,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 16,
-    env: { ...process.env, DB_FILE }
+    env: { ...process.env, DB_FILE, SQLITE_BIN }
   });
   if (result.stdout) console.log(result.stdout.trim());
   if (result.stderr) console.error(result.stderr.trim());
@@ -729,6 +777,8 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
   ensureColumn('os_users', 'parent_family_id', 'parent_family_id INTEGER');
 
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
   createDefaultRoleGroups();
   migrateLessonHomeworkWeights();
 
@@ -988,6 +1038,52 @@ function backupFrequency(value) {
   return ['manual', 'daily', 'weekly', 'monthly'].includes(clean) ? clean : 'manual';
 }
 
+function desiredNetworkConfig() {
+  const storedHost = getSetting('network_bind_host', DEFAULT_HOST);
+  const storedPort = getSetting('network_port', String(DEFAULT_PORT));
+  return {
+    host: process.env.HOST ? cleanBindHost(process.env.HOST, DEFAULT_HOST) : cleanBindHost(storedHost, DEFAULT_HOST),
+    port: process.env.PORT ? parsePort(process.env.PORT, DEFAULT_PORT) : parsePort(storedPort, DEFAULT_PORT),
+    hostOverridden: Boolean(process.env.HOST),
+    portOverridden: Boolean(process.env.PORT)
+  };
+}
+
+function localNetworkAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((item) => item && item.family === 'IPv4' && !item.internal)
+    .map((item) => item.address)
+    .filter((address, index, addresses) => addresses.indexOf(address) === index)
+    .sort();
+}
+
+function networkAccessLabel(host) {
+  return host === '0.0.0.0' ? 'LAN access' : 'Local only';
+}
+
+function networkUrls(config = ACTIVE_NETWORK) {
+  if (config.host === '0.0.0.0') {
+    const addresses = localNetworkAddresses();
+    return (addresses.length ? addresses : [os.hostname()]).map((host) => `http://${host}:${config.port}`);
+  }
+  return [`http://${config.host === 'localhost' ? '127.0.0.1' : config.host}:${config.port}`];
+}
+
+function networkStatus() {
+  const desired = desiredNetworkConfig();
+  return {
+    desired,
+    active: ACTIVE_NETWORK,
+    hostName: os.hostname(),
+    addresses: localNetworkAddresses(),
+    urls: networkUrls(ACTIVE_NETWORK),
+    desiredUrls: networkUrls(desired),
+    restartRequired: desired.host !== ACTIVE_NETWORK.host || desired.port !== ACTIVE_NETWORK.port,
+    envManaged: desired.hostOverridden || desired.portOverridden
+  };
+}
+
 function backupFrequencyLabel(value) {
   return { manual: 'Manual only', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[backupFrequency(value)];
 }
@@ -1019,13 +1115,18 @@ function defaultUpdateStatus() {
     running: false,
     phase: 'idle',
     percent: 0,
-    message: 'Ready to check for updates.',
+    message: UPDATE_MODE === 'installer' ? 'Ready to check GitHub releases for a Windows installer.' : 'Ready to check for updates.',
+    updateMode: UPDATE_MODE,
     channel: 'stable',
     version: APP_VERSION,
     targetVersion: '',
     latestVersion: '',
     latestTag: '',
     updateAvailable: false,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
     updatedAt: new Date().toISOString(),
     log: []
   };
@@ -1034,7 +1135,13 @@ function defaultUpdateStatus() {
 function readUpdateStatus() {
   try {
     if (!fs.existsSync(UPDATE_STATUS_FILE)) return defaultUpdateStatus();
-    return { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
+    const status = { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
+    if (status.latestVersion && compareVersions(status.latestVersion, APP_VERSION) <= 0) {
+      status.updateAvailable = false;
+      status.downloadUrl = '';
+      status.installerDownloadUrl = '';
+    }
+    return status;
   } catch {
     return defaultUpdateStatus();
   }
@@ -1043,7 +1150,7 @@ function readUpdateStatus() {
 function writeUpdateStatus(patch) {
   const previous = readUpdateStatus();
   const log = patch.log ? [...(previous.log || []), ...patch.log].slice(-80) : previous.log || [];
-  const next = { ...previous, ...patch, log, version: APP_VERSION, updatedAt: new Date().toISOString() };
+  const next = { ...previous, ...patch, log, updateMode: UPDATE_MODE, version: APP_VERSION, updatedAt: new Date().toISOString() };
   fs.writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(next, null, 2));
   return next;
 }
@@ -1052,10 +1159,78 @@ function updateLog(message) {
   return `${new Date().toLocaleTimeString('en-US', { hour12: false })} ${message}`;
 }
 
+function compareVersions(a, b) {
+  const parse = (value) => {
+    const [version, prerelease = ''] = String(value || '').replace(/^v/i, '').split('-', 2);
+    const parts = version.split('.').map((part) => Number(part) || 0);
+    return { parts: [parts[0] || 0, parts[1] || 0, parts[2] || 0], prerelease };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < 3; index += 1) {
+    if (left.parts[index] !== right.parts[index]) return left.parts[index] > right.parts[index] ? 1 : -1;
+  }
+  if (left.prerelease === right.prerelease) return 0;
+  if (!left.prerelease) return 1;
+  if (!right.prerelease) return -1;
+  return left.prerelease.localeCompare(right.prerelease);
+}
+
+function httpsJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `Oakstead/${APP_VERSION}`
+      }
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1024 * 1024 * 4) {
+          request.destroy(new Error('GitHub response was too large.'));
+        }
+      });
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`GitHub returned HTTP ${response.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(new Error(`GitHub returned invalid JSON: ${error.message}`));
+        }
+      });
+    });
+    request.setTimeout(15000, () => request.destroy(new Error('Timed out checking GitHub releases.')));
+    request.on('error', reject);
+  });
+}
+
+async function githubReleaseForChannel(channel) {
+  const releases = await httpsJson(`https://api.github.com/repos/${RELEASE_REPO}/releases?per_page=20`);
+  if (!Array.isArray(releases)) throw new Error('GitHub release list was not an array.');
+  const published = releases.filter((release) => !release.draft);
+  if (channel === 'prerelease') return published.find((release) => release.prerelease) || published.find((release) => !release.prerelease) || null;
+  return published.find((release) => !release.prerelease) || null;
+}
+
+function installerAssetForRelease(release, version) {
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  const escapedVersion = String(version || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionedSetup = new RegExp(`oakstead.*setup.*v?${escapedVersion}.*\\.exe$`, 'i');
+  return assets.find((asset) => versionedSetup.test(asset.name || ''))
+    || assets.find((asset) => /oakstead.*setup.*\.exe$/i.test(asset.name || ''))
+    || assets.find((asset) => /\.exe$/i.test(asset.name || ''))
+    || null;
+}
+
 function runUpdateCommand(label, command, args, options = {}) {
   writeUpdateStatus({ message: label, log: [updateLog(label)] });
   const result = spawnSync(command, args, {
-    cwd: __dirname,
+    cwd: APP_ROOT,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 8,
     ...options
@@ -1078,13 +1253,23 @@ function latestReleaseTag(channel) {
   return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
 }
 
-function checkLatestRelease(channel) {
+function checkLatestGitRelease(channel) {
   const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
-  writeUpdateStatus({ phase: 'checking', percent: 4, channel: updateChannel, message: 'Checking GitHub for available releases.', log: [updateLog(`Checking ${updateChannel} releases`)] });
+  writeUpdateStatus({
+    phase: 'checking',
+    percent: 4,
+    channel: updateChannel,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    message: 'Checking GitHub for available releases.',
+    log: [updateLog(`Checking ${updateChannel} releases`)]
+  });
   runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
   const tag = latestReleaseTag(updateChannel);
   const latestVersion = tag ? tag.replace(/^v/, '') : '';
-  const updateAvailable = Boolean(latestVersion && latestVersion !== APP_VERSION);
+  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
   return writeUpdateStatus({
     running: false,
     phase: 'checked',
@@ -1099,12 +1284,67 @@ function checkLatestRelease(channel) {
   });
 }
 
+async function checkLatestInstallerRelease(channel) {
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({
+    phase: 'checking',
+    percent: 10,
+    channel: updateChannel,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    message: `Checking GitHub releases for ${RELEASE_REPO}.`,
+    log: [updateLog(`Checking ${updateChannel} installer releases from ${RELEASE_REPO}`)]
+  });
+  const release = await githubReleaseForChannel(updateChannel);
+  if (!release) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'checked',
+      percent: 0,
+      updateAvailable: false,
+      message: 'No published GitHub release was found.',
+      log: [updateLog('No published GitHub release was found')]
+    });
+  }
+  const latestVersion = String(release.tag_name || release.name || '').replace(/^v/i, '');
+  const asset = installerAssetForRelease(release, latestVersion);
+  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
+  const hasInstaller = Boolean(asset?.browser_download_url);
+  return writeUpdateStatus({
+    running: false,
+    phase: 'checked',
+    percent: 0,
+    channel: updateChannel,
+    targetVersion: latestVersion,
+    latestVersion,
+    latestTag: release.tag_name || '',
+    updateAvailable,
+    releaseUrl: release.html_url || '',
+    installerAssetName: asset?.name || '',
+    installerDownloadUrl: asset?.browser_download_url || '',
+    downloadUrl: asset?.browser_download_url || '',
+    message: updateAvailable
+      ? (hasInstaller ? `Windows installer available: v${latestVersion}` : `v${latestVersion} is available, but no Windows installer asset was attached.`)
+      : `Already current: v${latestVersion || APP_VERSION}`,
+    log: [
+      updateLog(`Latest ${updateChannel} release is ${release.tag_name || latestVersion || 'unknown'}`),
+      updateLog(hasInstaller ? `Installer asset: ${asset.name}` : 'No installer asset found on the release')
+    ]
+  });
+}
+
+async function checkLatestRelease(channel) {
+  return UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel);
+}
+
 function restartApplication() {
   writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
   const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
   if (!supervised) {
     const child = spawn(process.execPath, [__filename], {
-      cwd: __dirname,
+      cwd: APP_ROOT,
       detached: true,
       stdio: 'ignore',
       env: process.env
@@ -1114,9 +1354,58 @@ function restartApplication() {
   setTimeout(() => process.exit(0), 900);
 }
 
-function startSystemUpdate(channel) {
+async function startInstallerUpdate(channel) {
+  const active = readUpdateStatus();
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  const activeIsCurrent = active.installerDownloadUrl
+    && active.channel === updateChannel
+    && active.latestVersion
+    && compareVersions(active.latestVersion, APP_VERSION) > 0;
+  const status = activeIsCurrent ? active : await checkLatestInstallerRelease(updateChannel);
+  if (!status.updateAvailable) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'checked',
+      percent: 0,
+      channel: updateChannel,
+      message: status.message || 'No installer update is available.',
+      log: [updateLog('Installer update was requested, but no update is available')]
+    });
+  }
+  if (!status.installerDownloadUrl) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'missing installer',
+      percent: 0,
+      channel: updateChannel,
+      message: 'A release is available, but it does not include a Windows installer asset.',
+      log: [updateLog('Installer update cannot continue because no .exe asset was found')]
+    });
+  }
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const backup = createDatabaseBackup('pre-installer-update');
+      writeUpdateStatus({ log: [updateLog(`Created pre-installer backup ${backup.fileName}`)] });
+    }
+  } catch (error) {
+    writeUpdateStatus({ log: [updateLog(`Backup before installer download failed: ${error.message || error}`)] });
+  }
+  return writeUpdateStatus({
+    running: false,
+    phase: 'download ready',
+    percent: 100,
+    channel: updateChannel,
+    message: `Download ${status.installerAssetName || 'the Windows installer'} and run it on this computer to complete the update.`,
+    downloadUrl: status.installerDownloadUrl,
+    installerDownloadUrl: status.installerDownloadUrl,
+    log: [updateLog('Installer download is ready')]
+  });
+}
+
+async function startSystemUpdate(channel) {
   const active = readUpdateStatus();
   if (active.running) return active;
+  if (UPDATE_MODE === 'installer') return startInstallerUpdate(channel);
   const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
   writeUpdateStatus({
     running: true,
@@ -1128,7 +1417,7 @@ function startSystemUpdate(channel) {
     log: [updateLog(`Starting ${updateChannel} update from version ${APP_VERSION}`)]
   });
   const child = spawn(process.execPath, [__filename, '--run-system-update', updateChannel], {
-    cwd: __dirname,
+    cwd: APP_ROOT,
     detached: true,
     stdio: 'ignore',
     env: process.env
@@ -1217,7 +1506,7 @@ function saveUploadedImage(file, basename) {
   const fileName = `${basename}${ext}`;
   const target = path.join(UPLOAD_DIR, fileName);
   fs.writeFileSync(target, file.data);
-  return path.join('uploads', fileName);
+  return `uploads/${fileName}`;
 }
 
 function gradeRank(grade) {
@@ -1408,6 +1697,16 @@ const NAV_ICONS = {
   absences: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10Zm-9 3h2v2H9v-2Zm4 0h2v2h-2v-2Z"></path></svg>',
   reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
 };
+
+const REPORT_ICONS = {
+  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20v-1a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v1"/><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 12.5a3 3 0 0 0 0-6"/><path d="M18.5 20v-1a4 4 0 0 0-2-3.46"/></svg>',
+  students: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12.2V17c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.8"/><path d="M22 10v6"/></svg>',
+  'school-board': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8"/><path d="M9 4v5l-4 7"/><path d="M15 4v5l4 7"/><path d="M5 16h14"/><path d="M7 20h10"/><path d="M12 9v11"/></svg>',
+  birthdays: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11h16v9H4z"/><path d="M4 15c1.4 0 1.4-1 2.8-1s1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1"/><path d="M8 11V8"/><path d="M12 11V8"/><path d="M16 11V8"/><path d="M8 5l.8 1L8 7 7.2 6 8 5Z"/><path d="m12 5 .8 1-.8 1-.8-1L12 5Z"/><path d="m16 5 .8 1-.8 1-.8-1L16 5Z"/></svg>',
+  'grade-graph': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m6 15 4-4 3 3 5-7"/><path d="M10 11h.01"/><path d="M13 14h.01"/><path d="M18 7h.01"/></svg>'
+};
+
+const REPORT_METER_COLORS = ['#2f6f5e', '#2563eb', '#a16207', '#be123c', '#6d28d9', '#0e7490', '#7c2d12', '#4d7c0f'];
 
 function navItemActive(pathname, currentPath) {
   return currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
@@ -1733,6 +2032,13 @@ button, select, input { min-height: 42px; }
 .theme-icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .main {
   padding: 1rem .85rem 3.5rem;
+  transition: opacity .14s ease;
+}
+.main.app-loading {
+  opacity: .48;
+}
+@media (prefers-reduced-motion: reduce) {
+  .main { transition: none; }
 }
 .app-footer {
   grid-column: 1 / -1;
@@ -1884,6 +2190,92 @@ button, select, input { min-height: 42px; }
 }
 .absence-notes-field textarea {
   min-height: 76px;
+}
+.absence-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+.absence-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.absence-header-filters {
+  display: flex;
+  align-items: center;
+  gap: .38rem;
+  flex-wrap: wrap;
+}
+.absence-filter-label {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 850;
+}
+.absence-header-filters select {
+  width: auto;
+  min-width: 112px;
+  max-width: min(220px, 58vw);
+  min-height: 34px;
+  padding: .34rem 1.8rem .34rem .55rem;
+  border-color: var(--line);
+  background-color: var(--paper-strong);
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 760;
+}
+.absence-header-filters select[name="studentId"] {
+  min-width: 180px;
+}
+.absence-clear-filter {
+  min-height: 34px;
+  padding: .34rem .55rem;
+}
+.absence-table th,
+.absence-table td {
+  vertical-align: middle;
+}
+.absence-date-cell,
+.absence-grade-cell,
+.absence-kind-cell,
+.absence-amount-cell {
+  white-space: nowrap;
+}
+.absence-student-cell {
+  font-weight: 750;
+}
+.absence-grade-cell {
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 820;
+}
+.absence-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  min-width: 70px;
+  padding: .16rem .52rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-strong);
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 850;
+}
+.absence-kind.absence {
+  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
+  background: color-mix(in srgb, var(--red) 8%, var(--paper));
+  color: var(--red);
+}
+.absence-kind.tardy {
+  border-color: color-mix(in srgb, var(--gold) 42%, var(--line));
+  background: color-mix(in srgb, var(--gold) 10%, var(--paper));
+  color: var(--gold);
 }
 .family-form-section {
   grid-column: 1 / -1;
@@ -3135,42 +3527,69 @@ tr:last-child td { border-bottom: 0; }
 }
 .chart-head h2 { margin: 0; font-size: 1rem; }
 .chart-head span { color: var(--muted); font-size: .8rem; font-weight: 800; }
-.bar-list { display: grid; gap: .7rem; }
-.bar-row {
+.bar-list,
+.distribution {
   display: grid;
-  grid-template-columns: minmax(92px, .45fr) minmax(0, 1fr) 58px;
+  gap: .55rem;
+}
+.bar-row,
+.distribution-row {
+  --bar-color: var(--accent);
+  display: grid;
+  grid-template-columns: minmax(92px, .42fr) minmax(0, 1fr) minmax(34px, auto);
   align-items: center;
   gap: .65rem;
+  min-height: 34px;
+  padding: .26rem .36rem;
+  border: 1px solid color-mix(in srgb, var(--bar-color) 16%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bar-color) 5%, var(--paper));
 }
-.bar-row b { font-size: .84rem; overflow-wrap: anywhere; }
+.distribution-row {
+  grid-template-columns: 56px minmax(0, 1fr) minmax(34px, auto);
+}
+.bar-row b,
+.distribution-row b {
+  color: var(--ink);
+  font-size: .84rem;
+  font-weight: 820;
+  overflow-wrap: anywhere;
+}
 .bar-track {
-  height: 12px;
+  height: 18px;
   overflow: hidden;
-  border: 1px solid var(--line);
-  background: var(--paper-strong);
+  border: 1px solid color-mix(in srgb, var(--bar-color) 22%, var(--line));
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--bar-color) 8%, transparent), transparent),
+    var(--paper-strong);
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, .08);
 }
 .bar-fill {
   height: 100%;
   width: var(--bar-value);
-  background: var(--accent);
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--bar-color), color-mix(in srgb, var(--bar-color) 76%, #111827));
   transition: width .35s ease;
 }
-.bar-fill.good { background: var(--accent); }
-.bar-fill.watch { background: var(--gold); }
-.bar-fill.low { background: var(--red); }
-.bar-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
-.distribution {
-  display: grid;
-  gap: .65rem;
+.bar-fill.good { --bar-color: var(--accent); }
+.bar-fill.watch { --bar-color: var(--gold); }
+.bar-fill.low { --bar-color: var(--red); }
+.bar-row span,
+.distribution-row span {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 2rem;
+  padding: .12rem .42rem;
+  border: 1px solid color-mix(in srgb, var(--bar-color) 24%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bar-color) 10%, var(--paper-strong));
+  color: var(--ink);
+  font-size: .78rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
-.distribution-row {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr) 38px;
-  gap: .65rem;
-  align-items: center;
-}
-.distribution-row b { font-size: .84rem; }
-.distribution-row span { color: var(--muted); font-size: .78rem; font-weight: 800; text-align: right; }
 .report-nav-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -3178,7 +3597,9 @@ tr:last-child td { border-bottom: 0; }
 }
 .report-tile {
   display: grid;
-  gap: .35rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: .72rem;
   min-height: 104px;
   padding: .85rem;
   border: 1px solid var(--line);
@@ -3197,8 +3618,38 @@ tr:last-child td { border-bottom: 0; }
   border-color: color-mix(in srgb, var(--accent) 56%, var(--line));
   background: var(--accent-soft);
 }
+.report-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-soft) 56%, var(--paper));
+  color: var(--accent-dark);
+}
+.report-tile-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.report-tile:hover .report-tile-icon,
+.report-tile.active .report-tile-icon {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: var(--paper);
+}
+.report-tile-copy {
+  display: grid;
+  gap: .28rem;
+  min-width: 0;
+}
 .report-tile strong { font-size: .95rem; }
-.report-tile span { color: var(--muted); font-size: .82rem; line-height: 1.4; }
+.report-tile-copy span { color: var(--muted); font-size: .82rem; line-height: 1.4; }
 .report-kpis {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3343,27 +3794,34 @@ tr:last-child td { border-bottom: 0; }
 }
 .mini-subject-chart {
   display: grid;
-  gap: .35rem;
+  gap: .42rem;
   min-width: 0;
-  padding: .8rem;
+  padding: .82rem;
   border: 1px solid var(--line);
+  border-left: 4px solid var(--subject-color, var(--accent));
   border-radius: 8px;
-  background: var(--paper-strong);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--subject-color, var(--accent)) 5%, transparent), transparent 46%),
+    var(--paper-strong);
 }
 .mini-subject-chart header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: .5rem;
+  padding-bottom: .12rem;
   border-bottom: 1px solid var(--line-strong);
 }
 .mini-subject-chart h3 {
   margin: 0;
-  font-size: .9rem;
+  color: var(--ink);
+  font-size: .92rem;
 }
 .mini-subject-chart span {
   color: var(--muted);
   font-size: .76rem;
+  font-weight: 750;
+  white-space: nowrap;
 }
 .mini-subject-chart svg {
   width: 100%;
@@ -3796,10 +4254,14 @@ tr:last-child td { border-bottom: 0; }
   @page { size: letter portrait; margin: .48in .55in; }
   @page report-card-page { size: letter landscape; margin: 0; }
   html, body { width: auto; margin: 0; background: #fff; color: #000; }
-  .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
+  .demo-banner, .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
-  .workspace { gap: .22in; }
+  .workspace,
+  .grade-graph-report,
+  .grade-graph {
+    display: block;
+  }
   .print-report-head {
     display: block;
     margin: 0 0 .22in;
@@ -3822,6 +4284,19 @@ tr:last-child td { border-bottom: 0; }
     border: 0;
     border-radius: 0;
     background: transparent;
+  }
+  .grade-graph.chart-panel {
+    margin: 0;
+    padding: 0;
+    break-inside: auto;
+    break-before: avoid;
+    page-break-before: avoid;
+    page-break-inside: auto;
+  }
+  .grade-graph-report .print-report-head {
+    margin-bottom: .08in;
+    break-after: avoid;
+    page-break-after: avoid;
   }
   .ledger-head, .chart-head { display: none; }
   th, td {
@@ -3925,19 +4400,27 @@ tr:last-child td { border-bottom: 0; }
   .grade-graph-print-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .2in .34in;
+    gap: .06in .24in;
+    margin: 0;
+    break-before: avoid;
+    page-break-before: avoid;
   }
   .grade-graph-print-grid.single {
     grid-template-columns: 1fr;
   }
   .mini-subject-chart {
     break-inside: avoid;
+    page-break-inside: avoid;
     padding: 0;
     border: 0;
     background: transparent;
   }
-  .mini-subject-chart h3 { font-size: 10pt; }
-  .mini-subject-chart span { color: #333; font-size: 8.2pt; }
+  .mini-subject-chart header {
+    gap: .08in;
+    padding-bottom: .01in;
+  }
+  .mini-subject-chart h3 { font-size: 9.3pt; }
+  .mini-subject-chart span { color: #333; font-size: 7.6pt; }
   .mini-subject-chart svg text { font-family: Arial, sans-serif; }
   body.report-card-printing { page: report-card-page; width: 11in; }
   body.report-card-printing .workspace > :not(.report-card-document) { display: none !important; }
@@ -4004,7 +4487,7 @@ tr:last-child td { border-bottom: 0; }
       </button>
     </div>
   </nav>` : ''}
-  <main class="main">${content}</main>
+  <main class="main" data-app-main>${content}</main>
   <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><strong>Oakstead</strong> v${esc(APP_VERSION)}</span></footer>
 </div>
 <script>
@@ -4025,7 +4508,113 @@ function generateReportCardPdf(btn) {
 (function(){
   const root = document.documentElement;
   const saved = localStorage.getItem('oakstead-theme');
+  const gridTimers = new WeakMap();
+  let activeScoreInput = null;
+  let navAbort = null;
   if (saved === 'dark') root.setAttribute('data-theme', 'dark');
+
+  function mainEl() {
+    return document.querySelector('[data-app-main]') || document.querySelector('.main');
+  }
+
+  function setMobileNav(open) {
+    const navToggle = document.getElementById('navToggle');
+    document.body.classList.toggle('nav-open', open);
+    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  function canUseAppNav(url) {
+    return url.origin === window.location.origin
+      && !url.pathname.startsWith('/assets/')
+      && url.pathname !== '/backup/download'
+      && url.pathname !== '/system-update/status';
+  }
+
+  function isSamePageHash(url) {
+    return url.hash && url.pathname === window.location.pathname && url.search === window.location.search;
+  }
+
+  function updateShellFrom(doc) {
+    const currentNav = document.querySelector('.nav-links');
+    const nextNav = doc.querySelector('.nav-links');
+    if (currentNav && nextNav) currentNav.innerHTML = nextNav.innerHTML;
+    const currentMobileLabel = document.querySelector('#navToggle .nav-toggle-main span');
+    const nextMobileLabel = doc.querySelector('#navToggle .nav-toggle-main span');
+    if (currentMobileLabel && nextMobileLabel) currentMobileLabel.textContent = nextMobileLabel.textContent;
+  }
+
+  function navigateApp(to, options) {
+    options = options || {};
+    const nextUrl = new URL(to, window.location.href);
+    if (!canUseAppNav(nextUrl)) {
+      window.location.href = nextUrl.toString();
+      return Promise.resolve(false);
+    }
+    const currentMain = mainEl();
+    if (!currentMain) {
+      window.location.href = nextUrl.toString();
+      return Promise.resolve(false);
+    }
+    if (navAbort) navAbort.abort();
+    navAbort = new AbortController();
+    currentMain.classList.add('app-loading');
+    return fetch(nextUrl.toString(), {
+      signal: navAbort.signal,
+      headers: { Accept: 'text/html', 'X-Requested-With': 'Oakstead-App-Shell' }
+    }).then(function(response) {
+      if (!response.ok) throw new Error('Navigation failed');
+      return response.text().then(function(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const nextMain = doc.querySelector('[data-app-main]') || doc.querySelector('.main');
+        if (!nextMain) {
+          window.location.href = response.url || nextUrl.toString();
+          return false;
+        }
+        document.title = doc.title || document.title;
+        updateShellFrom(doc);
+        const liveMain = mainEl();
+        liveMain.replaceWith(document.importNode(nextMain, true));
+        if (options.push !== false) history.pushState({ oaksteadApp: true }, '', nextUrl.toString());
+        if (options.scroll !== false) window.scrollTo(0, 0);
+        setMobileNav(false);
+        initDynamicContent(mainEl());
+        return true;
+      });
+    }).catch(function(error) {
+      if (error.name === 'AbortError') return false;
+      window.location.href = nextUrl.toString();
+      return false;
+    }).finally(function() {
+      const liveMain = mainEl();
+      if (liveMain) liveMain.classList.remove('app-loading');
+    });
+  }
+
+  function formToUrl(form) {
+    const url = new URL(form.getAttribute('action') || window.location.href, window.location.href);
+    url.search = '';
+    new FormData(form).forEach(function(value, key) {
+      if (key) url.searchParams.append(key, value);
+    });
+    return url;
+  }
+
+  function submitFormSmoothly(form, options) {
+    if (!form) return;
+    const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) {
+      form.submit();
+      return;
+    }
+    navigateApp(formToUrl(form), options);
+  }
+
+  function goToUrl(url, options) {
+    const nextUrl = new URL(url, window.location.href);
+    if (canUseAppNav(nextUrl)) navigateApp(nextUrl, options);
+    else window.location.href = nextUrl.toString();
+  }
+
   const themeToggle = document.getElementById('themeToggle');
   if (themeToggle) {
     themeToggle.addEventListener('click', function(){
@@ -4034,12 +4623,9 @@ function generateReportCardPdf(btn) {
       localStorage.setItem('oakstead-theme', next);
     });
   }
+
   const navToggle = document.getElementById('navToggle');
   const primaryNav = document.getElementById('primaryNav');
-  function setMobileNav(open) {
-    document.body.classList.toggle('nav-open', open);
-    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  }
   if (navToggle && primaryNav) {
     navToggle.addEventListener('click', function(event) {
       event.stopPropagation();
@@ -4057,108 +4643,155 @@ function generateReportCardPdf(btn) {
       if (event.key === 'Escape') setMobileNav(false);
     });
   }
+
   document.querySelectorAll('.year-form select').forEach(function(select) {
     select.addEventListener('change', function() {
       select.form.submit();
     });
   });
-  document.querySelectorAll('[data-auto-submit]').forEach(function(control) {
-    control.addEventListener('change', function() {
-      control.form.submit();
-    });
-  });
-  const updateStatusPanel = document.querySelector('[data-update-status]');
-  const updateForm = document.querySelector('[data-update-form]');
-  const updateCheckForm = document.querySelector('[data-update-check-form]');
-  function renderUpdateStatus(status) {
-    if (!updateStatusPanel || !status) return;
-    const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
-    const message = updateStatusPanel.querySelector('[data-update-message]');
-    const percentLabel = updateStatusPanel.querySelector('[data-update-percent]');
-    const progress = updateStatusPanel.querySelector('[data-update-progress]');
-    const phase = updateStatusPanel.querySelector('[data-update-phase]');
-    const log = updateStatusPanel.querySelector('[data-update-log]');
-    if (message) message.textContent = status.message || '';
-    if (percentLabel) percentLabel.textContent = percent + '%';
-    if (progress) progress.style.setProperty('--progress-value', percent + '%');
-    if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
-    if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
-    if (updateForm) {
-      const button = updateForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = Boolean(status.running);
-      const channelInput = updateForm.querySelector('input[name="channel"]');
-      if (channelInput && status.channel) channelInput.value = status.channel;
-    }
-    if (updateCheckForm) {
-      const button = updateCheckForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = Boolean(status.running);
-    }
-  }
-  function pollUpdateStatus() {
-    if (!updateStatusPanel) return;
-    fetch('/system-update/status', { headers: { Accept: 'application/json' } })
-      .then(function(response) { return response.ok ? response.json() : null; })
-      .then(function(status) {
-        renderUpdateStatus(status);
-        if (status && status.running) setTimeout(pollUpdateStatus, 1400);
-      })
-      .catch(function() {});
-  }
-  if (updateForm) {
-    updateForm.addEventListener('submit', function(event) {
-      event.preventDefault();
-      const button = updateForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = true;
-      fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
-        .then(function(response) { return response.json(); })
-        .then(function(status) { renderUpdateStatus(status); setTimeout(pollUpdateStatus, 800); })
-        .catch(function() { if (button) button.disabled = false; });
-    });
-    pollUpdateStatus();
-  }
-  if (updateCheckForm) {
-    updateCheckForm.addEventListener('submit', function(event) {
-      event.preventDefault();
-      const button = updateCheckForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = true;
-      fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
-        .then(function(response) { return response.json(); })
-        .then(function(status) { renderUpdateStatus(status); })
-        .catch(function() {})
-        .finally(function() { if (button) button.disabled = false; });
-    });
-  }
 
-  let activeScoreInput = null;
+  document.addEventListener('click', function(event) {
+    const closeButton = event.target.closest('[data-dialog-close]');
+    if (closeButton) {
+      closeButton.closest('dialog')?.close();
+      return;
+    }
+    const dialogButton = event.target.closest('[data-dialog-target]');
+    if (dialogButton) {
+      const dialog = document.getElementById(dialogButton.dataset.dialogTarget);
+      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+      return;
+    }
+    if (event.target.matches('.assignment-dialog')) {
+      event.target.close();
+      return;
+    }
+    const scoreChip = event.target.closest('[data-score-chip]');
+    if (scoreChip) {
+      const target = activeScoreInput || document.querySelector('[data-score-input]');
+      if (!target) return;
+      target.value = scoreChip.dataset.scoreChip;
+      updateScorePreview(target);
+      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
+      if (next) {
+        next.focus();
+        next.select();
+      }
+      return;
+    }
+    const anchor = event.target.closest('a[href]');
+    if (!anchor || event.defaultPrevented) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (anchor.target || anchor.hasAttribute('download') || anchor.dataset.noAppNav !== undefined) return;
+    const url = new URL(anchor.href, window.location.href);
+    if (!canUseAppNav(url) || isSamePageHash(url)) return;
+    event.preventDefault();
+    navigateApp(url);
+  });
+
+  document.addEventListener('submit', function(event) {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) return;
+    event.preventDefault();
+    navigateApp(formToUrl(form));
+  });
+
+  document.addEventListener('change', function(event) {
+    const assignmentSelect = event.target.closest('[data-assignment-select]');
+    if (assignmentSelect) {
+      if (assignmentSelect.dataset.baseUrl) {
+        const nextUrl = new URL(assignmentSelect.dataset.baseUrl, window.location.origin);
+        if (assignmentSelect.value === '__new__') {
+          nextUrl.searchParams.delete('assignmentId');
+          nextUrl.searchParams.set('action', 'add');
+        } else if (assignmentSelect.value) {
+          nextUrl.searchParams.delete('action');
+          nextUrl.searchParams.set('assignmentId', assignmentSelect.value);
+        }
+        goToUrl(nextUrl);
+        return;
+      }
+      if (assignmentSelect.value) {
+        submitFormSmoothly(assignmentSelect.form);
+      } else {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('assignmentId');
+        goToUrl(url);
+      }
+      return;
+    }
+    const scoreModeToggle = event.target.closest('[data-score-mode-toggle]');
+    if (scoreModeToggle) {
+      goToUrl(scoreModeToggle.checked ? scoreModeToggle.dataset.wrongUrl : scoreModeToggle.dataset.percentUrl);
+      return;
+    }
+    const gridToggle = event.target.closest('[data-grid-toggle]');
+    if (gridToggle) {
+      goToUrl(gridToggle.checked ? gridToggle.dataset.onUrl : gridToggle.dataset.offUrl);
+      return;
+    }
+    const lettersToggle = event.target.closest('[data-grid-letters-toggle]');
+    if (lettersToggle) {
+      syncGridLettersToggle(lettersToggle, true);
+      return;
+    }
+    if (event.target.matches('select[name="groupId"]')) {
+      syncRoleOptions(event.target.closest('form'));
+      return;
+    }
+    const gridInput = event.target.closest('[data-grid-score-input]');
+    if (gridInput) {
+      clearTimeout(gridTimers.get(gridInput));
+      autosaveGridInput(gridInput);
+      return;
+    }
+    const auto = event.target.closest('[data-auto-submit]');
+    if (auto && auto.form) submitFormSmoothly(auto.form, { scroll: false });
+  });
+
   document.addEventListener('focusin', function(event) {
     if (event.target.matches('[data-score-input]')) {
       activeScoreInput = event.target;
       window.setTimeout(function() { event.target.select?.(); }, 0);
     }
   });
-  document.querySelectorAll('[data-assignment-select]').forEach(function(select) {
-    select.addEventListener('change', function() {
-      if (this.dataset.baseUrl) {
-        var nextUrl = new URL(this.dataset.baseUrl, window.location.origin);
-        if (this.value === '__new__') {
-          nextUrl.searchParams.delete('assignmentId');
-          nextUrl.searchParams.set('action', 'add');
-        } else if (this.value) {
-          nextUrl.searchParams.delete('action');
-          nextUrl.searchParams.set('assignmentId', this.value);
-        }
-        window.location.href = nextUrl.toString();
-        return;
-      }
-      if (this.value) {
-        this.form.submit();
-      } else {
-        var url = new URL(window.location.href);
-        url.searchParams.delete('assignmentId');
-        window.location.href = url.toString();
-      }
-    });
+
+  document.addEventListener('input', function(event) {
+    if (event.target.matches('[data-score-input]')) {
+      updateScorePreview(event.target);
+      return;
+    }
+    if (event.target.matches('[data-grid-score-input]')) {
+      const input = event.target;
+      clearTimeout(gridTimers.get(input));
+      gridTimers.set(input, setTimeout(function() { autosaveGridInput(input); }, 550));
+      return;
+    }
+    if (event.target.matches('input[name="maxScore"]')) {
+      event.target.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    }
   });
+
+  document.addEventListener('keydown', function(event) {
+    const input = event.target.closest('[data-grid-score-input]');
+    if (!input || event.key !== 'Tab') return;
+    const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
+    const index = inputs.indexOf(input);
+    const next = inputs[index + (event.shiftKey ? -1 : 1)];
+    if (!next) return;
+    event.preventDefault();
+    autosaveGridInput(input);
+    next.focus();
+    next.select?.();
+  });
+
+  window.addEventListener('popstate', function() {
+    navigateApp(window.location.href, { push: false, scroll: false });
+  });
+
+  history.replaceState({ oaksteadApp: true }, '', window.location.href);
 
   function formatScorePreviewNumber(value) {
     if (!Number.isFinite(value)) return '';
@@ -4187,59 +4820,24 @@ function generateReportCardPdf(btn) {
     preview.textContent = formatScorePreviewNumber(percent) + '%';
   }
 
-  document.querySelectorAll('[data-score-input]').forEach(function(input) {
-    updateScorePreview(input);
-    input.addEventListener('input', function() {
-      updateScorePreview(input);
-    });
-  });
-  document.querySelectorAll('[data-score-mode-toggle]').forEach(function(toggle) {
-    toggle.addEventListener('change', function() {
-      window.location.href = toggle.checked ? toggle.dataset.wrongUrl : toggle.dataset.percentUrl;
-    });
-  });
-  document.querySelectorAll('[data-grid-toggle]').forEach(function(toggle) {
-    toggle.addEventListener('change', function() {
-      window.location.href = toggle.checked ? toggle.dataset.onUrl : toggle.dataset.offUrl;
-    });
-  });
-  document.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
+  function syncGridLettersToggle(toggle, save) {
     const shell = toggle.closest('.gb-grid-shell');
-    const saved = localStorage.getItem('oakstead-gradebook-letters');
-    if (saved === 'off') {
-      toggle.checked = false;
-      shell?.classList.add('letters-hidden');
-    }
-    toggle.addEventListener('change', function() {
-      shell?.classList.toggle('letters-hidden', !toggle.checked);
-      localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
-    });
-  });
-  document.querySelectorAll('[data-dialog-target]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      const dialog = document.getElementById(button.dataset.dialogTarget);
-      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
-    });
-  });
-  document.querySelectorAll('[data-dialog-close]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      button.closest('dialog')?.close();
-    });
-  });
-  document.querySelectorAll('.assignment-dialog').forEach(function(dialog) {
-    dialog.addEventListener('click', function(event) {
-      if (event.target === dialog) dialog.close();
-    });
-  });
+    if (!save && localStorage.getItem('oakstead-gradebook-letters') === 'off') toggle.checked = false;
+    shell?.classList.toggle('letters-hidden', !toggle.checked);
+    if (save) localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
+  }
+
   function markGridCell(input, state) {
     const cell = input.closest('.gb-grid-score-cell');
     if (!cell) return;
     cell.classList.remove('saving', 'saved', 'save-error');
     if (state) cell.classList.add(state);
   }
+
   function gridHidden(container, name) {
     return container.querySelector('input[name="' + name + '"]')?.value || '';
   }
+
   function updateGridAverages(result) {
     if (!result || !result.display) return;
     const assignmentId = String(result.assignmentId || '');
@@ -4251,6 +4849,7 @@ function generateReportCardPdf(btn) {
     if (studentAverage && result.display.studentAverage !== undefined) studentAverage.innerHTML = result.display.studentAverage;
     if (classAverage && result.display.classAverage !== undefined) classAverage.innerHTML = result.display.classAverage;
   }
+
   function autosaveGridInput(input) {
     const container = input.closest('[data-grid-autosave]');
     if (!container || input.value === input.dataset.originalValue) return;
@@ -4286,64 +4885,116 @@ function generateReportCardPdf(btn) {
         if (status) status.textContent = 'Could not save';
       });
   }
-  document.querySelectorAll('[data-grid-score-input]').forEach(function(input) {
-    let timer = null;
-    input.addEventListener('keydown', function(event) {
-      if (event.key !== 'Tab') return;
-      const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
-      const index = inputs.indexOf(input);
-      const next = inputs[index + (event.shiftKey ? -1 : 1)];
-      if (!next) return;
-      event.preventDefault();
-      autosaveGridInput(input);
-      next.focus();
-      next.select?.();
-    });
-    input.addEventListener('input', function() {
-      clearTimeout(timer);
-      timer = setTimeout(function() { autosaveGridInput(input); }, 550);
-    });
-    input.addEventListener('change', function() {
-      clearTimeout(timer);
-      autosaveGridInput(input);
-    });
-  });
-  document.querySelectorAll('input[name="maxScore"]').forEach(function(pointsInput) {
-    pointsInput.addEventListener('input', function() {
-      pointsInput.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
-    });
-  });
 
-  document.querySelectorAll('form[action="/person-roles"]').forEach(function(form) {
+  function syncRoleOptions(form) {
+    if (!form) return;
     const groupSelect = form.querySelector('select[name="groupId"]');
     const roleSelect = form.querySelector('select[name="roleTypeId"]');
     if (!groupSelect || !roleSelect) return;
-    function syncRoleOptions() {
-      const groupId = groupSelect.value;
-      Array.from(roleSelect.options).forEach(function(option) {
-        if (!option.value) return;
-        const matches = !groupId || option.dataset.roleGroup === groupId;
-        option.disabled = !matches;
-        option.hidden = !matches;
-      });
-      if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
-    }
-    groupSelect.addEventListener('change', syncRoleOptions);
-    syncRoleOptions();
-  });
-
-  document.querySelectorAll('[data-score-chip]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      const target = activeScoreInput || document.querySelector('[data-score-input]');
-      if (!target) return;
-      target.value = button.dataset.scoreChip;
-      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
-      if (next) {
-        next.focus();
-        next.select();
-      }
+    const groupId = groupSelect.value;
+    Array.from(roleSelect.options).forEach(function(option) {
+      if (!option.value) return;
+      const matches = !groupId || option.dataset.roleGroup === groupId;
+      option.disabled = !matches;
+      option.hidden = !matches;
     });
-  });
+    if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
+  }
+
+  function initUpdateTools(scope) {
+    const panel = scope.querySelector('[data-update-status]');
+    if (!panel) return;
+    const updateForm = scope.querySelector('[data-update-form]');
+    const updateCheckForm = scope.querySelector('[data-update-check-form]');
+    const updateDownloadRow = scope.querySelector('[data-update-download-row]');
+    const updateDownloadLink = scope.querySelector('[data-update-download]');
+    const updateReleaseLink = scope.querySelector('[data-update-release]');
+    function renderUpdateStatus(status) {
+      if (!panel.isConnected || !status) return;
+      const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
+      const message = panel.querySelector('[data-update-message]');
+      const percentLabel = panel.querySelector('[data-update-percent]');
+      const progress = panel.querySelector('[data-update-progress]');
+      const phase = panel.querySelector('[data-update-phase]');
+      const log = panel.querySelector('[data-update-log]');
+      if (message) message.textContent = status.message || '';
+      if (percentLabel) percentLabel.textContent = percent + '%';
+      if (progress) progress.style.setProperty('--progress-value', percent + '%');
+      if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
+      if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
+      if (updateDownloadRow && updateDownloadLink) {
+        const downloadUrl = status.downloadUrl || status.installerDownloadUrl || '';
+        updateDownloadRow.style.display = downloadUrl || status.releaseUrl ? 'flex' : 'none';
+        updateDownloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
+        if (downloadUrl) updateDownloadLink.href = downloadUrl;
+        if (status.installerAssetName) updateDownloadLink.textContent = 'Download ' + status.installerAssetName;
+      }
+      if (updateReleaseLink) {
+        updateReleaseLink.style.display = status.releaseUrl ? 'inline-flex' : 'none';
+        if (status.releaseUrl) updateReleaseLink.href = status.releaseUrl;
+      }
+      [updateForm, updateCheckForm].forEach(function(form) {
+        const button = form?.querySelector('button[type="submit"]');
+        if (button) button.disabled = Boolean(status.running);
+      });
+      const channelInput = updateForm?.querySelector('input[name="channel"]');
+      if (channelInput && status.channel) channelInput.value = status.channel;
+    }
+    function pollUpdateStatus() {
+      if (!panel.isConnected) return;
+      fetch('/system-update/status', { headers: { Accept: 'application/json' } })
+        .then(function(response) { return response.ok ? response.json() : null; })
+        .then(function(status) {
+          renderUpdateStatus(status);
+          if (status && status.running) setTimeout(pollUpdateStatus, 1400);
+        })
+        .catch(function() {});
+    }
+    if (updateForm && !updateForm.dataset.bound) {
+      updateForm.dataset.bound = '1';
+      updateForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const button = updateForm.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
+          .then(function(response) { return response.json(); })
+          .then(function(status) {
+            renderUpdateStatus(status);
+            if (status && (status.downloadUrl || status.installerDownloadUrl)) {
+              window.location.href = status.downloadUrl || status.installerDownloadUrl;
+            }
+            setTimeout(pollUpdateStatus, 800);
+          })
+          .catch(function() { if (button) button.disabled = false; });
+      });
+      pollUpdateStatus();
+    }
+    if (updateCheckForm && !updateCheckForm.dataset.bound) {
+      updateCheckForm.dataset.bound = '1';
+      updateCheckForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const button = updateCheckForm.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
+          .then(function(response) { return response.json(); })
+          .then(function(status) { renderUpdateStatus(status); })
+          .catch(function() {})
+          .finally(function() { if (button) button.disabled = false; });
+      });
+    }
+  }
+
+  function initDynamicContent(scope) {
+    scope = scope || document;
+    scope.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    scope.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
+      syncGridLettersToggle(toggle, false);
+    });
+    scope.querySelectorAll('form[action="/person-roles"]').forEach(syncRoleOptions);
+    initUpdateTools(scope);
+  }
+
+  initDynamicContent(document);
 })();
 </script>
 </body>
@@ -4391,22 +5042,25 @@ function schoolYearHead(title, description, selectedYear, action = '') {
   </header>`;
 }
 
+function uploadedAssetPath(relativePath) {
+  const normalized = String(relativePath || '').replace(/\\/g, '/');
+  if (!normalized.startsWith('uploads/')) return '';
+  const fileName = path.basename(normalized);
+  const dataPath = path.join(UPLOAD_DIR, fileName);
+  if (fs.existsSync(dataPath)) return dataPath;
+  const legacyPath = path.join(PUBLIC_DIR, normalized);
+  return fs.existsSync(legacyPath) ? legacyPath : '';
+}
+
 function logoAsset() {
-  const custom = getSetting('logo_path', '');
-  if (custom) {
-    const customPath = path.join(PUBLIC_DIR, custom);
-    if (fs.existsSync(customPath)) return customPath;
-  }
+  const customPath = uploadedAssetPath(getSetting('logo_path', ''));
+  if (customPath) return customPath;
   return fs.existsSync(DEFAULT_LOGO_FILE) ? DEFAULT_LOGO_FILE : LEGACY_LOGO_FILE;
 }
 
 function faviconAsset() {
-  const custom = getSetting('favicon_path', '');
-  if (custom) {
-    const customPath = path.join(PUBLIC_DIR, custom);
-    if (fs.existsSync(customPath)) return customPath;
-  }
-  return logoAsset();
+  const customPath = uploadedAssetPath(getSetting('favicon_path', ''));
+  return customPath || logoAsset();
 }
 
 function weeklyAverageChart(weekData) {
@@ -4666,7 +5320,7 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url, user) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'backups', 'updates'];
+  const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'network', 'backups', 'updates'];
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
@@ -4740,6 +5394,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
   const updateStatus = readUpdateStatus();
   const backups = listDatabaseBackups();
   const backupFreq = backupFrequency(getSetting('backup_frequency', 'manual'));
+  const networkInfo = networkStatus();
   const setupLinks = [
     ['families', 'Families', `${families.length} households`],
     ['districts', 'School Districts', `${districts.length} districts`],
@@ -4752,6 +5407,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
     ['letter-grades', 'Letter Grades', `${letterGroups.length} scales`],
     ['users', 'Users', `${users.length} sign-ins`],
     ['settings', 'System Settings', settings.schoolName],
+    ['network', 'Network Access', networkAccessLabel(networkInfo.desired.host)],
     ['backups', 'Backups', `${backupFrequencyLabel(backupFreq)}`],
     ['updates', 'System Updates', `v${APP_VERSION}`]
   ];
@@ -5280,6 +5936,43 @@ function setupPage(selectedYear, csrfToken, url, user) {
     </div>
   </section>`;
 
+  const networkAccessMode = networkInfo.desired.host === '0.0.0.0' ? 'lan' : 'local';
+  const networkDisabled = networkInfo.envManaged ? 'disabled' : '';
+  const networkModule = `<section class="family-detail">
+    <div class="family-detail-head">
+      <h2>Network Access</h2>
+      <span class="family-count">${esc(networkAccessLabel(networkInfo.active.host))}</span>
+    </div>
+    <div class="family-detail-body">
+      <div class="detail-grid">
+        <div class="detail-item"><span>Active Mode</span><strong>${esc(networkAccessLabel(networkInfo.active.host))}</strong></div>
+        <div class="detail-item"><span>Active Port</span><strong>${esc(networkInfo.active.port)}</strong></div>
+        <div class="detail-item"><span>Host Machine</span><strong>${esc(networkInfo.hostName)}</strong></div>
+        <div class="detail-item"><span>Data Directory</span><strong>${esc(DATA_DIR)}</strong></div>
+      </div>
+      ${networkInfo.restartRequired ? '<p class="notice danger">Network settings have changed. Restart Oakstead before other devices use the new address.</p>' : ''}
+      ${networkInfo.envManaged ? '<p class="notice danger">HOST or PORT is set by the runtime environment, so the form below is read-only until those environment variables are removed.</p>' : ''}
+      <form method="post" action="/network-settings" class="form-grid two">
+        ${csrfInput(csrfToken)}
+        <label>Access Mode<select name="accessMode" ${networkDisabled}>
+          <option value="local" ${selectedAttr(networkAccessMode, 'local')}>Local computer only</option>
+          <option value="lan" ${selectedAttr(networkAccessMode, 'lan')}>Local network devices</option>
+        </select></label>
+        <label>Port<input name="port" type="number" min="1" max="65535" value="${esc(networkInfo.desired.port)}" ${networkDisabled} /></label>
+        <button class="secondary-btn compact-action" type="submit" ${networkDisabled}>Save Network Settings</button>
+      </form>
+      <div class="subhead"><h3>Current URLs</h3></div>
+      <div class="backup-list">
+        ${networkInfo.urls.map((item) => `<div class="backup-row"><div><strong>${esc(item)}</strong><span>${networkInfo.active.host === '0.0.0.0' ? 'Open this from another device on the same network.' : 'Open this on the host computer.'}</span></div></div>`).join('')}
+      </div>
+      <div class="subhead"><h3>Detected LAN Addresses</h3></div>
+      <div class="backup-list">
+        ${networkInfo.addresses.length ? networkInfo.addresses.map((item) => `<div class="backup-row"><div><strong>${esc(item)}</strong><span>${networkInfo.active.host === '0.0.0.0' ? esc(`http://${item}:${networkInfo.active.port}`) : 'Enable LAN access to use this address.'}</span></div></div>`).join('') : '<div class="backup-row"><div><strong>No non-local IPv4 address detected</strong><span>Check the host machine network connection.</span></div></div>'}
+      </div>
+      <p class="notice">LAN access should stay on a trusted local network or VPN. Do not expose Oakstead directly to the public internet.</p>
+    </div>
+  </section>`;
+
   const updateLogText = (updateStatus.log || []).slice(-20).join('\n');
   const latestBackup = backups[0] || null;
   const backupsModule = `<section class="family-detail">
@@ -5331,6 +6024,8 @@ function setupPage(selectedYear, csrfToken, url, user) {
       <div class="detail-grid">
         <div class="detail-item"><span>Installed Version</span><strong>v${esc(APP_VERSION)}</strong></div>
         <div class="detail-item"><span>Latest Checked</span><strong>${updateStatus.latestVersion ? `v${esc(updateStatus.latestVersion)}` : 'Not checked yet'}</strong></div>
+        <div class="detail-item"><span>Update Mode</span><strong>${UPDATE_MODE === 'installer' ? 'Windows installer' : 'Git checkout'}</strong></div>
+        <div class="detail-item"><span>Release Source</span><strong>${UPDATE_MODE === 'installer' ? esc(RELEASE_REPO) : 'Configured Git remote'}</strong></div>
       </div>
       <div class="update-actions">
       <form method="post" action="/system-update/check" class="update-actions" data-update-check-form>
@@ -5344,8 +6039,12 @@ function setupPage(selectedYear, csrfToken, url, user) {
       <form method="post" action="/system-update" class="update-actions" data-update-form>
         ${csrfInput(csrfToken)}
         <input type="hidden" name="channel" value="${esc(updateStatus.channel)}" />
-        <button class="page-action compact-action" type="submit" ${updateStatus.running ? 'disabled' : ''}>Download and Install</button>
+        <button class="page-action compact-action" type="submit" ${updateStatus.running ? 'disabled' : ''}>${UPDATE_MODE === 'installer' ? 'Download Installer' : 'Download and Install'}</button>
       </form>
+      </div>
+      <div class="inline-actions" data-update-download-row style="${updateStatus.installerDownloadUrl || updateStatus.releaseUrl ? '' : 'display:none'}">
+        <a class="page-action compact-action" data-update-download href="${esc(updateStatus.installerDownloadUrl || '#')}" style="${updateStatus.installerDownloadUrl ? '' : 'display:none'}">${updateStatus.installerAssetName ? `Download ${esc(updateStatus.installerAssetName)}` : 'Download Windows Installer'}</a>
+        <a class="secondary-btn compact-action" data-update-release href="${esc(updateStatus.releaseUrl || '#')}" style="${updateStatus.releaseUrl ? '' : 'display:none'}">Open Release Page</a>
       </div>
       <div class="update-status" data-update-status>
         <div class="update-status-head">
@@ -5356,7 +6055,9 @@ function setupPage(selectedYear, csrfToken, url, user) {
         <p class="notice" data-update-phase>${esc(updateStatus.phase)}${updateStatus.targetVersion ? ` / target v${esc(updateStatus.targetVersion)}` : ''}</p>
         <pre class="update-log" data-update-log>${esc(updateLogText || 'No update activity yet.')}</pre>
       </div>
-      <p class="notice">Updates are fetched from the configured GitHub remote. Oakstead creates a database backup before updating, installs npm dependencies, validates the server, and restarts after success.</p>
+      <p class="notice">${UPDATE_MODE === 'installer'
+        ? 'Packaged Windows updates are installed by downloading the GitHub release installer, running it on the host computer, and letting it replace app files while preserving the data directory.'
+        : 'Updates are fetched from the configured GitHub remote. Oakstead creates a database backup before updating, installs npm dependencies, validates the server, and restarts after success.'}</p>
     </div>
   </section>`;
 
@@ -5372,6 +6073,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
     'letter-grades': letterGradesModule,
     users: usersModule,
     settings: settingsModule,
+    network: networkModule,
     backups: backupsModule,
     updates: updatesModule
   };
@@ -5967,10 +6669,19 @@ function reportPath(key, yearId, extra = '') {
 function reportsNav(activeReport, yearId) {
   return `<section class="report-nav-grid">
     ${reportDefinitions().map((report) => `<a class="report-tile ${activeReport === report.key ? 'active' : ''}" href="${reportPath(report.key, yearId)}">
-      <strong>${esc(report.title)}</strong>
-      <span>${esc(report.description)}</span>
+      <span class="report-tile-icon">${REPORT_ICONS[report.key] || REPORT_ICONS['grade-graph']}</span>
+      <span class="report-tile-copy">
+        <strong>${esc(report.title)}</strong>
+        <span>${esc(report.description)}</span>
+      </span>
     </a>`).join('')}
   </section>`;
+}
+
+function reportMeterStyle(index, ratio) {
+  const width = Math.max(0, Math.min(100, Math.round((Number(ratio) || 0) * 100)));
+  const color = REPORT_METER_COLORS[index % REPORT_METER_COLORS.length];
+  return `--bar-value:${width}%;--bar-color:${color};`;
 }
 
 function firstNameOnly(value) {
@@ -6080,9 +6791,9 @@ function reportOverview(yearId, selectedYear, user) {
       <section class="chart-panel">
         <div class="chart-head"><h2>Students by Grade</h2><span>${kpis.students} enrolled</span></div>
         <div class="bar-list">
-          ${sortedGrades.map((grade) => {
+          ${sortedGrades.map((grade, index) => {
             const count = gradesByName.get(grade) || 0;
-            return `<div class="bar-row"><b>Grade ${esc(grade)}</b><div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((count / largestGrade) * 100)}%"></div></div><span>${count}</span></div>`;
+            return `<div class="bar-row" style="${reportMeterStyle(index, count / largestGrade)}"><b>Grade ${esc(grade)}</b><div class="bar-track"><div class="bar-fill"></div></div><span>${count}</span></div>`;
           }).join('') || emptyState('No enrolled students for this school year.')}
         </div>
       </section>
@@ -6092,7 +6803,7 @@ function reportOverview(yearId, selectedYear, user) {
           ${Array.from({ length: 12 }, (_, index) => {
             const month = index + 1;
             const count = birthdayByMonth.get(month) || 0;
-            return `<div class="distribution-row"><b>${monthName(month).slice(0, 3)}</b><div class="bar-track"><div class="bar-fill" style="--bar-value:${Math.round((count / largestMonth) * 100)}%"></div></div><span>${count}</span></div>`;
+            return `<div class="distribution-row" style="${reportMeterStyle(index + 2, count / largestMonth)}"><b>${monthName(month).slice(0, 3)}</b><div class="bar-track"><div class="bar-fill"></div></div><span>${count}</span></div>`;
           }).join('')}
         </div>
       </section>
@@ -6239,7 +6950,7 @@ function birthdaysReport(yearId, selectedYear, user) {
 }
 
 function graphColor(index) {
-  return ['#2563eb', '#0f766e', '#b54708', '#be185d', '#6d28d9', '#4d7c0f', '#0369a1', '#b42318'][index % 8];
+  return REPORT_METER_COLORS[index % REPORT_METER_COLORS.length];
 }
 
 function gradeGraphSvg(series, periods) {
@@ -6273,8 +6984,8 @@ function gradeGraphSvg(series, periods) {
 }
 
 function miniSubjectChartSvg(item, periods) {
-  const W = 420, H = 190;
-  const padL = 36, padR = 14, padT = 12, padB = 38;
+  const W = 420, H = 150;
+  const padL = 36, padR = 14, padT = 10, padB = 30;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const minY = 60;
@@ -6293,8 +7004,8 @@ function miniSubjectChartSvg(item, periods) {
     const y = toY(value);
     return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="#d7d7d7" stroke-width="1" /><text x="${padL - 7}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#555" font-size="9">${value}</text>`;
   }).join('');
-  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 18}" text-anchor="middle" fill="#555" font-size="9">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
-  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="#555" font-size="8">${Math.round(value)}%</text>`).join('');
+  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 17}" text-anchor="middle" fill="#555" font-size="9">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
+  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 5}" text-anchor="middle" fill="#555" font-size="8">${Math.round(value)}%</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">
     ${guides}
     <line x1="${padL}" y1="${(padT + chartH).toFixed(1)}" x2="${W - padR}" y2="${(padT + chartH).toFixed(1)}" stroke="#aeb7c4" stroke-width="1" />
@@ -6344,7 +7055,7 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
     })
   }));
   const studentOptions = students.map((student) => `<option value="${student.id}" ${asInt(student.id) === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('');
-  return `<div class="workspace">
+  return `<div class="workspace grade-graph-report">
     <section class="panel">
       <form method="get" action="/reports" class="filters">
         <input type="hidden" name="yearId" value="${yearId}" />
@@ -6362,7 +7073,7 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
       <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
         ${series.map((item) => {
           const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
-          return `<section class="mini-subject-chart">
+          return `<section class="mini-subject-chart" style="--subject-color:${item.color}">
             <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
             ${miniSubjectChartSvg(item, graphPeriods)}
           </section>`;
@@ -6398,7 +7109,7 @@ function studentGradeGraphPanel(student, yearId, selectedYear) {
     <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
       ${series.map((item) => {
         const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
-        return `<section class="mini-subject-chart">
+        return `<section class="mini-subject-chart" style="--subject-color:${item.color}">
           <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
           ${miniSubjectChartSvg(item, graphPeriods)}
         </section>`;
@@ -6513,6 +7224,20 @@ function periodAbsenceTotal(rows, period) {
 function formatAbsence(value) {
   const number = Number(value) || 0;
   return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, '');
+}
+
+function formatAbsenceKind(kind) {
+  return cleanText(kind, 20).toLowerCase() === 'tardy' ? 'Tardy' : 'Absence';
+}
+
+function absenceKindClass(kind) {
+  return formatAbsenceKind(kind).toLowerCase();
+}
+
+function formatAbsenceAmount(row) {
+  const amount = Number(row.amount) || 0;
+  const unit = row.unit === 'hours' ? 'hour' : 'day';
+  return `${formatAbsence(amount)} ${unit}${amount === 1 ? '' : 's'}`;
 }
 
 function reportCardBooksSvg() {
@@ -6767,17 +7492,49 @@ function absencesPage(url, selectedYear, csrfToken, user) {
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
       ${accessClause}
     ORDER BY sy.grade_level, st.last_name, st.first_name;`);
+  students.sort((a, b) => gradeRank(a.grade_level) - gradeRank(b.grade_level)
+    || String(a.last_name).localeCompare(String(b.last_name))
+    || String(a.first_name).localeCompare(String(b.first_name)));
+  const grades = sortGrades(students.map((student) => student.grade_level));
+  let selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  if (selectedGrade && !grades.includes(selectedGrade)) selectedGrade = '';
+  let selectedStudentId = asInt(url.searchParams.get('studentId'));
+  let selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || null;
+  if (selectedStudentId && (!selectedStudent || (selectedGrade && selectedStudent.grade_level !== selectedGrade))) {
+    selectedStudentId = 0;
+    selectedStudent = null;
+  }
+  const filteredStudentOptions = selectedGrade ? students.filter((student) => student.grade_level === selectedGrade) : students;
+  const gradeClause = selectedGrade ? `AND sy.grade_level=${sqlValue(selectedGrade)}` : '';
+  const studentClause = selectedStudentId ? `AND st.id=${selectedStudentId}` : '';
   const absences = querySql(`SELECT a.*, st.first_name, st.last_name, sy.grade_level
     FROM os_absences a
     JOIN os_students st ON st.id = a.student_id
-    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id
+    JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id AND sy.status='enrolled'
     WHERE a.school_year_id=${yearId}
       ${accessClause}
+      ${gradeClause}
+      ${studentClause}
     ORDER BY a.absence_date DESC, st.last_name, st.first_name
     LIMIT 80;`);
+  const filterParams = new URLSearchParams();
+  filterParams.set('yearId', String(yearId));
+  if (selectedGrade) filterParams.set('grade', selectedGrade);
+  if (selectedStudentId) filterParams.set('studentId', String(selectedStudentId));
+  const filterQuery = filterParams.toString();
+  const listPath = `/absences${filterQuery ? `?${filterQuery}` : ''}`;
+  const addPath = `/absences?action=add${filterQuery ? `&${filterQuery}` : ''}`;
   const studentOptions = students.map((student) => `<option value="${student.id}">${esc(student.last_name)}, ${esc(student.first_name)} - Grade ${esc(student.grade_level)}</option>`).join('');
+  const filterStudentOptions = filteredStudentOptions.map((student) => `<option value="${student.id}" ${asInt(student.id) === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)} - Grade ${esc(student.grade_level)}</option>`).join('');
+  const filters = `<form method="get" action="/absences" class="absence-header-filters">
+    <input type="hidden" name="yearId" value="${yearId}" />
+    <span class="absence-filter-label">Filter</span>
+    <select name="grade" data-auto-submit aria-label="Filter by grade">${gradeOptionsFromRows(grades, selectedGrade)}</select>
+    <select name="studentId" data-auto-submit aria-label="Filter by student"><option value="">All students</option>${filterStudentOptions}</select>
+    ${selectedGrade || selectedStudentId ? `<a class="secondary-btn compact-action absence-clear-filter" href="/absences?yearId=${yearId}">Clear</a>` : ''}
+  </form>`;
   const addForm = `<section class="family-detail">
-    <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="/absences">Cancel</a></div>
+    <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="${listPath}">Cancel</a></div>
     <div class="family-detail-body">
       <form method="post" action="/absences" class="form-grid absence-form">
         ${csrfInput(csrfToken)}
@@ -6805,14 +7562,25 @@ function absencesPage(url, selectedYear, csrfToken, user) {
     </div>
   </section>`;
   const list = `<section class="family-detail">
-    <div class="family-detail-head">
+    <div class="family-detail-head absence-list-head">
       <h2>Absences</h2>
-      <div class="module-actions"><span class="family-count">${absences.length}</span><a class="page-action compact-action" href="/absences?action=add">Add</a></div>
+      <div class="absence-list-actions">
+        ${filters}
+        <span class="family-count">${absences.length}</span>
+        <a class="page-action compact-action" href="${addPath}">Add</a>
+      </div>
     </div>
     <div class="family-detail-body">
-      <div class="table-wrap compact-table"><table>
-        <tr><th>Date</th><th>Student</th><th>Type</th><th>Amount</th><th>Notes</th></tr>
-        ${absences.map((row) => `<tr><td>${esc(row.absence_date)}</td><td>${esc(row.last_name)}, ${esc(row.first_name)}<br><small>Grade ${esc(row.grade_level || '')}</small></td><td>${esc(row.kind)}</td><td>${formatAbsence(row.amount)} ${esc(row.unit)}</td><td>${esc(row.notes || '') || '&mdash;'}</td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No absences recorded for this school year.')}</td></tr>`}
+      <div class="table-wrap compact-table"><table class="absence-table">
+        <tr><th>Date</th><th>Student</th><th>Grade</th><th>Type</th><th>Amount</th><th>Notes</th></tr>
+        ${absences.map((row) => `<tr>
+          <td class="absence-date-cell">${esc(row.absence_date)}</td>
+          <td class="absence-student-cell">${esc(row.last_name)}, ${esc(row.first_name)}</td>
+          <td class="absence-grade-cell">Grade ${esc(row.grade_level || '')}</td>
+          <td class="absence-kind-cell"><span class="absence-kind ${absenceKindClass(row.kind)}">${esc(formatAbsenceKind(row.kind))}</span></td>
+          <td class="absence-amount-cell">${esc(formatAbsenceAmount(row))}</td>
+          <td>${esc(row.notes || '') || '&mdash;'}</td>
+        </tr>`).join('') || `<tr><td colspan="6">${emptyState('No absences recorded for this school year.')}</td></tr>`}
       </table></div>
     </div>
   </section>`;
@@ -6906,7 +7674,7 @@ function roleAssignmentForm({ csrfToken, redirectTo, personType, personId, roleG
   </form>`;
 }
 
-function handlePost(req, res, p, body, user, headers) {
+async function handlePost(req, res, p, body, user, headers) {
   if (p === '/login') {
     if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
     const username = cleanText(body.username, 80).toLowerCase();
@@ -7296,6 +8064,17 @@ function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=settings', headers);
   }
 
+  if (p === '/network-settings') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    if (process.env.HOST || process.env.PORT) return sendText(res, 400, 'Network settings are managed by HOST or PORT environment variables.');
+    const bindHost = body.accessMode === 'lan' ? '0.0.0.0' : '127.0.0.1';
+    const port = parsePort(body.port, DEFAULT_PORT);
+    setSetting('network_bind_host', bindHost);
+    setSetting('network_port', String(port));
+    setSetting('network_restart_required_at', new Date().toISOString());
+    return redirect(res, '/setup?section=network', headers);
+  }
+
   if (p === '/backup-settings') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     setSetting('backup_frequency', backupFrequency(body.frequency));
@@ -7331,7 +8110,7 @@ function handlePost(req, res, p, body, user, headers) {
   if (p === '/system-update/check') {
     if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
     try {
-      return sendJson(res, 200, checkLatestRelease(cleanText(body.channel, 20)), headers);
+      return sendJson(res, 200, await checkLatestRelease(cleanText(body.channel, 20)), headers);
     } catch (error) {
       const status = writeUpdateStatus({ running: false, phase: 'check failed', percent: 0, message: error.message || 'Update check failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
       return sendJson(res, 500, status, headers);
@@ -7340,8 +8119,13 @@ function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/system-update') {
     if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
-    const status = startSystemUpdate(cleanText(body.channel, 20));
-    return sendJson(res, 202, status, headers);
+    try {
+      const status = await startSystemUpdate(cleanText(body.channel, 20));
+      return sendJson(res, 202, status, headers);
+    } catch (error) {
+      const status = writeUpdateStatus({ running: false, phase: 'update failed', percent: 100, message: error.message || 'Update failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
+      return sendJson(res, 500, status, headers);
+    }
   }
 
   if (p === '/gradebook') {
@@ -7534,11 +8318,24 @@ function handlePost(req, res, p, body, user, headers) {
 }
 
 if (process.argv[2] === '--run-system-update') {
+  ensureRuntimeDirs();
+  if (UPDATE_MODE === 'installer') {
+    writeUpdateStatus({
+      running: false,
+      phase: 'unsupported',
+      percent: 100,
+      message: 'Packaged installs use installer downloads instead of Git updates.',
+      log: [updateLog('Git update worker was skipped in installer mode')]
+    });
+    return;
+  }
   runSystemUpdateWorker(process.argv[3] === 'prerelease' ? 'prerelease' : 'stable');
   return;
 }
 
+ensureRuntimeDirs();
 ensureDb();
+ACTIVE_NETWORK = desiredNetworkConfig();
 if (DEMO_MODE) {
   refreshDemoData('startup');
   setInterval(() => refreshDemoData('scheduled'), DEMO_REFRESH_HOURS * 60 * 60 * 1000).unref();
@@ -7578,7 +8375,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST') {
       const body = await parseBody(req);
-      return handlePost(req, res, p, body, user, headers);
+      return await handlePost(req, res, p, body, user, headers);
     }
 
     if (req.method !== 'GET') return sendText(res, 405, 'Method Not Allowed');
@@ -7666,6 +8463,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Oakstead running on http://localhost:${PORT}`);
+server.listen(ACTIVE_NETWORK.port, ACTIVE_NETWORK.host, () => {
+  const primaryUrl = ACTIVE_NETWORK.host === '0.0.0.0'
+    ? `http://127.0.0.1:${ACTIVE_NETWORK.port}`
+    : `http://${ACTIVE_NETWORK.host}:${ACTIVE_NETWORK.port}`;
+  console.log(`Oakstead running on ${primaryUrl}`);
+  if (ACTIVE_NETWORK.host === '0.0.0.0') {
+    const lanUrls = networkUrls(ACTIVE_NETWORK).join(', ');
+    if (lanUrls) console.log(`LAN access: ${lanUrls}`);
+  }
 });
