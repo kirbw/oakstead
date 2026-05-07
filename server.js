@@ -75,6 +75,8 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 5;
 const DEMO_MODE = /^(1|true|yes|on)$/i.test(String(process.env.DEMO_MODE || ''));
 const DEMO_REFRESH_HOURS = Math.max(1, Math.min(24, Number(process.env.DEMO_REFRESH_HOURS) || 2));
+const DEMO_HIDDEN_SETUP_SECTIONS = new Set(['network', 'backups', 'updates']);
+const DEMO_HIDDEN_POST_PATHS = new Set(['/network-settings', '/backup-settings', '/backup/create', '/backup/restore', '/system-update/check', '/system-update']);
 let ACTIVE_NETWORK = {
   host: DEFAULT_HOST,
   port: DEFAULT_PORT,
@@ -5395,7 +5397,8 @@ function selectedAttr(value, selected) {
 
 function setupPage(selectedYear, csrfToken, url, user) {
   const yearId = asInt(selectedYear.id);
-  const validSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'network', 'backups', 'updates'];
+  const allSections = ['families', 'districts', 'congregations', 'teachers', 'classrooms', 'subjects', 'years', 'weights', 'letter-grades', 'users', 'settings', 'network', 'backups', 'updates'];
+  const validSections = DEMO_MODE ? allSections.filter((item) => !DEMO_HIDDEN_SETUP_SECTIONS.has(item)) : allSections;
   const section = validSections.includes(url.searchParams.get('section')) ? url.searchParams.get('section') : 'families';
   const action = cleanText(url.searchParams.get('action'), 40);
   const settings = appSettings();
@@ -5482,9 +5485,11 @@ function setupPage(selectedYear, csrfToken, url, user) {
     ['letter-grades', 'Letter Grades', `${letterGroups.length} scales`],
     ['users', 'Users', `${users.length} sign-ins`],
     ['settings', 'System Settings', settings.schoolName],
-    ['network', 'Network Access', networkAccessLabel(networkInfo.desired.host)],
-    ['backups', 'Backups', `${backupFrequencyLabel(backupFreq)}`],
-    ['updates', 'System Updates', `v${APP_VERSION}`]
+    ...(!DEMO_MODE ? [
+      ['network', 'Network Access', networkAccessLabel(networkInfo.desired.host)],
+      ['backups', 'Backups', `${backupFrequencyLabel(backupFreq)}`],
+      ['updates', 'System Updates', `v${APP_VERSION}`]
+    ] : [])
   ];
   const setupNav = `<aside class="setup-nav" aria-label="School setup modules">
     <div class="setup-nav-head"><h2>Setup</h2></div>
@@ -6148,9 +6153,11 @@ function setupPage(selectedYear, csrfToken, url, user) {
     'letter-grades': letterGradesModule,
     users: usersModule,
     settings: settingsModule,
-    network: networkModule,
-    backups: backupsModule,
-    updates: updatesModule
+    ...(!DEMO_MODE ? {
+      network: networkModule,
+      backups: backupsModule,
+      updates: updatesModule
+    } : {})
   };
 
   return `<div class="workspace">
@@ -7768,6 +7775,13 @@ async function handlePost(req, res, p, body, user, headers) {
   }
 
   if (!user) return redirect(res, '/login', headers);
+
+  if (DEMO_MODE && DEMO_HIDDEN_POST_PATHS.has(p)) {
+    return p.startsWith('/system-update')
+      ? sendJson(res, 404, { error: 'Not Found' }, headers)
+      : sendText(res, 404, 'Not Found');
+  }
+
   if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
 
   if (p === '/logout') {
@@ -8472,6 +8486,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (!user) return redirect(res, '/login', headers);
+
+    if (DEMO_MODE && p === '/backup/download') return sendText(res, 404, 'Not Found');
+    if (DEMO_MODE && p === '/system-update/status') return sendJson(res, 404, { error: 'Not Found' }, headers);
 
     if (p === '/backup/download') {
       if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
