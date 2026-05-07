@@ -3,7 +3,7 @@
 
 #define AppName "Oakstead"
 #ifndef AppVersion
-#define AppVersion "0.0.6"
+#define AppVersion "0.0.7"
 #endif
 
 [Setup]

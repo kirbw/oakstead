@@ -1,5 +1,15 @@
 # Release Notes
 
+## 0.0.7
+
+- Improved the Reports dashboard with clearer visual summaries, more readable chart styling, and report-specific icons.
+- Cleaned up printable reports by removing the demo-mode banner from print output.
+- Fixed grade graph report pagination so the report content starts correctly and avoids extra blank pages.
+- Refined grade graph print charts with a more compact layout that fits the grade report more reliably.
+- Improved the Absences page with compact grade and student filters in the list header, a dedicated Grade column, formatted absence/tardy labels, and cleaner amount display.
+- Enforced teacher-scoped absence visibility so teachers only see students in the grades and classrooms they are responsible for.
+- Added smoother app-shell navigation for internal pages and GET filters so the header, logo, and sidebar stay in place while main content updates.
+
 ## 0.0.6
 
 - Added cross-platform runtime configuration for data directories, SQLite executable paths, bind hosts, ports, and update modes.

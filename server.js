@@ -2032,6 +2032,13 @@ button, select, input { min-height: 42px; }
 .theme-icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .main {
   padding: 1rem .85rem 3.5rem;
+  transition: opacity .14s ease;
+}
+.main.app-loading {
+  opacity: .48;
+}
+@media (prefers-reduced-motion: reduce) {
+  .main { transition: none; }
 }
 .app-footer {
   grid-column: 1 / -1;
@@ -2183,6 +2190,92 @@ button, select, input { min-height: 42px; }
 }
 .absence-notes-field textarea {
   min-height: 76px;
+}
+.absence-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+.absence-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.absence-header-filters {
+  display: flex;
+  align-items: center;
+  gap: .38rem;
+  flex-wrap: wrap;
+}
+.absence-filter-label {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 850;
+}
+.absence-header-filters select {
+  width: auto;
+  min-width: 112px;
+  max-width: min(220px, 58vw);
+  min-height: 34px;
+  padding: .34rem 1.8rem .34rem .55rem;
+  border-color: var(--line);
+  background-color: var(--paper-strong);
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 760;
+}
+.absence-header-filters select[name="studentId"] {
+  min-width: 180px;
+}
+.absence-clear-filter {
+  min-height: 34px;
+  padding: .34rem .55rem;
+}
+.absence-table th,
+.absence-table td {
+  vertical-align: middle;
+}
+.absence-date-cell,
+.absence-grade-cell,
+.absence-kind-cell,
+.absence-amount-cell {
+  white-space: nowrap;
+}
+.absence-student-cell {
+  font-weight: 750;
+}
+.absence-grade-cell {
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 820;
+}
+.absence-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  min-width: 70px;
+  padding: .16rem .52rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-strong);
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 850;
+}
+.absence-kind.absence {
+  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
+  background: color-mix(in srgb, var(--red) 8%, var(--paper));
+  color: var(--red);
+}
+.absence-kind.tardy {
+  border-color: color-mix(in srgb, var(--gold) 42%, var(--line));
+  background: color-mix(in srgb, var(--gold) 10%, var(--paper));
+  color: var(--gold);
 }
 .family-form-section {
   grid-column: 1 / -1;
@@ -4164,8 +4257,11 @@ tr:last-child td { border-bottom: 0; }
   .demo-banner, .topbar, .mobile-nav-strip, .sidebar, .app-footer, .filters, .inline-actions, .quick-scores, .report-card-actions, .panel, .page-head, .report-nav-grid { display: none !important; }
   .app { display: block; width: 100%; }
   .main { padding: 0; }
-  .workspace { gap: .22in; }
-  .grade-graph-report { gap: .12in; }
+  .workspace,
+  .grade-graph-report,
+  .grade-graph {
+    display: block;
+  }
   .print-report-head {
     display: block;
     margin: 0 0 .22in;
@@ -4190,11 +4286,17 @@ tr:last-child td { border-bottom: 0; }
     background: transparent;
   }
   .grade-graph.chart-panel {
+    margin: 0;
+    padding: 0;
     break-inside: auto;
+    break-before: avoid;
+    page-break-before: avoid;
     page-break-inside: auto;
   }
   .grade-graph-report .print-report-head {
-    margin-bottom: .1in;
+    margin-bottom: .08in;
+    break-after: avoid;
+    page-break-after: avoid;
   }
   .ledger-head, .chart-head { display: none; }
   th, td {
@@ -4298,7 +4400,8 @@ tr:last-child td { border-bottom: 0; }
   .grade-graph-print-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .12in .28in;
+    gap: .06in .24in;
+    margin: 0;
     break-before: avoid;
     page-break-before: avoid;
   }
@@ -4307,12 +4410,17 @@ tr:last-child td { border-bottom: 0; }
   }
   .mini-subject-chart {
     break-inside: avoid;
+    page-break-inside: avoid;
     padding: 0;
     border: 0;
     background: transparent;
   }
-  .mini-subject-chart h3 { font-size: 10pt; }
-  .mini-subject-chart span { color: #333; font-size: 8.2pt; }
+  .mini-subject-chart header {
+    gap: .08in;
+    padding-bottom: .01in;
+  }
+  .mini-subject-chart h3 { font-size: 9.3pt; }
+  .mini-subject-chart span { color: #333; font-size: 7.6pt; }
   .mini-subject-chart svg text { font-family: Arial, sans-serif; }
   body.report-card-printing { page: report-card-page; width: 11in; }
   body.report-card-printing .workspace > :not(.report-card-document) { display: none !important; }
@@ -4379,7 +4487,7 @@ tr:last-child td { border-bottom: 0; }
       </button>
     </div>
   </nav>` : ''}
-  <main class="main">${content}</main>
+  <main class="main" data-app-main>${content}</main>
   <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><strong>Oakstead</strong> v${esc(APP_VERSION)}</span></footer>
 </div>
 <script>
@@ -4400,7 +4508,113 @@ function generateReportCardPdf(btn) {
 (function(){
   const root = document.documentElement;
   const saved = localStorage.getItem('oakstead-theme');
+  const gridTimers = new WeakMap();
+  let activeScoreInput = null;
+  let navAbort = null;
   if (saved === 'dark') root.setAttribute('data-theme', 'dark');
+
+  function mainEl() {
+    return document.querySelector('[data-app-main]') || document.querySelector('.main');
+  }
+
+  function setMobileNav(open) {
+    const navToggle = document.getElementById('navToggle');
+    document.body.classList.toggle('nav-open', open);
+    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  function canUseAppNav(url) {
+    return url.origin === window.location.origin
+      && !url.pathname.startsWith('/assets/')
+      && url.pathname !== '/backup/download'
+      && url.pathname !== '/system-update/status';
+  }
+
+  function isSamePageHash(url) {
+    return url.hash && url.pathname === window.location.pathname && url.search === window.location.search;
+  }
+
+  function updateShellFrom(doc) {
+    const currentNav = document.querySelector('.nav-links');
+    const nextNav = doc.querySelector('.nav-links');
+    if (currentNav && nextNav) currentNav.innerHTML = nextNav.innerHTML;
+    const currentMobileLabel = document.querySelector('#navToggle .nav-toggle-main span');
+    const nextMobileLabel = doc.querySelector('#navToggle .nav-toggle-main span');
+    if (currentMobileLabel && nextMobileLabel) currentMobileLabel.textContent = nextMobileLabel.textContent;
+  }
+
+  function navigateApp(to, options) {
+    options = options || {};
+    const nextUrl = new URL(to, window.location.href);
+    if (!canUseAppNav(nextUrl)) {
+      window.location.href = nextUrl.toString();
+      return Promise.resolve(false);
+    }
+    const currentMain = mainEl();
+    if (!currentMain) {
+      window.location.href = nextUrl.toString();
+      return Promise.resolve(false);
+    }
+    if (navAbort) navAbort.abort();
+    navAbort = new AbortController();
+    currentMain.classList.add('app-loading');
+    return fetch(nextUrl.toString(), {
+      signal: navAbort.signal,
+      headers: { Accept: 'text/html', 'X-Requested-With': 'Oakstead-App-Shell' }
+    }).then(function(response) {
+      if (!response.ok) throw new Error('Navigation failed');
+      return response.text().then(function(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const nextMain = doc.querySelector('[data-app-main]') || doc.querySelector('.main');
+        if (!nextMain) {
+          window.location.href = response.url || nextUrl.toString();
+          return false;
+        }
+        document.title = doc.title || document.title;
+        updateShellFrom(doc);
+        const liveMain = mainEl();
+        liveMain.replaceWith(document.importNode(nextMain, true));
+        if (options.push !== false) history.pushState({ oaksteadApp: true }, '', nextUrl.toString());
+        if (options.scroll !== false) window.scrollTo(0, 0);
+        setMobileNav(false);
+        initDynamicContent(mainEl());
+        return true;
+      });
+    }).catch(function(error) {
+      if (error.name === 'AbortError') return false;
+      window.location.href = nextUrl.toString();
+      return false;
+    }).finally(function() {
+      const liveMain = mainEl();
+      if (liveMain) liveMain.classList.remove('app-loading');
+    });
+  }
+
+  function formToUrl(form) {
+    const url = new URL(form.getAttribute('action') || window.location.href, window.location.href);
+    url.search = '';
+    new FormData(form).forEach(function(value, key) {
+      if (key) url.searchParams.append(key, value);
+    });
+    return url;
+  }
+
+  function submitFormSmoothly(form, options) {
+    if (!form) return;
+    const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) {
+      form.submit();
+      return;
+    }
+    navigateApp(formToUrl(form), options);
+  }
+
+  function goToUrl(url, options) {
+    const nextUrl = new URL(url, window.location.href);
+    if (canUseAppNav(nextUrl)) navigateApp(nextUrl, options);
+    else window.location.href = nextUrl.toString();
+  }
+
   const themeToggle = document.getElementById('themeToggle');
   if (themeToggle) {
     themeToggle.addEventListener('click', function(){
@@ -4409,12 +4623,9 @@ function generateReportCardPdf(btn) {
       localStorage.setItem('oakstead-theme', next);
     });
   }
+
   const navToggle = document.getElementById('navToggle');
   const primaryNav = document.getElementById('primaryNav');
-  function setMobileNav(open) {
-    document.body.classList.toggle('nav-open', open);
-    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  }
   if (navToggle && primaryNav) {
     navToggle.addEventListener('click', function(event) {
       event.stopPropagation();
@@ -4432,128 +4643,155 @@ function generateReportCardPdf(btn) {
       if (event.key === 'Escape') setMobileNav(false);
     });
   }
+
   document.querySelectorAll('.year-form select').forEach(function(select) {
     select.addEventListener('change', function() {
       select.form.submit();
     });
   });
-  document.querySelectorAll('[data-auto-submit]').forEach(function(control) {
-    control.addEventListener('change', function() {
-      control.form.submit();
-    });
-  });
-  const updateStatusPanel = document.querySelector('[data-update-status]');
-  const updateForm = document.querySelector('[data-update-form]');
-  const updateCheckForm = document.querySelector('[data-update-check-form]');
-  const updateDownloadRow = document.querySelector('[data-update-download-row]');
-  const updateDownloadLink = document.querySelector('[data-update-download]');
-  const updateReleaseLink = document.querySelector('[data-update-release]');
-  function renderUpdateStatus(status) {
-    if (!updateStatusPanel || !status) return;
-    const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
-    const message = updateStatusPanel.querySelector('[data-update-message]');
-    const percentLabel = updateStatusPanel.querySelector('[data-update-percent]');
-    const progress = updateStatusPanel.querySelector('[data-update-progress]');
-    const phase = updateStatusPanel.querySelector('[data-update-phase]');
-    const log = updateStatusPanel.querySelector('[data-update-log]');
-    if (message) message.textContent = status.message || '';
-    if (percentLabel) percentLabel.textContent = percent + '%';
-    if (progress) progress.style.setProperty('--progress-value', percent + '%');
-    if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
-    if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
-    if (updateDownloadRow && updateDownloadLink) {
-      const downloadUrl = status.downloadUrl || status.installerDownloadUrl || '';
-      updateDownloadRow.style.display = downloadUrl || status.releaseUrl ? 'flex' : 'none';
-      updateDownloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
-      if (downloadUrl) updateDownloadLink.href = downloadUrl;
-      if (status.installerAssetName) updateDownloadLink.textContent = 'Download ' + status.installerAssetName;
-    }
-    if (updateReleaseLink) {
-      updateReleaseLink.style.display = status.releaseUrl ? 'inline-flex' : 'none';
-      if (status.releaseUrl) updateReleaseLink.href = status.releaseUrl;
-    }
-    if (updateForm) {
-      const button = updateForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = Boolean(status.running);
-      const channelInput = updateForm.querySelector('input[name="channel"]');
-      if (channelInput && status.channel) channelInput.value = status.channel;
-    }
-    if (updateCheckForm) {
-      const button = updateCheckForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = Boolean(status.running);
-    }
-  }
-  function pollUpdateStatus() {
-    if (!updateStatusPanel) return;
-    fetch('/system-update/status', { headers: { Accept: 'application/json' } })
-      .then(function(response) { return response.ok ? response.json() : null; })
-      .then(function(status) {
-        renderUpdateStatus(status);
-        if (status && status.running) setTimeout(pollUpdateStatus, 1400);
-      })
-      .catch(function() {});
-  }
-  if (updateForm) {
-    updateForm.addEventListener('submit', function(event) {
-      event.preventDefault();
-      const button = updateForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = true;
-      fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
-        .then(function(response) { return response.json(); })
-        .then(function(status) {
-          renderUpdateStatus(status);
-          if (status && (status.downloadUrl || status.installerDownloadUrl)) {
-            window.location.href = status.downloadUrl || status.installerDownloadUrl;
-          }
-          setTimeout(pollUpdateStatus, 800);
-        })
-        .catch(function() { if (button) button.disabled = false; });
-    });
-    pollUpdateStatus();
-  }
-  if (updateCheckForm) {
-    updateCheckForm.addEventListener('submit', function(event) {
-      event.preventDefault();
-      const button = updateCheckForm.querySelector('button[type="submit"]');
-      if (button) button.disabled = true;
-      fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
-        .then(function(response) { return response.json(); })
-        .then(function(status) { renderUpdateStatus(status); })
-        .catch(function() {})
-        .finally(function() { if (button) button.disabled = false; });
-    });
-  }
 
-  let activeScoreInput = null;
+  document.addEventListener('click', function(event) {
+    const closeButton = event.target.closest('[data-dialog-close]');
+    if (closeButton) {
+      closeButton.closest('dialog')?.close();
+      return;
+    }
+    const dialogButton = event.target.closest('[data-dialog-target]');
+    if (dialogButton) {
+      const dialog = document.getElementById(dialogButton.dataset.dialogTarget);
+      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+      return;
+    }
+    if (event.target.matches('.assignment-dialog')) {
+      event.target.close();
+      return;
+    }
+    const scoreChip = event.target.closest('[data-score-chip]');
+    if (scoreChip) {
+      const target = activeScoreInput || document.querySelector('[data-score-input]');
+      if (!target) return;
+      target.value = scoreChip.dataset.scoreChip;
+      updateScorePreview(target);
+      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
+      if (next) {
+        next.focus();
+        next.select();
+      }
+      return;
+    }
+    const anchor = event.target.closest('a[href]');
+    if (!anchor || event.defaultPrevented) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (anchor.target || anchor.hasAttribute('download') || anchor.dataset.noAppNav !== undefined) return;
+    const url = new URL(anchor.href, window.location.href);
+    if (!canUseAppNav(url) || isSamePageHash(url)) return;
+    event.preventDefault();
+    navigateApp(url);
+  });
+
+  document.addEventListener('submit', function(event) {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) return;
+    event.preventDefault();
+    navigateApp(formToUrl(form));
+  });
+
+  document.addEventListener('change', function(event) {
+    const assignmentSelect = event.target.closest('[data-assignment-select]');
+    if (assignmentSelect) {
+      if (assignmentSelect.dataset.baseUrl) {
+        const nextUrl = new URL(assignmentSelect.dataset.baseUrl, window.location.origin);
+        if (assignmentSelect.value === '__new__') {
+          nextUrl.searchParams.delete('assignmentId');
+          nextUrl.searchParams.set('action', 'add');
+        } else if (assignmentSelect.value) {
+          nextUrl.searchParams.delete('action');
+          nextUrl.searchParams.set('assignmentId', assignmentSelect.value);
+        }
+        goToUrl(nextUrl);
+        return;
+      }
+      if (assignmentSelect.value) {
+        submitFormSmoothly(assignmentSelect.form);
+      } else {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('assignmentId');
+        goToUrl(url);
+      }
+      return;
+    }
+    const scoreModeToggle = event.target.closest('[data-score-mode-toggle]');
+    if (scoreModeToggle) {
+      goToUrl(scoreModeToggle.checked ? scoreModeToggle.dataset.wrongUrl : scoreModeToggle.dataset.percentUrl);
+      return;
+    }
+    const gridToggle = event.target.closest('[data-grid-toggle]');
+    if (gridToggle) {
+      goToUrl(gridToggle.checked ? gridToggle.dataset.onUrl : gridToggle.dataset.offUrl);
+      return;
+    }
+    const lettersToggle = event.target.closest('[data-grid-letters-toggle]');
+    if (lettersToggle) {
+      syncGridLettersToggle(lettersToggle, true);
+      return;
+    }
+    if (event.target.matches('select[name="groupId"]')) {
+      syncRoleOptions(event.target.closest('form'));
+      return;
+    }
+    const gridInput = event.target.closest('[data-grid-score-input]');
+    if (gridInput) {
+      clearTimeout(gridTimers.get(gridInput));
+      autosaveGridInput(gridInput);
+      return;
+    }
+    const auto = event.target.closest('[data-auto-submit]');
+    if (auto && auto.form) submitFormSmoothly(auto.form, { scroll: false });
+  });
+
   document.addEventListener('focusin', function(event) {
     if (event.target.matches('[data-score-input]')) {
       activeScoreInput = event.target;
       window.setTimeout(function() { event.target.select?.(); }, 0);
     }
   });
-  document.querySelectorAll('[data-assignment-select]').forEach(function(select) {
-    select.addEventListener('change', function() {
-      if (this.dataset.baseUrl) {
-        var nextUrl = new URL(this.dataset.baseUrl, window.location.origin);
-        if (this.value === '__new__') {
-          nextUrl.searchParams.delete('assignmentId');
-          nextUrl.searchParams.set('action', 'add');
-        } else if (this.value) {
-          nextUrl.searchParams.delete('action');
-          nextUrl.searchParams.set('assignmentId', this.value);
-        }
-        window.location.href = nextUrl.toString();
-        return;
-      }
-      if (this.value) {
-        this.form.submit();
-      } else {
-        var url = new URL(window.location.href);
-        url.searchParams.delete('assignmentId');
-        window.location.href = url.toString();
-      }
-    });
+
+  document.addEventListener('input', function(event) {
+    if (event.target.matches('[data-score-input]')) {
+      updateScorePreview(event.target);
+      return;
+    }
+    if (event.target.matches('[data-grid-score-input]')) {
+      const input = event.target;
+      clearTimeout(gridTimers.get(input));
+      gridTimers.set(input, setTimeout(function() { autosaveGridInput(input); }, 550));
+      return;
+    }
+    if (event.target.matches('input[name="maxScore"]')) {
+      event.target.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    }
   });
+
+  document.addEventListener('keydown', function(event) {
+    const input = event.target.closest('[data-grid-score-input]');
+    if (!input || event.key !== 'Tab') return;
+    const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
+    const index = inputs.indexOf(input);
+    const next = inputs[index + (event.shiftKey ? -1 : 1)];
+    if (!next) return;
+    event.preventDefault();
+    autosaveGridInput(input);
+    next.focus();
+    next.select?.();
+  });
+
+  window.addEventListener('popstate', function() {
+    navigateApp(window.location.href, { push: false, scroll: false });
+  });
+
+  history.replaceState({ oaksteadApp: true }, '', window.location.href);
 
   function formatScorePreviewNumber(value) {
     if (!Number.isFinite(value)) return '';
@@ -4582,59 +4820,24 @@ function generateReportCardPdf(btn) {
     preview.textContent = formatScorePreviewNumber(percent) + '%';
   }
 
-  document.querySelectorAll('[data-score-input]').forEach(function(input) {
-    updateScorePreview(input);
-    input.addEventListener('input', function() {
-      updateScorePreview(input);
-    });
-  });
-  document.querySelectorAll('[data-score-mode-toggle]').forEach(function(toggle) {
-    toggle.addEventListener('change', function() {
-      window.location.href = toggle.checked ? toggle.dataset.wrongUrl : toggle.dataset.percentUrl;
-    });
-  });
-  document.querySelectorAll('[data-grid-toggle]').forEach(function(toggle) {
-    toggle.addEventListener('change', function() {
-      window.location.href = toggle.checked ? toggle.dataset.onUrl : toggle.dataset.offUrl;
-    });
-  });
-  document.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
+  function syncGridLettersToggle(toggle, save) {
     const shell = toggle.closest('.gb-grid-shell');
-    const saved = localStorage.getItem('oakstead-gradebook-letters');
-    if (saved === 'off') {
-      toggle.checked = false;
-      shell?.classList.add('letters-hidden');
-    }
-    toggle.addEventListener('change', function() {
-      shell?.classList.toggle('letters-hidden', !toggle.checked);
-      localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
-    });
-  });
-  document.querySelectorAll('[data-dialog-target]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      const dialog = document.getElementById(button.dataset.dialogTarget);
-      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
-    });
-  });
-  document.querySelectorAll('[data-dialog-close]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      button.closest('dialog')?.close();
-    });
-  });
-  document.querySelectorAll('.assignment-dialog').forEach(function(dialog) {
-    dialog.addEventListener('click', function(event) {
-      if (event.target === dialog) dialog.close();
-    });
-  });
+    if (!save && localStorage.getItem('oakstead-gradebook-letters') === 'off') toggle.checked = false;
+    shell?.classList.toggle('letters-hidden', !toggle.checked);
+    if (save) localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
+  }
+
   function markGridCell(input, state) {
     const cell = input.closest('.gb-grid-score-cell');
     if (!cell) return;
     cell.classList.remove('saving', 'saved', 'save-error');
     if (state) cell.classList.add(state);
   }
+
   function gridHidden(container, name) {
     return container.querySelector('input[name="' + name + '"]')?.value || '';
   }
+
   function updateGridAverages(result) {
     if (!result || !result.display) return;
     const assignmentId = String(result.assignmentId || '');
@@ -4646,6 +4849,7 @@ function generateReportCardPdf(btn) {
     if (studentAverage && result.display.studentAverage !== undefined) studentAverage.innerHTML = result.display.studentAverage;
     if (classAverage && result.display.classAverage !== undefined) classAverage.innerHTML = result.display.classAverage;
   }
+
   function autosaveGridInput(input) {
     const container = input.closest('[data-grid-autosave]');
     if (!container || input.value === input.dataset.originalValue) return;
@@ -4681,64 +4885,116 @@ function generateReportCardPdf(btn) {
         if (status) status.textContent = 'Could not save';
       });
   }
-  document.querySelectorAll('[data-grid-score-input]').forEach(function(input) {
-    let timer = null;
-    input.addEventListener('keydown', function(event) {
-      if (event.key !== 'Tab') return;
-      const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
-      const index = inputs.indexOf(input);
-      const next = inputs[index + (event.shiftKey ? -1 : 1)];
-      if (!next) return;
-      event.preventDefault();
-      autosaveGridInput(input);
-      next.focus();
-      next.select?.();
-    });
-    input.addEventListener('input', function() {
-      clearTimeout(timer);
-      timer = setTimeout(function() { autosaveGridInput(input); }, 550);
-    });
-    input.addEventListener('change', function() {
-      clearTimeout(timer);
-      autosaveGridInput(input);
-    });
-  });
-  document.querySelectorAll('input[name="maxScore"]').forEach(function(pointsInput) {
-    pointsInput.addEventListener('input', function() {
-      pointsInput.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
-    });
-  });
 
-  document.querySelectorAll('form[action="/person-roles"]').forEach(function(form) {
+  function syncRoleOptions(form) {
+    if (!form) return;
     const groupSelect = form.querySelector('select[name="groupId"]');
     const roleSelect = form.querySelector('select[name="roleTypeId"]');
     if (!groupSelect || !roleSelect) return;
-    function syncRoleOptions() {
-      const groupId = groupSelect.value;
-      Array.from(roleSelect.options).forEach(function(option) {
-        if (!option.value) return;
-        const matches = !groupId || option.dataset.roleGroup === groupId;
-        option.disabled = !matches;
-        option.hidden = !matches;
-      });
-      if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
-    }
-    groupSelect.addEventListener('change', syncRoleOptions);
-    syncRoleOptions();
-  });
-
-  document.querySelectorAll('[data-score-chip]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      const target = activeScoreInput || document.querySelector('[data-score-input]');
-      if (!target) return;
-      target.value = button.dataset.scoreChip;
-      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
-      if (next) {
-        next.focus();
-        next.select();
-      }
+    const groupId = groupSelect.value;
+    Array.from(roleSelect.options).forEach(function(option) {
+      if (!option.value) return;
+      const matches = !groupId || option.dataset.roleGroup === groupId;
+      option.disabled = !matches;
+      option.hidden = !matches;
     });
-  });
+    if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
+  }
+
+  function initUpdateTools(scope) {
+    const panel = scope.querySelector('[data-update-status]');
+    if (!panel) return;
+    const updateForm = scope.querySelector('[data-update-form]');
+    const updateCheckForm = scope.querySelector('[data-update-check-form]');
+    const updateDownloadRow = scope.querySelector('[data-update-download-row]');
+    const updateDownloadLink = scope.querySelector('[data-update-download]');
+    const updateReleaseLink = scope.querySelector('[data-update-release]');
+    function renderUpdateStatus(status) {
+      if (!panel.isConnected || !status) return;
+      const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
+      const message = panel.querySelector('[data-update-message]');
+      const percentLabel = panel.querySelector('[data-update-percent]');
+      const progress = panel.querySelector('[data-update-progress]');
+      const phase = panel.querySelector('[data-update-phase]');
+      const log = panel.querySelector('[data-update-log]');
+      if (message) message.textContent = status.message || '';
+      if (percentLabel) percentLabel.textContent = percent + '%';
+      if (progress) progress.style.setProperty('--progress-value', percent + '%');
+      if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
+      if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
+      if (updateDownloadRow && updateDownloadLink) {
+        const downloadUrl = status.downloadUrl || status.installerDownloadUrl || '';
+        updateDownloadRow.style.display = downloadUrl || status.releaseUrl ? 'flex' : 'none';
+        updateDownloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
+        if (downloadUrl) updateDownloadLink.href = downloadUrl;
+        if (status.installerAssetName) updateDownloadLink.textContent = 'Download ' + status.installerAssetName;
+      }
+      if (updateReleaseLink) {
+        updateReleaseLink.style.display = status.releaseUrl ? 'inline-flex' : 'none';
+        if (status.releaseUrl) updateReleaseLink.href = status.releaseUrl;
+      }
+      [updateForm, updateCheckForm].forEach(function(form) {
+        const button = form?.querySelector('button[type="submit"]');
+        if (button) button.disabled = Boolean(status.running);
+      });
+      const channelInput = updateForm?.querySelector('input[name="channel"]');
+      if (channelInput && status.channel) channelInput.value = status.channel;
+    }
+    function pollUpdateStatus() {
+      if (!panel.isConnected) return;
+      fetch('/system-update/status', { headers: { Accept: 'application/json' } })
+        .then(function(response) { return response.ok ? response.json() : null; })
+        .then(function(status) {
+          renderUpdateStatus(status);
+          if (status && status.running) setTimeout(pollUpdateStatus, 1400);
+        })
+        .catch(function() {});
+    }
+    if (updateForm && !updateForm.dataset.bound) {
+      updateForm.dataset.bound = '1';
+      updateForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const button = updateForm.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
+          .then(function(response) { return response.json(); })
+          .then(function(status) {
+            renderUpdateStatus(status);
+            if (status && (status.downloadUrl || status.installerDownloadUrl)) {
+              window.location.href = status.downloadUrl || status.installerDownloadUrl;
+            }
+            setTimeout(pollUpdateStatus, 800);
+          })
+          .catch(function() { if (button) button.disabled = false; });
+      });
+      pollUpdateStatus();
+    }
+    if (updateCheckForm && !updateCheckForm.dataset.bound) {
+      updateCheckForm.dataset.bound = '1';
+      updateCheckForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const button = updateCheckForm.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
+          .then(function(response) { return response.json(); })
+          .then(function(status) { renderUpdateStatus(status); })
+          .catch(function() {})
+          .finally(function() { if (button) button.disabled = false; });
+      });
+    }
+  }
+
+  function initDynamicContent(scope) {
+    scope = scope || document;
+    scope.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    scope.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
+      syncGridLettersToggle(toggle, false);
+    });
+    scope.querySelectorAll('form[action="/person-roles"]').forEach(syncRoleOptions);
+    initUpdateTools(scope);
+  }
+
+  initDynamicContent(document);
 })();
 </script>
 </body>
@@ -6728,8 +6984,8 @@ function gradeGraphSvg(series, periods) {
 }
 
 function miniSubjectChartSvg(item, periods) {
-  const W = 420, H = 174;
-  const padL = 36, padR = 14, padT = 12, padB = 34;
+  const W = 420, H = 150;
+  const padL = 36, padR = 14, padT = 10, padB = 30;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const minY = 60;
@@ -6748,8 +7004,8 @@ function miniSubjectChartSvg(item, periods) {
     const y = toY(value);
     return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="#d7d7d7" stroke-width="1" /><text x="${padL - 7}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#555" font-size="9">${value}</text>`;
   }).join('');
-  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 18}" text-anchor="middle" fill="#555" font-size="9">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
-  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="#555" font-size="8">${Math.round(value)}%</text>`).join('');
+  const labels = periods.map((period, index) => `<text x="${toX(index).toFixed(1)}" y="${H - 17}" text-anchor="middle" fill="#555" font-size="9">${esc(period.name.replace(/^Period\s+/i, 'P'))}</text>`).join('');
+  const scoreLabels = values.map((value, index) => value === null ? '' : `<text x="${toX(index).toFixed(1)}" y="${H - 5}" text-anchor="middle" fill="#555" font-size="8">${Math.round(value)}%</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">
     ${guides}
     <line x1="${padL}" y1="${(padT + chartH).toFixed(1)}" x2="${W - padR}" y2="${(padT + chartH).toFixed(1)}" stroke="#aeb7c4" stroke-width="1" />
@@ -6968,6 +7224,20 @@ function periodAbsenceTotal(rows, period) {
 function formatAbsence(value) {
   const number = Number(value) || 0;
   return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, '');
+}
+
+function formatAbsenceKind(kind) {
+  return cleanText(kind, 20).toLowerCase() === 'tardy' ? 'Tardy' : 'Absence';
+}
+
+function absenceKindClass(kind) {
+  return formatAbsenceKind(kind).toLowerCase();
+}
+
+function formatAbsenceAmount(row) {
+  const amount = Number(row.amount) || 0;
+  const unit = row.unit === 'hours' ? 'hour' : 'day';
+  return `${formatAbsence(amount)} ${unit}${amount === 1 ? '' : 's'}`;
 }
 
 function reportCardBooksSvg() {
@@ -7222,17 +7492,49 @@ function absencesPage(url, selectedYear, csrfToken, user) {
     WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
       ${accessClause}
     ORDER BY sy.grade_level, st.last_name, st.first_name;`);
+  students.sort((a, b) => gradeRank(a.grade_level) - gradeRank(b.grade_level)
+    || String(a.last_name).localeCompare(String(b.last_name))
+    || String(a.first_name).localeCompare(String(b.first_name)));
+  const grades = sortGrades(students.map((student) => student.grade_level));
+  let selectedGrade = cleanGrade(url.searchParams.get('grade'));
+  if (selectedGrade && !grades.includes(selectedGrade)) selectedGrade = '';
+  let selectedStudentId = asInt(url.searchParams.get('studentId'));
+  let selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || null;
+  if (selectedStudentId && (!selectedStudent || (selectedGrade && selectedStudent.grade_level !== selectedGrade))) {
+    selectedStudentId = 0;
+    selectedStudent = null;
+  }
+  const filteredStudentOptions = selectedGrade ? students.filter((student) => student.grade_level === selectedGrade) : students;
+  const gradeClause = selectedGrade ? `AND sy.grade_level=${sqlValue(selectedGrade)}` : '';
+  const studentClause = selectedStudentId ? `AND st.id=${selectedStudentId}` : '';
   const absences = querySql(`SELECT a.*, st.first_name, st.last_name, sy.grade_level
     FROM os_absences a
     JOIN os_students st ON st.id = a.student_id
-    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id
+    JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id AND sy.status='enrolled'
     WHERE a.school_year_id=${yearId}
       ${accessClause}
+      ${gradeClause}
+      ${studentClause}
     ORDER BY a.absence_date DESC, st.last_name, st.first_name
     LIMIT 80;`);
+  const filterParams = new URLSearchParams();
+  filterParams.set('yearId', String(yearId));
+  if (selectedGrade) filterParams.set('grade', selectedGrade);
+  if (selectedStudentId) filterParams.set('studentId', String(selectedStudentId));
+  const filterQuery = filterParams.toString();
+  const listPath = `/absences${filterQuery ? `?${filterQuery}` : ''}`;
+  const addPath = `/absences?action=add${filterQuery ? `&${filterQuery}` : ''}`;
   const studentOptions = students.map((student) => `<option value="${student.id}">${esc(student.last_name)}, ${esc(student.first_name)} - Grade ${esc(student.grade_level)}</option>`).join('');
+  const filterStudentOptions = filteredStudentOptions.map((student) => `<option value="${student.id}" ${asInt(student.id) === selectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)} - Grade ${esc(student.grade_level)}</option>`).join('');
+  const filters = `<form method="get" action="/absences" class="absence-header-filters">
+    <input type="hidden" name="yearId" value="${yearId}" />
+    <span class="absence-filter-label">Filter</span>
+    <select name="grade" data-auto-submit aria-label="Filter by grade">${gradeOptionsFromRows(grades, selectedGrade)}</select>
+    <select name="studentId" data-auto-submit aria-label="Filter by student"><option value="">All students</option>${filterStudentOptions}</select>
+    ${selectedGrade || selectedStudentId ? `<a class="secondary-btn compact-action absence-clear-filter" href="/absences?yearId=${yearId}">Clear</a>` : ''}
+  </form>`;
   const addForm = `<section class="family-detail">
-    <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="/absences">Cancel</a></div>
+    <div class="family-detail-head"><h2>Add Absence</h2><a class="secondary-btn compact-action" href="${listPath}">Cancel</a></div>
     <div class="family-detail-body">
       <form method="post" action="/absences" class="form-grid absence-form">
         ${csrfInput(csrfToken)}
@@ -7260,14 +7562,25 @@ function absencesPage(url, selectedYear, csrfToken, user) {
     </div>
   </section>`;
   const list = `<section class="family-detail">
-    <div class="family-detail-head">
+    <div class="family-detail-head absence-list-head">
       <h2>Absences</h2>
-      <div class="module-actions"><span class="family-count">${absences.length}</span><a class="page-action compact-action" href="/absences?action=add">Add</a></div>
+      <div class="absence-list-actions">
+        ${filters}
+        <span class="family-count">${absences.length}</span>
+        <a class="page-action compact-action" href="${addPath}">Add</a>
+      </div>
     </div>
     <div class="family-detail-body">
-      <div class="table-wrap compact-table"><table>
-        <tr><th>Date</th><th>Student</th><th>Type</th><th>Amount</th><th>Notes</th></tr>
-        ${absences.map((row) => `<tr><td>${esc(row.absence_date)}</td><td>${esc(row.last_name)}, ${esc(row.first_name)}<br><small>Grade ${esc(row.grade_level || '')}</small></td><td>${esc(row.kind)}</td><td>${formatAbsence(row.amount)} ${esc(row.unit)}</td><td>${esc(row.notes || '') || '&mdash;'}</td></tr>`).join('') || `<tr><td colspan="5">${emptyState('No absences recorded for this school year.')}</td></tr>`}
+      <div class="table-wrap compact-table"><table class="absence-table">
+        <tr><th>Date</th><th>Student</th><th>Grade</th><th>Type</th><th>Amount</th><th>Notes</th></tr>
+        ${absences.map((row) => `<tr>
+          <td class="absence-date-cell">${esc(row.absence_date)}</td>
+          <td class="absence-student-cell">${esc(row.last_name)}, ${esc(row.first_name)}</td>
+          <td class="absence-grade-cell">Grade ${esc(row.grade_level || '')}</td>
+          <td class="absence-kind-cell"><span class="absence-kind ${absenceKindClass(row.kind)}">${esc(formatAbsenceKind(row.kind))}</span></td>
+          <td class="absence-amount-cell">${esc(formatAbsenceAmount(row))}</td>
+          <td>${esc(row.notes || '') || '&mdash;'}</td>
+        </tr>`).join('') || `<tr><td colspan="6">${emptyState('No absences recorded for this school year.')}</td></tr>`}
       </table></div>
     </div>
   </section>`;
