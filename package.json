@@ -1,6 +1,6 @@
 {
   "name": "oakstead",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Oakstead (Rooted Records for Growing Minds) school CRM and gradebook with SQLite-backed storage",
   "author": {
     "name": "Kirby Witmer",

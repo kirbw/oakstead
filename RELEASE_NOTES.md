@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.0.8
+
+- Hid Network Access, Backups, and System Updates from School Setup while running in demo mode, including direct access to the related backup and update routes.
+- Fixed gradebook grid autosave ordering so student averages stay current when entering scores quickly.
+
 ## 0.0.7
 
 - Improved the Reports dashboard with clearer visual summaries, more readable chart styling, and report-specific icons.

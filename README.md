@@ -2,7 +2,7 @@
 
 **Rooted Records for Growing Minds.**
 
-Current version: **0.0.7**
+Current version: **0.0.8**
 
 Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, church and district affiliations, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
 
@@ -149,7 +149,7 @@ Prepare the package after adding the local vendor runtimes described in `packagi
 npm run prepare:windows
 ```
 
-Then compile `packaging/windows/Oakstead.iss` with Inno Setup. The service uses installer-update mode, so creating a new GitHub release should include an asset named like `Oakstead-Setup-v0.0.7.exe`.
+Then compile `packaging/windows/Oakstead.iss` with Inno Setup. The service uses installer-update mode, so creating a new GitHub release should include an asset named like `Oakstead-Setup-v0.0.8.exe`.
 
 Admins can use **School Setup -> Network Access** to switch between local-only access and LAN access. LAN mode binds Oakstead to `0.0.0.0`; other devices use the host machine IP shown on that page.
 
@@ -172,6 +172,11 @@ Before updating, commit or clear local code changes. Oakstead creates a database
 ## Release Notes
 
 Release notes are also kept in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+### 0.0.8
+
+- Hid Network Access, Backups, and System Updates from School Setup while running in demo mode.
+- Fixed gradebook grid autosave ordering so student averages stay current when entering scores quickly.
 
 ### 0.0.7
 
