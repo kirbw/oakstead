@@ -21,4 +21,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now oakstead
 ```
 
-For LAN access, keep `OAKSTEAD_DEFAULT_HOST=0.0.0.0` or set the same value from School Setup -> Network Access and restart the service. Keep Oakstead behind a trusted LAN, VPN, or protective reverse proxy.
+For LAN access on a fresh database, keep `OAKSTEAD_DEFAULT_HOST=0.0.0.0`. After the database exists, the saved Network Access setting wins unless `HOST` is set. Admins can change it from School Setup -> Network Access, or from SSH on a headless server:
+
+```bash
+sudo systemctl stop oakstead
+sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead SQLITE_BIN=/usr/bin/sqlite3 node /opt/oakstead/server.js --set-network-access lan
+sudo systemctl restart oakstead
+```
+
+Use `--set-network-access local` to switch back to local-only mode, or `--network-status` to print the saved and next-start URLs. If you need an immediate environment override, add `HOST=0.0.0.0` to `/etc/oakstead/oakstead.env` and restart the service; the in-app Network Access form remains read-only while `HOST` is set. Keep Oakstead behind a trusted LAN, VPN, or protective reverse proxy.

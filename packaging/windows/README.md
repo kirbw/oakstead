@@ -16,10 +16,10 @@ These binaries are intentionally not committed to the repo.
 
 ```powershell
 npm run prepare:windows
-iscc packaging\windows\Oakstead.iss /DAppVersion=0.0.7
+iscc packaging\windows\Oakstead.iss /DAppVersion=0.0.8
 ```
 
-The installer output is written to `dist/windows/installer/Oakstead-Setup-v0.0.7.exe`.
+The installer output is written to `dist/windows/installer/Oakstead-Setup-v0.0.8.exe`.
 
 ## First Windows build checklist
 
@@ -29,9 +29,9 @@ The installer output is written to `dist/windows/installer/Oakstead-Setup-v0.0.7
 4. Download the SQLite Windows command-line tools and copy `sqlite3.exe` into `packaging/windows/vendor/sqlite/`.
 5. Download the WinSW x64 executable, rename it to `Oakstead.Service.exe`, and place it at `packaging/windows/vendor/winsw/Oakstead.Service.exe`.
 6. Run `npm run prepare:windows` from the repository root. The script stages app files, runtime binaries, service files, and shortcuts under `dist/windows/`.
-7. Run `iscc packaging\windows\Oakstead.iss /DAppVersion=0.0.7` to compile the installer.
+7. Run `iscc packaging\windows\Oakstead.iss /DAppVersion=0.0.8` to compile the installer.
 8. Test the generated installer on a disposable Windows machine or VM. Confirm the Oakstead service installs, starts, opens at `http://127.0.0.1:3000`, writes data under `%ProgramData%\Oakstead`, and can survive a reboot.
-9. Publish the installer as a GitHub Release asset named `Oakstead-Setup-v0.0.7.exe` so packaged installs can find future installer updates.
+9. Publish the installer as a GitHub Release asset named `Oakstead-Setup-v0.0.8.exe` so packaged installs can find future installer updates.
 
 ## Runtime behavior
 
