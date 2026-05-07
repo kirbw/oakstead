@@ -4586,6 +4586,7 @@ function generateReportCardPdf(btn) {
   const root = document.documentElement;
   const saved = localStorage.getItem('oakstead-theme');
   const gridTimers = new WeakMap();
+  let gridSaveQueue = Promise.resolve();
   let activeScoreInput = null;
   let navAbort = null;
   if (saved === 'dark') root.setAttribute('data-theme', 'dark');
@@ -4915,13 +4916,14 @@ function generateReportCardPdf(btn) {
     return container.querySelector('input[name="' + name + '"]')?.value || '';
   }
 
-  function updateGridAverages(result) {
+  function updateGridAverages(result, container) {
     if (!result || !result.display) return;
+    const root = container || document;
     const assignmentId = String(result.assignmentId || '');
     const studentId = String(result.studentId || '');
-    const assignmentAverage = assignmentId ? document.querySelector('[data-grid-assignment-average="' + assignmentId + '"]') : null;
-    const studentAverage = studentId ? document.querySelector('[data-grid-student-average="' + studentId + '"]') : null;
-    const classAverage = document.querySelector('[data-grid-class-average]');
+    const assignmentAverage = assignmentId ? root.querySelector('[data-grid-assignment-average="' + assignmentId + '"]') : null;
+    const studentAverage = studentId ? root.querySelector('[data-grid-student-average="' + studentId + '"]') : null;
+    const classAverage = root.querySelector('[data-grid-class-average]');
     if (assignmentAverage && result.display.assignmentAverage !== undefined) assignmentAverage.innerHTML = result.display.assignmentAverage;
     if (studentAverage && result.display.studentAverage !== undefined) studentAverage.innerHTML = result.display.studentAverage;
     if (classAverage && result.display.classAverage !== undefined) classAverage.innerHTML = result.display.classAverage;
@@ -4930,6 +4932,16 @@ function generateReportCardPdf(btn) {
   function autosaveGridInput(input) {
     const container = input.closest('[data-grid-autosave]');
     if (!container || input.value === input.dataset.originalValue) return;
+    const valueToSave = input.value;
+    gridSaveQueue = gridSaveQueue
+      .catch(function() {})
+      .then(function() {
+        return saveGridInput(input, container, valueToSave);
+      });
+  }
+
+  function saveGridInput(input, container, valueToSave) {
+    if (!input.isConnected || !container.isConnected || valueToSave === input.dataset.originalValue) return Promise.resolve();
     const formData = new FormData();
     formData.set('csrfToken', gridHidden(container, 'csrfToken'));
     formData.set('action', 'grid-score');
@@ -4940,20 +4952,22 @@ function generateReportCardPdf(btn) {
     formData.set('scoreMode', gridHidden(container, 'scoreMode'));
     formData.set('assignmentId', input.dataset.assignmentId || '');
     formData.set('studentId', input.dataset.studentId || '');
-    formData.set('scoreValue', input.value);
+    formData.set('scoreValue', valueToSave);
     const status = container.querySelector('[data-grid-autosave-status]');
     markGridCell(input, 'saving');
     if (status) status.textContent = 'Saving...';
-    fetch(container.dataset.action || '/gradebook', { method: 'POST', body: formData, headers: { Accept: 'application/json' } })
+    return fetch(container.dataset.action || '/gradebook', { method: 'POST', body: formData, headers: { Accept: 'application/json' } })
       .then(function(response) {
         if (!response.ok) throw new Error('Save failed');
         return response.json();
       })
       .then(function(result) {
-        input.dataset.originalValue = input.value;
+        if (!input.isConnected || !container.isConnected) return;
+        input.dataset.originalValue = valueToSave;
+        if (input.value !== valueToSave) return;
         const letter = input.closest('.gb-grid-score-cell')?.querySelector('.gb-cell-letter');
         if (letter && result.letter !== undefined) letter.textContent = result.letter || '';
-        updateGridAverages(result);
+        updateGridAverages(result, container);
         markGridCell(input, 'saved');
         if (status) status.textContent = 'Saved';
       })
