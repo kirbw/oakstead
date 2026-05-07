@@ -62,9 +62,11 @@ const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
 const UPDATE_STATUS_FILE = path.join(DATA_DIR, '.oakstead-update-status.json');
 const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
 const UPDATE_MODE = cleanUpdateMode(process.env.OAKSTEAD_UPDATE_MODE || 'git');
-const RELEASE_REPO = normalizeRepositorySlug(process.env.OAKSTEAD_RELEASE_REPO)
-  || normalizeRepositorySlug(typeof PACKAGE_INFO.repository === 'string' ? PACKAGE_INFO.repository : PACKAGE_INFO.repository?.url)
+const PACKAGE_REPO = normalizeRepositorySlug(typeof PACKAGE_INFO.repository === 'string' ? PACKAGE_INFO.repository : PACKAGE_INFO.repository?.url)
   || 'kirbw/oakstead';
+const APP_REPOSITORY_URL = `https://github.com/${PACKAGE_REPO}`;
+const RELEASE_REPO = normalizeRepositorySlug(process.env.OAKSTEAD_RELEASE_REPO)
+  || PACKAGE_REPO;
 const DEFAULT_SCHOOL_NAME = 'Oakstead';
 const MAX_BODY_SIZE = 50_000_000;
 const SESSION_HOURS = 12;
@@ -1062,6 +1064,13 @@ function networkAccessLabel(host) {
   return host === '0.0.0.0' ? 'LAN access' : 'Local only';
 }
 
+function networkAccessHostForMode(value) {
+  const mode = String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (['lan', 'trusted-lan', 'network', 'local-network', '0.0.0.0'].includes(mode)) return '0.0.0.0';
+  if (['local', 'local-only', 'localhost', '127.0.0.1'].includes(mode)) return '127.0.0.1';
+  return '';
+}
+
 function networkUrls(config = ACTIVE_NETWORK) {
   if (config.host === '0.0.0.0') {
     const addresses = localNetworkAddresses();
@@ -1082,6 +1091,61 @@ function networkStatus() {
     restartRequired: desired.host !== ACTIVE_NETWORK.host || desired.port !== ACTIVE_NETWORK.port,
     envManaged: desired.hostOverridden || desired.portOverridden
   };
+}
+
+function printNetworkStatus() {
+  const savedHost = cleanBindHost(getSetting('network_bind_host', DEFAULT_HOST), DEFAULT_HOST);
+  const savedPort = parsePort(getSetting('network_port', String(DEFAULT_PORT)), DEFAULT_PORT);
+  const effective = desiredNetworkConfig();
+  console.log(`Saved network access: ${networkAccessLabel(savedHost)} (${savedHost}:${savedPort})`);
+  if (effective.hostOverridden || effective.portOverridden) {
+    console.log(`Environment override: ${effective.hostOverridden ? `HOST=${effective.host}` : 'HOST unset'}, ${effective.portOverridden ? `PORT=${effective.port}` : 'PORT unset'}`);
+  }
+  console.log(`Effective on next start: ${networkAccessLabel(effective.host)} (${effective.host}:${effective.port})`);
+  networkUrls(effective).forEach((item) => console.log(`URL: ${item}`));
+}
+
+function printNetworkAccessUsage() {
+  console.log([
+    'Usage:',
+    '  node server.js --network-status',
+    '  node server.js --set-network-access <lan|local> [port]',
+    '',
+    'Examples:',
+    '  node server.js --set-network-access lan',
+    '  node server.js --set-network-access local 3000'
+  ].join('\n'));
+}
+
+function setNetworkAccessFromCli(args) {
+  const [modeValue, portValue] = args;
+  if (!modeValue || modeValue === '--help' || modeValue === '-h') {
+    printNetworkAccessUsage();
+    return Boolean(modeValue);
+  }
+  const host = networkAccessHostForMode(modeValue);
+  if (!host) {
+    console.error(`Unknown network access mode: ${modeValue}`);
+    printNetworkAccessUsage();
+    return false;
+  }
+  const currentPort = parsePort(getSetting('network_port', String(DEFAULT_PORT)), DEFAULT_PORT);
+  const port = portValue === undefined ? currentPort : parsePort(portValue, 0);
+  if (!port) {
+    console.error(`Invalid port: ${portValue}`);
+    printNetworkAccessUsage();
+    return false;
+  }
+  setSetting('network_bind_host', host);
+  setSetting('network_port', String(port));
+  setSetting('network_restart_required_at', new Date().toISOString());
+  console.log(`Saved network access: ${networkAccessLabel(host)} (${host}:${port})`);
+  networkUrls({ host, port }).forEach((item) => console.log(`URL after restart: ${item}`));
+  if (process.env.HOST || process.env.PORT) {
+    console.log('Note: HOST or PORT is currently set, so the environment override wins until it is removed.');
+  }
+  console.log('Restart Oakstead for this change to take effect.');
+  return true;
 }
 
 function backupFrequencyLabel(value) {
@@ -2059,7 +2123,18 @@ button, select, input { min-height: 42px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.app-footer a {
+  color: inherit;
+  text-decoration: none;
+}
+.app-footer a:hover { color: var(--accent-dark); }
+.app-footer a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
 .app-footer strong { color: var(--ink); font-weight: 850; }
+.app-footer a:hover strong { color: inherit; }
 .workspace {
   display: grid;
   gap: 1rem;
@@ -4488,7 +4563,7 @@ tr:last-child td { border-bottom: 0; }
     </div>
   </nav>` : ''}
   <main class="main" data-app-main>${content}</main>
-  <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><strong>Oakstead</strong> v${esc(APP_VERSION)}</span></footer>
+  <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><a href="${esc(APP_REPOSITORY_URL)}" target="_blank" rel="noopener noreferrer"><strong>Oakstead</strong> v${esc(APP_VERSION)}</a></span></footer>
 </div>
 <script>
 function generateReportCardPdf(btn) {
@@ -8067,7 +8142,7 @@ async function handlePost(req, res, p, body, user, headers) {
   if (p === '/network-settings') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     if (process.env.HOST || process.env.PORT) return sendText(res, 400, 'Network settings are managed by HOST or PORT environment variables.');
-    const bindHost = body.accessMode === 'lan' ? '0.0.0.0' : '127.0.0.1';
+    const bindHost = networkAccessHostForMode(body.accessMode) || '127.0.0.1';
     const port = parsePort(body.port, DEFAULT_PORT);
     setSetting('network_bind_host', bindHost);
     setSetting('network_port', String(port));
@@ -8330,6 +8405,17 @@ if (process.argv[2] === '--run-system-update') {
     return;
   }
   runSystemUpdateWorker(process.argv[3] === 'prerelease' ? 'prerelease' : 'stable');
+  return;
+}
+
+if (process.argv[2] === '--network-status' || process.argv[2] === '--set-network-access') {
+  ensureRuntimeDirs();
+  ensureDb();
+  if (process.argv[2] === '--network-status') {
+    printNetworkStatus();
+  } else if (!setNetworkAccessFromCli(process.argv.slice(3))) {
+    process.exitCode = 1;
+  }
   return;
 }
 

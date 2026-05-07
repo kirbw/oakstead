@@ -103,6 +103,16 @@ Oakstead loads environment variables from a local `.env` file when present. Comm
 - `DEMO_MODE`: Set to `1`, `true`, `yes`, or `on` to run demo mode.
 - `DEMO_REFRESH_HOURS`: Demo reset interval from 1 to 24 hours. Defaults to `2`.
 
+The in-app Network Access setting is saved in `school.db`. On a headless Linux host, you can update that saved mode from SSH:
+
+```bash
+sudo systemctl stop oakstead
+sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead SQLITE_BIN=/usr/bin/sqlite3 node /opt/oakstead/server.js --set-network-access lan
+sudo systemctl restart oakstead
+```
+
+Use `--set-network-access local` to return to local-only mode, or `--network-status` to print the saved and next-start URLs. For emergency LAN recovery, setting `HOST=0.0.0.0` in the service environment also works because `HOST` overrides the saved setting until it is removed.
+
 Example `.env`:
 
 ```bash

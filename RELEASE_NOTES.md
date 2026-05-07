@@ -9,6 +9,8 @@
 - Improved the Absences page with compact grade and student filters in the list header, a dedicated Grade column, formatted absence/tardy labels, and cleaner amount display.
 - Enforced teacher-scoped absence visibility so teachers only see students in the grades and classrooms they are responsible for.
 - Added smoother app-shell navigation for internal pages and GET filters so the header, logo, and sidebar stay in place while main content updates.
+- Linked the footer version label to the Oakstead GitHub repository.
+- Added headless network access commands for checking or switching between local-only and trusted-LAN mode.
 
 ## 0.0.6
 
