@@ -4937,24 +4937,17 @@ function faviconAsset() {
   return customPath || logoAsset();
 }
 
-function weeklyAverageChart(weekData) {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const days = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    const label = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
-    const row = weekData.find(r => r.day === key);
-    days.push({ label, avg: row ? Number(row.avg_score) : null });
-  }
+function weeklyAverageChart(weekData, schoolDays = recentSchoolDays(7)) {
+  const days = schoolDays.map((day) => {
+    const row = weekData.find(r => r.day === day.key);
+    return { ...day, avg: row ? Number(row.avg_score) : null };
+  });
 
   const W = 400, H = 130;
   const padL = 32, padR = 10, padT = 14, padB = 28;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
-  const toX = (i) => (padL + (i / 6) * chartW).toFixed(1);
+  const toX = (i) => (padL + (i / Math.max(days.length - 1, 1)) * chartW).toFixed(1);
   const toY = (v) => (padT + chartH - (v / 100) * chartH).toFixed(1);
 
   const guides = [25, 50, 75, 100].map(v => {
@@ -4974,7 +4967,7 @@ function weeklyAverageChart(weekData) {
   const dots = pts.map(p => `<circle cx="${toX(p.i)}" cy="${toY(p.avg)}" r="3.5" class="dot" />`).join('');
   const xLabels = days.map((d, i) => `<text x="${toX(i)}" y="${H - 4}" class="x-label">${d.label}</text>`).join('');
   const emptyMsg = pts.length === 0
-    ? `<text x="${(W / 2).toFixed(0)}" y="${(padT + chartH / 2 + 4).toFixed(0)}" class="empty-msg">No scores recorded this week</text>`
+    ? `<text x="${(W / 2).toFixed(0)}" y="${(padT + chartH / 2 + 4).toFixed(0)}" class="empty-msg">No scores recorded for these school days</text>`
     : '';
 
   const scored = days.filter(d => d.avg !== null);
@@ -4991,6 +4984,23 @@ function weeklyAverageChart(weekData) {
       ${emptyMsg}
     </svg>`
   };
+}
+
+function recentSchoolDays(count) {
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  const days = [];
+  while (days.length < count) {
+    const weekday = date.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) {
+      days.push({
+        key: date.toISOString().slice(0, 10),
+        label: date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
+      });
+    }
+    date.setUTCDate(date.getUTCDate() - 1);
+  }
+  return days.reverse();
 }
 
 function dashboardPage(selectedYear) {
@@ -5011,16 +5021,17 @@ function dashboardPage(selectedYear) {
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC
     LIMIT 8;`);
+  const schoolDays = recentSchoolDays(7);
   const weekData = querySql(`SELECT DATE(a.assignment_date) AS day,
       ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
     JOIN os_scores sc ON sc.assignment_id = a.id
     WHERE a.school_year_id=${yearId}
-      AND DATE(a.assignment_date) >= DATE('now', '-6 days')
+      AND DATE(a.assignment_date) IN (${schoolDays.map((day) => sqlValue(day.key)).join(', ')})
     GROUP BY DATE(a.assignment_date)
     ORDER BY day ASC;`);
-  const chart = weeklyAverageChart(weekData);
-  const overallLabel = chart.overallAvg !== null ? `${Number(chart.overallAvg).toFixed(1)}% this week` : 'No data this week';
+  const chart = weeklyAverageChart(weekData, schoolDays);
+  const overallLabel = chart.overallAvg !== null ? `${Number(chart.overallAvg).toFixed(1)}% school-day avg` : 'No school-day data';
 
   return `<div class="workspace">
     ${schoolYearHead('Dashboard', 'A compact working view for enrollment, classrooms, and grades.', selectedYear)}
@@ -5033,7 +5044,7 @@ function dashboardPage(selectedYear) {
     </section>
     <div class="split">
       <section class="chart-panel">
-        <div class="chart-head"><h2>School Average &mdash; Past 7 Days</h2><span>${overallLabel}</span></div>
+        <div class="chart-head"><h2>School Average &mdash; Past 7 School Days</h2><span>${overallLabel}</span></div>
         ${chart.svg}
       </section>
       <section class="ledger">
