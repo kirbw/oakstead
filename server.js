@@ -4,79 +4,74 @@ const https = require('https');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const querystring = require('querystring');
 const { execFileSync, spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
-
-function loadEnvFile() {
-  const envFile = path.join(__dirname, '.env');
-  if (!fs.existsSync(envFile)) return;
-  fs.readFileSync(envFile, 'utf8').split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match || process.env[match[1]] !== undefined) return;
-    process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
-  });
-}
-
-loadEnvFile();
-
-function parsePort(value, fallback = 3000) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
-}
-
-function cleanBindHost(value, fallback = '127.0.0.1') {
-  const text = String(value || '').trim();
-  if (!text) return fallback;
-  if (text === 'localhost' || text === '127.0.0.1' || text === '0.0.0.0') return text;
-  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(text)) return text;
-  return fallback;
-}
-
-function cleanUpdateMode(value) {
-  return String(value || '').toLowerCase() === 'installer' ? 'installer' : 'git';
-}
-
-function normalizeRepositorySlug(value) {
-  const text = String(value || '').trim();
-  const githubMatch = text.match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?(?:[#?].*)?$/i);
-  if (githubMatch) return `${githubMatch[1]}/${githubMatch[2].replace(/\.git$/i, '')}`;
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text) ? text : '';
-}
-
-const APP_ROOT = __dirname;
-const PACKAGE_INFO = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
-const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
-const DATA_DIR_IS_CUSTOM = Boolean(process.env.OAKSTEAD_DATA_DIR);
-const DATA_DIR = path.resolve(process.env.OAKSTEAD_DATA_DIR || APP_ROOT);
-const DEFAULT_PORT = parsePort(process.env.OAKSTEAD_DEFAULT_PORT, 3000);
-const DEFAULT_HOST = cleanBindHost(process.env.OAKSTEAD_DEFAULT_HOST, '127.0.0.1');
-const DB_FILE = process.env.DB_FILE ? path.resolve(process.env.DB_FILE) : path.join(DATA_DIR, 'school.db');
-const PUBLIC_DIR = path.join(APP_ROOT, 'public');
-const UPLOAD_DIR = DATA_DIR_IS_CUSTOM ? path.join(DATA_DIR, 'uploads') : path.join(PUBLIC_DIR, 'uploads');
-const BACKUP_DIR = path.join(DATA_DIR, 'backups');
-const DEFAULT_LOGO_FILE = path.join(APP_ROOT, 'assets', 'oakleaf.png');
-const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
-const UPDATE_STATUS_FILE = path.join(DATA_DIR, '.oakstead-update-status.json');
-const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
-const UPDATE_MODE = cleanUpdateMode(process.env.OAKSTEAD_UPDATE_MODE || 'git');
-const PACKAGE_REPO = normalizeRepositorySlug(typeof PACKAGE_INFO.repository === 'string' ? PACKAGE_INFO.repository : PACKAGE_INFO.repository?.url)
-  || 'kirbw/oakstead';
-const APP_REPOSITORY_URL = `https://github.com/${PACKAGE_REPO}`;
-const RELEASE_REPO = normalizeRepositorySlug(process.env.OAKSTEAD_RELEASE_REPO)
-  || PACKAGE_REPO;
-const DEFAULT_SCHOOL_NAME = 'Oakstead';
-const MAX_BODY_SIZE = 50_000_000;
-const SESSION_HOURS = 12;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_LOCK_MS = 15 * 60 * 1000;
-const MAX_LOGIN_FAILURES = 5;
-const DEMO_MODE = /^(1|true|yes|on)$/i.test(String(process.env.DEMO_MODE || ''));
-const DEMO_REFRESH_HOURS = Math.max(1, Math.min(24, Number(process.env.DEMO_REFRESH_HOURS) || 2));
-const DEMO_HIDDEN_SETUP_SECTIONS = new Set(['network', 'backups', 'updates']);
-const DEMO_HIDDEN_POST_PATHS = new Set(['/network-settings', '/backup-settings', '/backup/create', '/backup/restore', '/system-update/check', '/system-update']);
+const {
+  APP_REPOSITORY_URL,
+  APP_ROOT,
+  APP_VERSION,
+  BACKUP_DIR,
+  DATA_DIR,
+  DB_FILE,
+  DEFAULT_HOST,
+  DEFAULT_LOGO_FILE,
+  DEFAULT_PORT,
+  DEFAULT_SCHOOL_NAME,
+  DEMO_HIDDEN_POST_PATHS,
+  DEMO_HIDDEN_SETUP_SECTIONS,
+  DEMO_MODE,
+  DEMO_REFRESH_HOURS,
+  LEGACY_LOGO_FILE,
+  LOGIN_LOCK_MS,
+  LOGIN_WINDOW_MS,
+  MAX_BODY_SIZE,
+  MAX_LOGIN_FAILURES,
+  PUBLIC_DIR,
+  RELEASE_REPO,
+  SESSION_HOURS,
+  SQLITE_BIN,
+  UPDATE_MODE,
+  UPDATE_STATUS_FILE,
+  UPLOAD_DIR,
+  cleanBindHost,
+  parsePort
+} = require('./server/config');
+const {
+  asInt,
+  asPoints,
+  asScore,
+  cleanDate,
+  cleanGrade,
+  cleanScoreMode,
+  cleanText,
+  compactNumber,
+  esc,
+  formatFileSize,
+  normalizeCategory,
+  scoreInputToPoints,
+  scoreValueForMode,
+  sqlValue
+} = require('./server/input');
+const { createHttpHelpers } = require('./server/http');
+const {
+  gradebookRedirectUrl,
+  gridScoreEntries,
+  scoreFieldEntries
+} = require('./server/gradebook-utils');
+const {
+  appendSetCookie,
+  cookieValue,
+  csrfInput,
+  getOrCreateCsrfToken,
+  parseBody,
+  parseCookies,
+  redirect,
+  requireCsrf,
+  securityHeaders,
+  sendHtml,
+  sendJson,
+  sendText
+} = createHttpHelpers({ escapeHtml: esc, maxBodySize: MAX_BODY_SIZE });
 let ACTIVE_NETWORK = {
   host: DEFAULT_HOST,
   port: DEFAULT_PORT,
@@ -113,91 +108,6 @@ function ensureRuntimeDirs() {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[char]));
-}
-
-function sqlValue(value) {
-  if (value === null || value === undefined || value === '') return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function asInt(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function cleanText(value, max = 160) {
-  return String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
-}
-
-function cleanDate(value) {
-  const text = String(value ?? '').slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
-}
-
-function cleanGrade(value) {
-  return cleanText(value, 24);
-}
-
-function asScore(value) {
-  if (String(value ?? '').trim() === '') return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return null;
-  return Math.max(0, Math.min(1000, parsed));
-}
-
-function asPoints(value, fallback = 100) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.max(1, Math.min(10000, parsed));
-}
-
-function cleanScoreMode(value) {
-  return value === 'wrong' ? 'wrong' : 'percent';
-}
-
-function compactNumber(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return '';
-  return parsed.toFixed(2).replace(/\.?0+$/, '');
-}
-
-function formatFileSize(bytes) {
-  const size = Number(bytes) || 0;
-  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
-  return `${size} B`;
-}
-
-function scoreInputToPoints(value, mode, maxScore) {
-  if (String(value ?? '').trim() === '') return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return null;
-  const points = asPoints(maxScore);
-  if (cleanScoreMode(mode) === 'percent') {
-    const percent = Math.max(0, Math.min(100, parsed));
-    return Number(((percent / 100) * points).toFixed(2));
-  }
-  const wrong = Math.max(0, Math.min(points, parsed));
-  return Number((points - wrong).toFixed(2));
-}
-
-function scoreValueForMode(score, maxScore, mode) {
-  if (score === null || score === undefined || score === '') return '';
-  const earned = Number(score);
-  const points = asPoints(maxScore);
-  if (!Number.isFinite(earned)) return '';
-  if (cleanScoreMode(mode) === 'percent') return compactNumber((earned / points) * 100);
-  return compactNumber(Math.max(0, points - earned));
-}
-
 function scoreInputControl(studentId, value, maxScore, mode) {
   const points = compactNumber(asPoints(maxScore));
   const scoreMode = cleanScoreMode(mode);
@@ -230,14 +140,6 @@ function gridModeToggle(offUrl, onUrl, isGrid) {
     </label>
     <strong>${isGrid ? 'On' : 'Off'}</strong>
   </div>`;
-}
-
-function normalizeCategory(value) {
-  const text = cleanText(value, 40).toLowerCase();
-  if (text === 'lesson' || text === 'homework' || text === 'lesson / homework' || text === 'lesson/homework') return 'Lesson / Homework';
-  if (text === 'quiz' || text === 'quizzes') return 'Quiz';
-  if (text === 'test' || text === 'tests') return 'Test';
-  return cleanText(value, 40) || 'Lesson / Homework';
 }
 
 function runSql(sql) {
@@ -389,125 +291,6 @@ function recordLoginFailure(req, username) {
 
 function clearLoginFailures(req, username) {
   loginAttemptKeys(req, username).forEach((key) => loginAttempts.delete(key));
-}
-
-function parseCookies(req) {
-  return String(req.headers.cookie || '').split(';').reduce((cookies, part) => {
-    const [key, ...rest] = part.trim().split('=');
-    if (key) cookies[key] = decodeURIComponent(rest.join('='));
-    return cookies;
-  }, {});
-}
-
-function cookieValue(value) {
-  return encodeURIComponent(String(value)).replace(/%20/g, '+');
-}
-
-function appendSetCookie(headers, cookie) {
-  const existing = headers['Set-Cookie'];
-  if (!existing) {
-    headers['Set-Cookie'] = cookie;
-    return;
-  }
-  headers['Set-Cookie'] = Array.isArray(existing) ? [...existing, cookie] : [existing, cookie];
-}
-
-function getOrCreateCsrfToken(req, headers) {
-  const cookies = parseCookies(req);
-  let token = cookies.csrfToken;
-  if (!token || !/^[a-f0-9]{48}$/.test(token)) {
-    token = crypto.randomBytes(24).toString('hex');
-    appendSetCookie(headers, `csrfToken=${cookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
-  }
-  return token;
-}
-
-function csrfInput(token) {
-  return `<input type="hidden" name="csrfToken" value="${esc(token)}" />`;
-}
-
-function requireCsrf(req, body) {
-  const cookies = parseCookies(req);
-  return Boolean(body.csrfToken && cookies.csrfToken && body.csrfToken === cookies.csrfToken);
-}
-
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    const contentType = String(req.headers['content-type'] || '');
-    const chunks = [];
-    let size = 0;
-    req.on('data', (chunk) => {
-      chunks.push(chunk);
-      size += chunk.length;
-      if (size > MAX_BODY_SIZE) {
-        reject(new Error('Payload too large'));
-        req.destroy();
-      }
-    });
-    req.on('end', () => {
-      const buffer = Buffer.concat(chunks);
-      if (contentType.includes('multipart/form-data')) return resolve(parseMultipart(buffer, contentType));
-      return resolve(querystring.parse(buffer.toString()));
-    });
-    req.on('error', reject);
-  });
-}
-
-function parseMultipart(buffer, contentType) {
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) return {};
-  const boundary = `--${boundaryMatch[1] || boundaryMatch[2]}`;
-  const parts = buffer.toString('latin1').split(boundary).slice(1, -1);
-  return parts.reduce((body, rawPart) => {
-    const part = rawPart.replace(/^\r\n/, '').replace(/\r\n$/, '');
-    const splitAt = part.indexOf('\r\n\r\n');
-    if (splitAt < 0) return body;
-    const headerText = part.slice(0, splitAt);
-    const valueText = part.slice(splitAt + 4);
-    const name = headerText.match(/name="([^"]+)"/i)?.[1];
-    if (!name) return body;
-    const filename = headerText.match(/filename="([^"]*)"/i)?.[1];
-    if (filename !== undefined) {
-      body[name] = {
-        filename,
-        contentType: headerText.match(/Content-Type:\s*([^\r\n]+)/i)?.[1] || 'application/octet-stream',
-        data: Buffer.from(valueText, 'latin1')
-      };
-      return body;
-    }
-    body[name] = valueText;
-    return body;
-  }, {});
-}
-
-function securityHeaders() {
-  return {
-    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-    'X-Frame-Options': 'DENY',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
-  };
-}
-
-function sendHtml(res, html, headers = {}) {
-  res.writeHead(200, { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(html);
-}
-
-function sendText(res, status, text, headers = {}) {
-  res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(text);
-}
-
-function sendJson(res, status, data, headers = {}) {
-  res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(data));
-}
-
-function redirect(res, location, headers = {}) {
-  res.writeHead(302, { ...securityHeaders(), ...headers, Location: location });
-  res.end();
 }
 
 function ensureDb() {
@@ -8240,6 +8023,14 @@ async function handlePost(req, res, p, body, user, headers) {
     const existingAssignmentId = asInt(body.assignmentId);
     const scoreMode = cleanScoreMode(body.scoreMode);
     if (!teacherAllowedForSelection(user, schoolYearId, gradeLevel)) return sendText(res, 403, 'Forbidden');
+    const gridRedirectTo = gradebookRedirectUrl({
+      schoolYearId,
+      markingPeriodId,
+      gradeLevel,
+      subjectId,
+      scoreMode,
+      gridMode: 'on'
+    });
     if (body.action === 'grid-score') {
       const assignmentId = asInt(body.assignmentId);
       const studentId = asInt(body.studentId);
@@ -8292,7 +8083,6 @@ async function handlePost(req, res, p, body, user, headers) {
     }
     if (body.action === 'update-assignment') {
       const assignmentId = asInt(body.assignmentId);
-      const redirectTo = `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&grid=on`;
       const assignment = querySql(`SELECT id FROM os_assignments
         WHERE id=${assignmentId}
           AND school_year_id=${schoolYearId}
@@ -8302,7 +8092,7 @@ async function handlePost(req, res, p, body, user, headers) {
       if (!assignment) return sendText(res, 404, 'Assignment not found');
       if (body.deleteAssignment) {
         runSql(`DELETE FROM os_assignments WHERE id=${assignmentId};`);
-        return redirect(res, redirectTo, headers);
+        return redirect(res, gridRedirectTo, headers);
       }
       runSql(`UPDATE os_assignments
         SET title=${sqlValue(cleanText(body.title, 140))},
@@ -8310,38 +8100,27 @@ async function handlePost(req, res, p, body, user, headers) {
             assignment_date=${sqlValue(cleanDate(body.assignmentDate))},
             max_score=${asPoints(body.maxScore)}
         WHERE id=${assignmentId};`);
-      return redirect(res, redirectTo, headers);
+      return redirect(res, gridRedirectTo, headers);
     }
     if (body.action === 'add-assignment') {
       const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
       const maxScore = asPoints(body.maxScore);
-      const addRedirectTo = `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&grid=on`;
       insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
         VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
-      return redirect(res, addRedirectTo, headers);
+      return redirect(res, gridRedirectTo, headers);
     }
     if (body.action === 'grid-scores') {
       if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
-      const assignmentIds = new Set();
-      Object.keys(body).forEach((key) => {
-        const match = key.match(/^gridscore_(\d+)_(\d+)$/);
-        if (match) assignmentIds.add(asInt(match[1]));
-      });
-      const submittedStudentIds = Object.keys(body).map((key) => {
-        const match = key.match(/^gridscore_(\d+)_(\d+)$/);
-        return match ? asInt(match[2]) : 0;
-      }).filter(Boolean);
+      const scoreEntries = gridScoreEntries(body);
+      const assignmentIds = new Set(scoreEntries.map((entry) => asInt(entry.assignmentId)));
+      const submittedStudentIds = scoreEntries.map((entry) => asInt(entry.studentId)).filter(Boolean);
       if (submittedStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
       const allowedAssignments = assignmentIds.size ? new Map(querySql(`SELECT id, max_score FROM os_assignments
         WHERE school_year_id=${schoolYearId}
           AND grade_level=${sqlValue(gradeLevel)}
           AND subject_id=${subjectId}
           AND id IN (${[...assignmentIds].map(asInt).join(',')});`).map((row) => [asInt(row.id), asPoints(row.max_score)])) : new Map();
-      Object.keys(body).forEach((key) => {
-        const match = key.match(/^gridscore_(\d+)_(\d+)$/);
-        if (!match) return;
-        const assignmentId = asInt(match[1]);
-        const studentId = asInt(match[2]);
+      scoreEntries.forEach(({ key, assignmentId, studentId }) => {
         const maxScore = allowedAssignments.get(assignmentId);
         if (!maxScore) return;
         const score = scoreInputToPoints(body[key], scoreMode, maxScore);
@@ -8349,7 +8128,7 @@ async function handlePost(req, res, p, body, user, headers) {
         runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
           ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
       });
-      return redirect(res, `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&grid=on`, headers);
+      return redirect(res, gridRedirectTo, headers);
     }
     const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
     const maxScore = existingAssignmentId
@@ -8358,18 +8137,25 @@ async function handlePost(req, res, p, body, user, headers) {
     if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
     const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
       VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
-    const scoreStudentIds = Object.keys(body).filter((key) => key.startsWith('score_')).map((key) => asInt(key.replace('score_', ''))).filter(Boolean);
+    const scoreEntries = scoreFieldEntries(body);
+    const scoreStudentIds = scoreEntries.map((entry) => entry.studentId);
     if (scoreStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
-    Object.keys(body).forEach((key) => {
-      if (!key.startsWith('score_')) return;
-      const studentId = asInt(key.replace('score_', ''));
+    scoreEntries.forEach(({ key, studentId }) => {
       if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return;
       const score = scoreInputToPoints(body[key], scoreMode, maxScore);
       if (score === null) return;
       runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
         ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
     });
-    return redirect(res, `/gradebook?yearId=${schoolYearId}${markingPeriodId ? `&markingPeriodId=${markingPeriodId}` : ''}&grade=${encodeURIComponent(gradeLevel)}&subjectId=${subjectId}&mode=${scoreMode}&assignmentId=${assignmentId}${body.gridMode === 'on' ? '&grid=on' : ''}`, headers);
+    return redirect(res, gradebookRedirectUrl({
+      schoolYearId,
+      markingPeriodId,
+      gradeLevel,
+      subjectId,
+      scoreMode,
+      assignmentId,
+      gridMode: body.gridMode
+    }), headers);
   }
 
   if (p === '/assignments') {
@@ -8400,11 +8186,10 @@ async function handlePost(req, res, p, body, user, headers) {
       const assignmentId = asInt(body.assignmentId);
       const scoreMode = cleanScoreMode(body.scoreMode);
       const maxScore = asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${assignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score);
-      const scoreStudentIds = Object.keys(body).filter((key) => key.startsWith('score_')).map((key) => asInt(key.replace('score_', ''))).filter(Boolean);
+      const scoreEntries = scoreFieldEntries(body);
+      const scoreStudentIds = scoreEntries.map((entry) => entry.studentId);
       if (scoreStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
-      Object.keys(body).forEach((key) => {
-        if (!key.startsWith('score_')) return;
-        const studentId = asInt(key.replace('score_', ''));
+      scoreEntries.forEach(({ key, studentId }) => {
         if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return;
         const score = scoreInputToPoints(body[key], scoreMode, maxScore);
         if (score === null) return;
@@ -8456,122 +8241,131 @@ if (DEMO_MODE) {
 }
 runScheduledBackupIfDue();
 
+function sendAssetFile(res, filePath, missingMessage) {
+  if (!fs.existsSync(filePath)) return sendText(res, 404, missingMessage);
+  res.writeHead(200, {
+    ...securityHeaders(),
+    'Content-Type': contentTypeFor(filePath),
+    'Cache-Control': 'no-cache'
+  });
+  return res.end(fs.readFileSync(filePath));
+}
+
+function selectedPageContext(req, url, pathname, csrfToken, user) {
+  const { years, selected } = getSelectedYear(req, url);
+  if (!selected) return null;
+  return {
+    selected,
+    pageArgs: { csrfToken, user, years, selectedYear: selected, currentPath: pathname }
+  };
+}
+
+function sendAppPage(res, headers, pageArgs, title, content) {
+  return sendHtml(res, pageTemplate({ ...pageArgs, title, content }), headers);
+}
+
+function handleGet(req, res, url, pathname, user, csrfToken, headers) {
+  if (pathname === '/login') {
+    if (user) return redirect(res, '/', headers);
+    return sendHtml(res, loginPage(csrfToken, url.searchParams.get('error') === '1'), headers);
+  }
+
+  if (!user) return redirect(res, '/login', headers);
+
+  if (DEMO_MODE && pathname === '/backup/download') return sendText(res, 404, 'Not Found');
+  if (DEMO_MODE && pathname === '/system-update/status') return sendJson(res, 404, { error: 'Not Found' }, headers);
+
+  if (pathname === '/backup/download') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    const target = backupPath(url.searchParams.get('file'));
+    if (!target || !fs.existsSync(target)) return sendText(res, 404, 'Backup not found');
+    const fileName = path.basename(target);
+    res.writeHead(200, {
+      ...securityHeaders(),
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${fileName}"`
+    });
+    return fs.createReadStream(target).pipe(res);
+  }
+
+  if (pathname === '/system-update/status') {
+    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' }, headers);
+    return sendJson(res, 200, readUpdateStatus(), headers);
+  }
+
+  const context = selectedPageContext(req, url, pathname, csrfToken, user);
+  if (!context) return sendText(res, 500, 'No school year configured');
+  const { selected, pageArgs } = context;
+
+  if (pathname === '/') {
+    if (isParent(user)) return redirect(res, '/parent', headers);
+    return sendAppPage(res, headers, pageArgs, 'Dashboard', dashboardPage(selected));
+  }
+  if (pathname === '/parent') {
+    if (!isParent(user)) return redirect(res, '/', headers);
+    return sendAppPage(res, headers, pageArgs, 'Parent Portal', parentPage(url, user, selected));
+  }
+  if (pathname === '/families') {
+    if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
+    return redirect(res, '/setup?section=families', headers);
+  }
+  if (pathname === '/setup') {
+    if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
+    return sendAppPage(res, headers, pageArgs, 'School Setup', setupPage(selected, csrfToken, url, user));
+  }
+  if (pathname === '/gradebook') {
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+    const markingPeriodId = asInt(url.searchParams.get('markingPeriodId'));
+    if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    const gridParam = cleanText(url.searchParams.get('grid'), 12);
+    if (gridParam === 'on' || gridParam === 'off') appendSetCookie(headers, `gradebookGrid=${gridParam}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    return sendAppPage(res, headers, pageArgs, 'Gradebook', gradebookPage(req, url, user, selected, csrfToken));
+  }
+  if (pathname === '/assignments') {
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+    return sendAppPage(res, headers, pageArgs, 'Assignments', assignmentsPage(req, url, user, selected, csrfToken));
+  }
+  if (pathname === '/report-cards') {
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+    return sendAppPage(res, headers, pageArgs, 'Report Cards', reportCardsPage(url, selected, user));
+  }
+  if (pathname === '/absences') {
+    if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
+    return sendAppPage(res, headers, pageArgs, 'Absences', absencesPage(url, selected, csrfToken, user));
+  }
+  if (pathname === '/reports') {
+    if (isParent(user)) return sendText(res, 403, 'Forbidden');
+    return sendAppPage(res, headers, pageArgs, 'Reports', reportsPage(url, selected, user));
+  }
+  if (pathname === '/users') {
+    if (!canManageSchoolUsers(user)) return sendText(res, 403, 'Forbidden');
+    return redirect(res, '/setup?section=users', headers);
+  }
+
+  return sendText(res, 404, 'Not Found');
+}
+
 const server = http.createServer(async (req, res) => {
   const headers = {};
   const csrfToken = getOrCreateCsrfToken(req, headers);
 
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const p = url.pathname;
+    const pathname = url.pathname;
     const user = currentUser(req);
 
-    if (req.method === 'GET' && p === '/assets/logo') {
-      const logo = logoAsset();
-      if (!fs.existsSync(logo)) return sendText(res, 404, 'Logo not found');
-      res.writeHead(200, {
-        ...securityHeaders(),
-        'Content-Type': contentTypeFor(logo),
-        'Cache-Control': 'no-cache'
-      });
-      return res.end(fs.readFileSync(logo));
-    }
+    if (req.method === 'GET' && pathname === '/assets/logo') return sendAssetFile(res, logoAsset(), 'Logo not found');
 
-    if (req.method === 'GET' && p === '/assets/favicon') {
-      const favicon = faviconAsset();
-      if (!fs.existsSync(favicon)) return sendText(res, 404, 'Favicon not found');
-      res.writeHead(200, {
-        ...securityHeaders(),
-        'Content-Type': contentTypeFor(favicon),
-        'Cache-Control': 'no-cache'
-      });
-      return res.end(fs.readFileSync(favicon));
-    }
+    if (req.method === 'GET' && pathname === '/assets/favicon') return sendAssetFile(res, faviconAsset(), 'Favicon not found');
 
     if (req.method === 'POST') {
       const body = await parseBody(req);
-      return await handlePost(req, res, p, body, user, headers);
+      return await handlePost(req, res, pathname, body, user, headers);
     }
 
     if (req.method !== 'GET') return sendText(res, 405, 'Method Not Allowed');
 
-    if (p === '/login') {
-      if (user) return redirect(res, '/', headers);
-      return sendHtml(res, loginPage(csrfToken, url.searchParams.get('error') === '1'), headers);
-    }
-
-    if (!user) return redirect(res, '/login', headers);
-
-    if (DEMO_MODE && p === '/backup/download') return sendText(res, 404, 'Not Found');
-    if (DEMO_MODE && p === '/system-update/status') return sendJson(res, 404, { error: 'Not Found' }, headers);
-
-    if (p === '/backup/download') {
-      if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-      const target = backupPath(url.searchParams.get('file'));
-      if (!target || !fs.existsSync(target)) return sendText(res, 404, 'Backup not found');
-      const fileName = path.basename(target);
-      res.writeHead(200, {
-        ...securityHeaders(),
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${fileName}"`
-      });
-      return fs.createReadStream(target).pipe(res);
-    }
-
-    if (p === '/system-update/status') {
-      if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' }, headers);
-      return sendJson(res, 200, readUpdateStatus(), headers);
-    }
-
-    const { years, selected } = getSelectedYear(req, url);
-    if (!selected) return sendText(res, 500, 'No school year configured');
-    const pageArgs = { csrfToken, user, years, selectedYear: selected, currentPath: p };
-
-    if (p === '/') {
-      if (isParent(user)) return redirect(res, '/parent', headers);
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Dashboard', content: dashboardPage(selected) }), headers);
-    }
-    if (p === '/parent') {
-      if (!isParent(user)) return redirect(res, '/', headers);
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Parent Portal', content: parentPage(url, user, selected) }), headers);
-    }
-    if (p === '/families') {
-      if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
-      return redirect(res, '/setup?section=families', headers);
-    }
-    if (p === '/setup') {
-      if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'School Setup', content: setupPage(selected, csrfToken, url, user) }), headers);
-    }
-    if (p === '/gradebook') {
-      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-      const markingPeriodId = asInt(url.searchParams.get('markingPeriodId'));
-      if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
-      const gridParam = cleanText(url.searchParams.get('grid'), 12);
-      if (gridParam === 'on' || gridParam === 'off') appendSetCookie(headers, `gradebookGrid=${gridParam}; Path=/; SameSite=Strict; Max-Age=31536000`);
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Gradebook', content: gradebookPage(req, url, user, selected, csrfToken) }), headers);
-    }
-    if (p === '/assignments') {
-      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Assignments', content: assignmentsPage(req, url, user, selected, csrfToken) }), headers);
-    }
-    if (p === '/report-cards') {
-      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Report Cards', content: reportCardsPage(url, selected, user) }), headers);
-    }
-    if (p === '/absences') {
-      if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Absences', content: absencesPage(url, selected, csrfToken, user) }), headers);
-    }
-    if (p === '/reports') {
-      if (isParent(user)) return sendText(res, 403, 'Forbidden');
-      return sendHtml(res, pageTemplate({ ...pageArgs, title: 'Reports', content: reportsPage(url, selected, user) }), headers);
-    }
-    if (p === '/users') {
-      if (!canManageSchoolUsers(user)) return sendText(res, 403, 'Forbidden');
-      return redirect(res, '/setup?section=users', headers);
-    }
-
-    return sendText(res, 404, 'Not Found');
+    return handleGet(req, res, url, pathname, user, csrfToken, headers);
   } catch (error) {
     if (error.message === 'Payload too large') return sendText(res, 413, 'Payload too large');
     if (error.statusCode) return sendText(res, error.statusCode, error.message || 'Bad Request');

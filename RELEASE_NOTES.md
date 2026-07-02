@@ -1,5 +1,11 @@
 # Release Notes
 
+## 0.0.9
+
+- Refactored the server startup, configuration, HTTP helpers, input normalization, and gradebook form helpers into focused modules while preserving existing behavior.
+- Simplified GET request dispatch and shared gradebook score redirect/parsing logic for safer maintenance.
+- Added dependency-free refactor regression checks for the extracted helper behavior.
+
 ## 0.0.8
 
 - Hid Network Access, Backups, and System Updates from School Setup while running in demo mode, including direct access to the related backup and update routes.
