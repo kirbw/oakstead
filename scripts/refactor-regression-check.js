@@ -8,6 +8,7 @@ const {
 } = require('../server/config');
 const {
   asPoints,
+  buildTransaction,
   cleanScoreMode,
   esc,
   normalizeCategory,
@@ -20,6 +21,7 @@ const {
   gridScoreEntries,
   scoreFieldEntries
 } = require('../server/gradebook-utils');
+const { safeInternalPath } = require('../server/http');
 
 assert.strictEqual(parsePort('3001'), 3001);
 assert.strictEqual(parsePort('bad', 3000), 3000);
@@ -85,5 +87,22 @@ assert.deepStrictEqual(gridScoreEntries(gridBody), [
   { key: 'gridscore_4_5', assignmentId: 4, studentId: 5 },
   { key: 'gridscore_7_8', assignmentId: 7, studentId: 8 }
 ]);
+
+assert.strictEqual(safeInternalPath('/setup?section=families'), '/setup');
+assert.strictEqual(safeInternalPath('http://localhost:3000/gradebook?x=1'), '/gradebook');
+// Host is stripped to a same-origin path, so these are safe (no open redirect).
+assert.strictEqual(safeInternalPath('//evil.com/setup'), '/setup');
+assert.strictEqual(safeInternalPath('https://evil.com/steal'), '/steal');
+// A pathname that itself starts with '//' would be a protocol-relative open redirect — reject it.
+assert.strictEqual(safeInternalPath('http://localhost//evil.com/x'), '/');
+assert.strictEqual(safeInternalPath(''), '/');
+assert.strictEqual(safeInternalPath(undefined), '/');
+
+assert.strictEqual(buildTransaction([]), '');
+assert.strictEqual(buildTransaction(['INSERT INTO t VALUES (1)']), 'BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;');
+assert.strictEqual(
+  buildTransaction(['INSERT INTO t VALUES (1);', '  ', 'DELETE FROM t WHERE id=2']),
+  'BEGIN;\nINSERT INTO t VALUES (1);\nDELETE FROM t WHERE id=2;\nCOMMIT;'
+);
 
 console.log('Refactor regression checks passed.');

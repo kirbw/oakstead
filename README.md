@@ -100,7 +100,7 @@ Oakstead loads environment variables from a local `.env` file when present. Comm
 - `SQLITE_BIN`: SQLite CLI executable. Defaults to `sqlite3`.
 - `OAKSTEAD_UPDATE_MODE`: `git` for source installs or `installer` for packaged Windows installs. Defaults to `git`.
 - `OAKSTEAD_RELEASE_REPO`: GitHub release repository slug for installer updates, for example `kirbw/oakstead`.
-- `DEMO_MODE`: Set to `1`, `true`, `yes`, or `on` to run demo mode.
+- `DEMO_MODE`: Set to `1`, `true`, `yes`, or `on` to run demo mode. **This disables all authentication — every visitor is treated as an admin with full read/write access.** Leave it off (the default) for any deployment with real student data; use it only for throwaway public demos.
 - `DEMO_REFRESH_HOURS`: Demo reset interval from 1 to 24 hours. Defaults to `2`.
 
 The in-app Network Access setting is saved in `school.db`. On a headless Linux host, you can update that saved mode from SSH:

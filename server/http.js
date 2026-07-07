@@ -1,7 +1,17 @@
 const crypto = require('crypto');
 const querystring = require('querystring');
 
-function createHttpHelpers({ escapeHtml, maxBodySize }) {
+function safeInternalPath(value, fallback = '/') {
+  try {
+    const pathname = new URL(String(value ?? ''), 'http://localhost').pathname;
+    return pathname.startsWith('/') && !pathname.startsWith('//') ? pathname : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function createHttpHelpers({ escapeHtml, maxBodySize, scriptHash }) {
+  const scriptSrc = scriptHash ? `'self' 'sha256-${scriptHash}'` : "'self' 'unsafe-inline'";
   function parseCookies(req) {
     return String(req.headers.cookie || '').split(';').reduce((cookies, part) => {
       const [key, ...rest] = part.trim().split('=');
@@ -93,7 +103,8 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
 
   function securityHeaders() {
     return {
-      'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      // style-src keeps 'unsafe-inline' as an accepted trade-off: the app uses inline style attributes and style-injection is far lower risk than script-injection. script-src is locked to a sha256 hash of the one static inline script.
+      'Content-Security-Policy': `default-src 'self'; style-src 'self' 'unsafe-inline'; script-src ${scriptSrc}; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
       'X-Frame-Options': 'DENY',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -137,4 +148,4 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
   };
 }
 
-module.exports = { createHttpHelpers };
+module.exports = { createHttpHelpers, safeInternalPath };
