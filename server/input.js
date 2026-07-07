@@ -13,6 +13,15 @@ function sqlValue(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+function buildTransaction(statements) {
+  const clean = (Array.isArray(statements) ? statements : [])
+    .map((statement) => String(statement || '').trim())
+    .filter(Boolean)
+    .map((statement) => (statement.endsWith(';') ? statement : `${statement};`));
+  if (!clean.length) return '';
+  return `BEGIN;\n${clean.join('\n')}\nCOMMIT;`;
+}
+
 function asInt(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
@@ -95,6 +104,7 @@ module.exports = {
   asInt,
   asPoints,
   asScore,
+  buildTransaction,
   cleanDate,
   cleanGrade,
   cleanScoreMode,
