@@ -15,10 +15,10 @@ const APP_ITEMS = [
   'README.md',
   'RELEASE_NOTES.md',
   'LICENSE',
-  'html2pdf.bundle.min.js',
   'assets',
   'public',
-  'scripts'
+  'scripts',
+  'server'
 ];
 
 function copyRecursive(source, target) {
@@ -56,7 +56,6 @@ APP_ITEMS.forEach((item) => {
 });
 
 copyRequired(path.join(VENDOR, 'node'), path.join(DIST, 'runtime', 'node'), 'Node.js Windows runtime');
-copyRequired(path.join(VENDOR, 'sqlite'), path.join(DIST, 'runtime', 'sqlite'), 'SQLite Windows tools');
 copyRequired(path.join(VENDOR, 'winsw', 'Oakstead.Service.exe'), path.join(DIST, 'service', 'Oakstead.Service.exe'), 'WinSW service executable');
 copyRecursive(path.join(ROOT, 'packaging', 'windows', 'service', 'Oakstead.Service.xml'), path.join(DIST, 'service', 'Oakstead.Service.xml'));
 copyRecursive(path.join(ROOT, 'packaging', 'windows', 'open-oakstead.cmd'), path.join(DIST, 'open-oakstead.cmd'));

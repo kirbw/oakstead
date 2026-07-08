@@ -28,13 +28,13 @@ Oakstead is a small-school records and gradebook app built for simple daily clas
 - Smoother app-shell navigation for internal pages and filters
 - In-app system updates from GitHub with current release and pre-release channels
 - Local-only or trusted-LAN hosting modes with visible host URLs
-- Windows installer packaging support with service, bundled SQLite, and release-asset update checks
+- Windows installer packaging support with service and release-asset update checks
 - Static project website page in `website/`
 
 ## Tech
 
 - Node.js built-in HTTP server
-- SQLite database via the `sqlite3` CLI
+- SQLite database via the built-in `node:sqlite` module (no external tools or npm dependencies)
 - Server-rendered HTML/CSS/JS with no frontend framework
 
 The app stores its primary data in `school.db` by default. For testing, you can point it at a different database file:
@@ -45,18 +45,19 @@ DB_FILE=/tmp/oakstead-test.db PORT=3001 npm start
 
 ## Requirements
 
-- Node.js with npm available on the server for source installs.
-- The `sqlite3` command-line program available in `PATH`, or set `SQLITE_BIN` to an explicit executable path. Oakstead shells out to the SQLite CLI for database reads, writes, backup validation, and restore checks.
+- Node.js 22.5 or newer with npm available on the server for source installs. Oakstead uses the built-in `node:sqlite` module; no separate SQLite install is needed.
 - A writable runtime data directory for `school.db`, `backups/`, uploads, `.oakstead-update-status.json`, and any custom school assets.
 - Git available in `PATH` if you want to use in-app system updates from a GitHub remote.
 - A trusted local network, VPN, or protective reverse proxy. Oakstead should not be exposed directly to the public internet.
 
-Packaged Windows installs bundle Node.js and SQLite, run as a Windows service, and store runtime data outside the install folder.
+Packaged Windows installs bundle Node.js, run as a Windows service, and store runtime data outside the install folder.
+
+The database uses SQLite's WAL mode. To copy `school.db` by hand, stop the server first or use the in-app backup feature; a raw copy taken while the server is running can miss recent writes.
 
 On Debian or Ubuntu, the system packages usually look like:
 
 ```bash
-sudo apt install nodejs npm sqlite3 git
+sudo apt install nodejs npm git
 ```
 
 ## Install and Run
@@ -97,7 +98,6 @@ Oakstead loads environment variables from a local `.env` file when present. Comm
 - `OAKSTEAD_DEFAULT_PORT`: Default port used when `PORT` is not set. Defaults to `3000`.
 - `OAKSTEAD_DATA_DIR`: Runtime data directory for `school.db`, backups, uploads, and update status. Defaults to the project directory for source installs.
 - `DB_FILE`: SQLite database path. Defaults to `school.db` inside `OAKSTEAD_DATA_DIR`.
-- `SQLITE_BIN`: SQLite CLI executable. Defaults to `sqlite3`.
 - `OAKSTEAD_UPDATE_MODE`: `git` for source installs or `installer` for packaged Windows installs. Defaults to `git`.
 - `OAKSTEAD_RELEASE_REPO`: GitHub release repository slug for installer updates, for example `kirbw/oakstead`.
 - `DEMO_MODE`: Set to `1`, `true`, `yes`, or `on` to run demo mode. **This disables all authentication — every visitor is treated as an admin with full read/write access.** Leave it off (the default) for any deployment with real student data; use it only for throwaway public demos.
@@ -107,7 +107,7 @@ The in-app Network Access setting is saved in `school.db`. On a headless Linux h
 
 ```bash
 sudo systemctl stop oakstead
-sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead SQLITE_BIN=/usr/bin/sqlite3 node /opt/oakstead/server.js --set-network-access lan
+sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead node /opt/oakstead/server.js --set-network-access lan
 sudo systemctl restart oakstead
 ```
 
@@ -118,7 +118,6 @@ Example `.env`:
 ```bash
 PORT=3000
 OAKSTEAD_DATA_DIR=/srv/oakstead
-SQLITE_BIN=/usr/bin/sqlite3
 ```
 
 Use the included demo seed script only for demo or disposable data:
@@ -140,7 +139,7 @@ Windows packaging files live in `packaging/windows/`. The installer path stages 
 - App files under `Program Files\Oakstead`.
 - Runtime data under `%ProgramData%\Oakstead`.
 - A Windows service that starts Oakstead on boot.
-- Bundled Node.js and `sqlite3.exe`.
+- Bundled Node.js runtime.
 - Optional Windows Firewall rule for TCP port `3000`.
 
 Prepare the package after adding the local vendor runtimes described in `packaging/windows/README.md`:

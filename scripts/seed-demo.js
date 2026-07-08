@@ -1,32 +1,21 @@
-const { execFileSync } = require('child_process');
 const path = require('path');
+const { createDb } = require('../server/db');
 
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'school.db');
-const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
 const SHOULD_RESET = process.argv.includes('--reset');
+
+const db = createDb({ dbFile: DB_FILE });
+const { runSql: run, querySql: query, insertReturningId } = db;
 
 function sqlValue(value) {
   if (value === null || value === undefined || value === '') return 'NULL';
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function run(sql) {
-  execFileSync(SQLITE_BIN, [DB_FILE, sql], { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 });
-}
-
 function runStatementsInChunks(statements, chunkSize = 300) {
   for (let index = 0; index < statements.length; index += chunkSize) {
-    run(['BEGIN;', ...statements.slice(index, index + chunkSize), 'COMMIT;'].join('\n'));
+    db.runSqlTransaction(['BEGIN;', ...statements.slice(index, index + chunkSize), 'COMMIT;'].join('\n'));
   }
-}
-
-function query(sql) {
-  const out = execFileSync(SQLITE_BIN, ['-json', DB_FILE, sql], { encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 }).trim();
-  return out ? JSON.parse(out) : [];
-}
-
-function insertReturningId(sql) {
-  return query(`${sql} RETURNING id;`)[0].id;
 }
 
 function findOne(sql) {
@@ -35,7 +24,6 @@ function findOne(sql) {
 
 function resetData() {
   run(`
-PRAGMA foreign_keys=OFF;
 DELETE FROM os_scores;
 DELETE FROM os_assignments;
 DELETE FROM os_grade_subjects;
@@ -61,7 +49,6 @@ DELETE FROM os_users;
 DELETE FROM os_school_years;
 DELETE FROM os_settings;
 DELETE FROM sqlite_sequence WHERE name LIKE 'os_%';
-PRAGMA foreign_keys=ON;
 `);
 }
 

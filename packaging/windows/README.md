@@ -6,8 +6,7 @@ This packaging path creates an installer that runs Oakstead as a Windows service
 
 Place these files before running the packaging prep script:
 
-- `packaging/windows/vendor/node/` containing the Windows x64 Node.js runtime, including `node.exe`.
-- `packaging/windows/vendor/sqlite/` containing `sqlite3.exe` from the SQLite Windows tools bundle.
+- `packaging/windows/vendor/node/` containing the Windows x64 Node.js runtime (version 22.5 or newer; Oakstead uses the built-in `node:sqlite` module), including `node.exe`.
 - `packaging/windows/vendor/winsw/Oakstead.Service.exe`, a renamed WinSW x64 service wrapper executable.
 
 These binaries are intentionally not committed to the repo.
@@ -25,13 +24,12 @@ The installer output is written to `dist/windows/installer/Oakstead-Setup-v0.0.9
 
 1. Build from a clean release branch or tag after running `npm run check`.
 2. Install Inno Setup 6 on the Windows build machine and make sure `iscc.exe` is available from PowerShell.
-3. Download a supported Windows x64 Node.js runtime zip and copy its extracted contents into `packaging/windows/vendor/node/` so `packaging/windows/vendor/node/node.exe` exists.
-4. Download the SQLite Windows command-line tools and copy `sqlite3.exe` into `packaging/windows/vendor/sqlite/`.
-5. Download the WinSW x64 executable, rename it to `Oakstead.Service.exe`, and place it at `packaging/windows/vendor/winsw/Oakstead.Service.exe`.
-6. Run `npm run prepare:windows` from the repository root. The script stages app files, runtime binaries, service files, and shortcuts under `dist/windows/`.
-7. Run `iscc packaging\windows\Oakstead.iss /DAppVersion=0.0.9` to compile the installer.
-8. Test the generated installer on a disposable Windows machine or VM. Confirm the Oakstead service installs, starts, opens at `http://127.0.0.1:3000`, writes data under `%ProgramData%\Oakstead`, and can survive a reboot.
-9. Publish the installer as a GitHub Release asset named `Oakstead-Setup-v0.0.9.exe` so packaged installs can find future installer updates.
+3. Download a supported Windows x64 Node.js runtime zip (version 22.5 or newer) and copy its extracted contents into `packaging/windows/vendor/node/` so `packaging/windows/vendor/node/node.exe` exists.
+4. Download the WinSW x64 executable, rename it to `Oakstead.Service.exe`, and place it at `packaging/windows/vendor/winsw/Oakstead.Service.exe`.
+5. Run `npm run prepare:windows` from the repository root. The script stages app files, runtime binaries, service files, and shortcuts under `dist/windows/`.
+6. Run `iscc packaging\windows\Oakstead.iss /DAppVersion=0.0.9` to compile the installer.
+7. Test the generated installer on a disposable Windows machine or VM. Confirm the Oakstead service installs, starts, opens at `http://127.0.0.1:3000`, writes data under `%ProgramData%\Oakstead`, and can survive a reboot.
+8. Publish the installer as a GitHub Release asset named `Oakstead-Setup-v0.0.9.exe` so packaged installs can find future installer updates.
 
 ## Runtime behavior
 

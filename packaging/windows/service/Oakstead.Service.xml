@@ -9,7 +9,6 @@
   <env name="OAKSTEAD_DATA_DIR" value="%ProgramData%\Oakstead" />
   <env name="OAKSTEAD_DEFAULT_HOST" value="0.0.0.0" />
   <env name="OAKSTEAD_DEFAULT_PORT" value="3000" />
-  <env name="SQLITE_BIN" value="%BASE%\..\runtime\sqlite\sqlite3.exe" />
   <logpath>%ProgramData%\Oakstead\logs</logpath>
   <log mode="roll-by-size">
     <sizeThreshold>10485760</sizeThreshold>

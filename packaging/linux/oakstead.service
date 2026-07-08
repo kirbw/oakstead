@@ -8,7 +8,6 @@ Type=simple
 WorkingDirectory=/opt/oakstead
 EnvironmentFile=-/etc/oakstead/oakstead.env
 Environment=OAKSTEAD_DATA_DIR=/var/lib/oakstead
-Environment=SQLITE_BIN=/usr/bin/sqlite3
 Environment=OAKSTEAD_UPDATE_MODE=git
 ExecStart=/usr/bin/node /opt/oakstead/server.js
 Restart=on-failure
