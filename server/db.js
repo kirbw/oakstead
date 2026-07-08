@@ -5,7 +5,9 @@ let DatabaseSync;
 try {
   ({ DatabaseSync } = require('node:sqlite'));
 } catch {
-  console.error(`Oakstead requires Node.js 22.5 or newer (node:sqlite). You are running ${process.version}.`);
+  console.error(`Oakstead requires Node.js 22.13 or newer for the built-in node:sqlite module. You are running ${process.version}.`);
+  console.error('Node 22.5-22.12 exposes node:sqlite only behind the --experimental-sqlite flag, so upgrade to Node 22.13+ (or 24+) rather than adding a flag.');
+  console.error('On Debian/Ubuntu: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs');
   process.exit(1);
 }
 
