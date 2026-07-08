@@ -1,5 +1,39 @@
 # Release Notes
 
+## 0.0.10
+
+**Breaking: requires Node.js 22.13 or newer.** Oakstead now uses Node's built-in
+`node:sqlite` module instead of shelling out to the `sqlite3` CLI, so the CLI is
+no longer needed anywhere. When updating an existing source install, upgrade Node
+before restarting the service or it will exit on startup. Node 22.5–22.12 gate
+`node:sqlite` behind the `--experimental-sqlite` flag, so use 22.13+ or 24+.
+On Debian/Ubuntu: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`.
+Packaged Windows installs bundle their own Node runtime and are unaffected.
+
+Performance:
+
+- Replaced the per-statement `sqlite3` subprocess model with a persistent
+  in-process `node:sqlite` connection (WAL mode). Typical authenticated pages now
+  render in a few milliseconds instead of hundreds, and requests no longer
+  serialize behind one another.
+- Serve the app stylesheet and script as cached, content-versioned `/assets/app.css`
+  and `/assets/app.js` files, and gzip HTML responses, so navigation after the
+  first load transfers far less data.
+- Save gradebook scores in a single transaction and authorize them with one
+  set-based query instead of one query per student.
+- Cache school-year and settings lookups for the read hot path.
+- Removed the unused 906KB `html2pdf` bundle from the app and installer.
+
+Security and correctness:
+
+- Ship with authentication enabled by default. `DEMO_MODE` (which disables all
+  authentication) is now off unless explicitly set, `.env` is no longer tracked in
+  git, and the server warns loudly if demo mode runs on a non-loopback address.
+- Locked the Content-Security-Policy `script-src` to the app's own script (no more
+  `unsafe-inline`).
+- Hardened the year switcher against malformed `Referer` headers and open redirects.
+- Stopped tracking database backups (`backups/*.db`) that contained real records.
+
 ## 0.0.9
 
 - Refactored the server startup, configuration, HTTP helpers, input normalization, and gradebook form helpers into focused modules while preserving existing behavior.
