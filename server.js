@@ -4,8 +4,9 @@ const https = require('https');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { execFileSync, spawn, spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
+const zlib = require('zlib');
 const {
   APP_REPOSITORY_URL,
   APP_ROOT,
@@ -29,7 +30,6 @@ const {
   PUBLIC_DIR,
   RELEASE_REPO,
   SESSION_HOURS,
-  SQLITE_BIN,
   UPDATE_MODE,
   UPDATE_STATUS_FILE,
   UPLOAD_DIR,
@@ -53,2095 +53,14 @@ const {
   scoreValueForMode,
   sqlValue
 } = require('./server/input');
-const { createHttpHelpers, safeInternalPath } = require('./server/http');
+const { createDb } = require('./server/db');
+const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
   gridScoreEntries,
   scoreFieldEntries
 } = require('./server/gradebook-utils');
-const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
-  var orig = btn.textContent;
-  btn.textContent = 'Preparing…';
-  btn.disabled = true;
-  function restore() {
-    btn.textContent = orig; btn.disabled = false;
-    document.body.classList.remove('report-card-printing');
-  }
-  document.body.classList.add('report-card-printing');
-  setTimeout(function() {
-    window.print();
-    setTimeout(restore, 700);
-  }, 50);
-}
-(function(){
-  const root = document.documentElement;
-  const saved = localStorage.getItem('oakstead-theme');
-  const gridTimers = new WeakMap();
-  let gridSaveQueue = Promise.resolve();
-  let activeScoreInput = null;
-  let navAbort = null;
-  if (saved === 'dark') root.setAttribute('data-theme', 'dark');
-
-  function mainEl() {
-    return document.querySelector('[data-app-main]') || document.querySelector('.main');
-  }
-
-  function setMobileNav(open) {
-    const navToggle = document.getElementById('navToggle');
-    document.body.classList.toggle('nav-open', open);
-    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  }
-
-  function canUseAppNav(url) {
-    return url.origin === window.location.origin
-      && !url.pathname.startsWith('/assets/')
-      && url.pathname !== '/backup/download'
-      && url.pathname !== '/system-update/status';
-  }
-
-  function isSamePageHash(url) {
-    return url.hash && url.pathname === window.location.pathname && url.search === window.location.search;
-  }
-
-  function updateShellFrom(doc) {
-    const currentNav = document.querySelector('.nav-links');
-    const nextNav = doc.querySelector('.nav-links');
-    if (currentNav && nextNav) currentNav.innerHTML = nextNav.innerHTML;
-    const currentMobileLabel = document.querySelector('#navToggle .nav-toggle-main span');
-    const nextMobileLabel = doc.querySelector('#navToggle .nav-toggle-main span');
-    if (currentMobileLabel && nextMobileLabel) currentMobileLabel.textContent = nextMobileLabel.textContent;
-  }
-
-  function navigateApp(to, options) {
-    options = options || {};
-    const nextUrl = new URL(to, window.location.href);
-    if (!canUseAppNav(nextUrl)) {
-      window.location.href = nextUrl.toString();
-      return Promise.resolve(false);
-    }
-    const currentMain = mainEl();
-    if (!currentMain) {
-      window.location.href = nextUrl.toString();
-      return Promise.resolve(false);
-    }
-    if (navAbort) navAbort.abort();
-    navAbort = new AbortController();
-    currentMain.classList.add('app-loading');
-    return fetch(nextUrl.toString(), {
-      signal: navAbort.signal,
-      headers: { Accept: 'text/html', 'X-Requested-With': 'Oakstead-App-Shell' }
-    }).then(function(response) {
-      if (!response.ok) throw new Error('Navigation failed');
-      return response.text().then(function(html) {
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        const nextMain = doc.querySelector('[data-app-main]') || doc.querySelector('.main');
-        if (!nextMain) {
-          window.location.href = response.url || nextUrl.toString();
-          return false;
-        }
-        document.title = doc.title || document.title;
-        updateShellFrom(doc);
-        const liveMain = mainEl();
-        liveMain.replaceWith(document.importNode(nextMain, true));
-        if (options.push !== false) history.pushState({ oaksteadApp: true }, '', nextUrl.toString());
-        if (options.scroll !== false) window.scrollTo(0, 0);
-        setMobileNav(false);
-        initDynamicContent(mainEl());
-        return true;
-      });
-    }).catch(function(error) {
-      if (error.name === 'AbortError') return false;
-      window.location.href = nextUrl.toString();
-      return false;
-    }).finally(function() {
-      const liveMain = mainEl();
-      if (liveMain) liveMain.classList.remove('app-loading');
-    });
-  }
-
-  function formToUrl(form) {
-    const url = new URL(form.getAttribute('action') || window.location.href, window.location.href);
-    url.search = '';
-    new FormData(form).forEach(function(value, key) {
-      if (key) url.searchParams.append(key, value);
-    });
-    return url;
-  }
-
-  function submitFormSmoothly(form, options) {
-    if (!form) return;
-    const method = (form.getAttribute('method') || 'get').toLowerCase();
-    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) {
-      form.submit();
-      return;
-    }
-    navigateApp(formToUrl(form), options);
-  }
-
-  function goToUrl(url, options) {
-    const nextUrl = new URL(url, window.location.href);
-    if (canUseAppNav(nextUrl)) navigateApp(nextUrl, options);
-    else window.location.href = nextUrl.toString();
-  }
-
-  const themeToggle = document.getElementById('themeToggle');
-  if (themeToggle) {
-    themeToggle.addEventListener('click', function(){
-      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-      root.setAttribute('data-theme', next === 'dark' ? 'dark' : '');
-      localStorage.setItem('oakstead-theme', next);
-    });
-  }
-
-  const navToggle = document.getElementById('navToggle');
-  const primaryNav = document.getElementById('primaryNav');
-  if (navToggle && primaryNav) {
-    navToggle.addEventListener('click', function(event) {
-      event.stopPropagation();
-      setMobileNav(!document.body.classList.contains('nav-open'));
-    });
-    primaryNav.addEventListener('click', function(event) {
-      if (event.target.closest('a')) setMobileNav(false);
-    });
-    document.addEventListener('click', function(event) {
-      if (!document.body.classList.contains('nav-open')) return;
-      if (primaryNav.contains(event.target) || navToggle.contains(event.target)) return;
-      setMobileNav(false);
-    });
-    document.addEventListener('keydown', function(event) {
-      if (event.key === 'Escape') setMobileNav(false);
-    });
-  }
-
-  document.querySelectorAll('.year-form select').forEach(function(select) {
-    select.addEventListener('change', function() {
-      select.form.submit();
-    });
-  });
-
-  document.addEventListener('click', function(event) {
-    const printButton = event.target.closest('[data-print-page]');
-    if (printButton) {
-      window.print();
-      return;
-    }
-    const pdfButton = event.target.closest('[data-generate-pdf]');
-    if (pdfButton) {
-      generateReportCardPdf(pdfButton);
-      return;
-    }
-    const closeButton = event.target.closest('[data-dialog-close]');
-    if (closeButton) {
-      closeButton.closest('dialog')?.close();
-      return;
-    }
-    const dialogButton = event.target.closest('[data-dialog-target]');
-    if (dialogButton) {
-      const dialog = document.getElementById(dialogButton.dataset.dialogTarget);
-      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
-      return;
-    }
-    if (event.target.matches('.assignment-dialog')) {
-      event.target.close();
-      return;
-    }
-    const scoreChip = event.target.closest('[data-score-chip]');
-    if (scoreChip) {
-      const target = activeScoreInput || document.querySelector('[data-score-input]');
-      if (!target) return;
-      target.value = scoreChip.dataset.scoreChip;
-      updateScorePreview(target);
-      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
-      if (next) {
-        next.focus();
-        next.select();
-      }
-      return;
-    }
-    const anchor = event.target.closest('a[href]');
-    if (!anchor || event.defaultPrevented) return;
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (anchor.target || anchor.hasAttribute('download') || anchor.dataset.noAppNav !== undefined) return;
-    const url = new URL(anchor.href, window.location.href);
-    if (!canUseAppNav(url) || isSamePageHash(url)) return;
-    event.preventDefault();
-    navigateApp(url);
-  });
-
-  document.addEventListener('submit', function(event) {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement)) return;
-    const method = (form.getAttribute('method') || 'get').toLowerCase();
-    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) return;
-    event.preventDefault();
-    navigateApp(formToUrl(form));
-  });
-
-  document.addEventListener('change', function(event) {
-    const assignmentSelect = event.target.closest('[data-assignment-select]');
-    if (assignmentSelect) {
-      if (assignmentSelect.dataset.baseUrl) {
-        const nextUrl = new URL(assignmentSelect.dataset.baseUrl, window.location.origin);
-        if (assignmentSelect.value === '__new__') {
-          nextUrl.searchParams.delete('assignmentId');
-          nextUrl.searchParams.set('action', 'add');
-        } else if (assignmentSelect.value) {
-          nextUrl.searchParams.delete('action');
-          nextUrl.searchParams.set('assignmentId', assignmentSelect.value);
-        }
-        goToUrl(nextUrl);
-        return;
-      }
-      if (assignmentSelect.value) {
-        submitFormSmoothly(assignmentSelect.form);
-      } else {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('assignmentId');
-        goToUrl(url);
-      }
-      return;
-    }
-    const scoreModeToggle = event.target.closest('[data-score-mode-toggle]');
-    if (scoreModeToggle) {
-      goToUrl(scoreModeToggle.checked ? scoreModeToggle.dataset.wrongUrl : scoreModeToggle.dataset.percentUrl);
-      return;
-    }
-    const gridToggle = event.target.closest('[data-grid-toggle]');
-    if (gridToggle) {
-      goToUrl(gridToggle.checked ? gridToggle.dataset.onUrl : gridToggle.dataset.offUrl);
-      return;
-    }
-    const lettersToggle = event.target.closest('[data-grid-letters-toggle]');
-    if (lettersToggle) {
-      syncGridLettersToggle(lettersToggle, true);
-      return;
-    }
-    if (event.target.matches('select[name="groupId"]')) {
-      syncRoleOptions(event.target.closest('form'));
-      return;
-    }
-    const gridInput = event.target.closest('[data-grid-score-input]');
-    if (gridInput) {
-      clearTimeout(gridTimers.get(gridInput));
-      autosaveGridInput(gridInput);
-      return;
-    }
-    const auto = event.target.closest('[data-auto-submit]');
-    if (auto && auto.form) submitFormSmoothly(auto.form, { scroll: false });
-  });
-
-  document.addEventListener('focusin', function(event) {
-    if (event.target.matches('[data-score-input]')) {
-      activeScoreInput = event.target;
-      window.setTimeout(function() { event.target.select?.(); }, 0);
-    }
-  });
-
-  document.addEventListener('input', function(event) {
-    if (event.target.matches('[data-score-input]')) {
-      updateScorePreview(event.target);
-      return;
-    }
-    if (event.target.matches('[data-grid-score-input]')) {
-      const input = event.target;
-      clearTimeout(gridTimers.get(input));
-      gridTimers.set(input, setTimeout(function() { autosaveGridInput(input); }, 550));
-      return;
-    }
-    if (event.target.matches('input[name="maxScore"]')) {
-      event.target.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
-    }
-  });
-
-  document.addEventListener('keydown', function(event) {
-    const input = event.target.closest('[data-grid-score-input]');
-    if (!input || event.key !== 'Tab') return;
-    const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
-    const index = inputs.indexOf(input);
-    const next = inputs[index + (event.shiftKey ? -1 : 1)];
-    if (!next) return;
-    event.preventDefault();
-    autosaveGridInput(input);
-    next.focus();
-    next.select?.();
-  });
-
-  window.addEventListener('popstate', function() {
-    navigateApp(window.location.href, { push: false, scroll: false });
-  });
-
-  history.replaceState({ oaksteadApp: true }, '', window.location.href);
-
-  function formatScorePreviewNumber(value) {
-    if (!Number.isFinite(value)) return '';
-    return value.toFixed(1).replace(/\\.0$/, '');
-  }
-
-  function updateScorePreview(input) {
-    const preview = input.closest('.score-entry-cell')?.querySelector('[data-score-preview]');
-    if (!preview) return;
-    const formPoints = Number(input.form?.querySelector('input[name="maxScore"]')?.value);
-    const points = Number.isFinite(formPoints) && formPoints > 0 ? formPoints : Number(input.dataset.scorePoints || 100);
-    const raw = Number(input.value);
-    const mode = input.dataset.scoreMode || input.form?.querySelector('input[name="scoreMode"]')?.value || 'wrong';
-    input.max = mode === 'percent' ? '100' : String(points);
-    if (!Number.isFinite(raw)) {
-      preview.textContent = mode === 'percent' ? formatScorePreviewNumber(points) + ' pts possible' : 'out of ' + formatScorePreviewNumber(points);
-      return;
-    }
-    if (mode === 'percent') {
-      const earned = Math.max(0, Math.min(points, (Math.max(0, Math.min(100, raw)) / 100) * points));
-      preview.textContent = formatScorePreviewNumber(earned) + ' / ' + formatScorePreviewNumber(points) + ' pts';
-      return;
-    }
-    const wrong = Math.max(0, Math.min(points, raw));
-    const percent = points > 0 ? ((points - wrong) / points) * 100 : 0;
-    preview.textContent = formatScorePreviewNumber(percent) + '%';
-  }
-
-  function syncGridLettersToggle(toggle, save) {
-    const shell = toggle.closest('.gb-grid-shell');
-    if (!save && localStorage.getItem('oakstead-gradebook-letters') === 'off') toggle.checked = false;
-    shell?.classList.toggle('letters-hidden', !toggle.checked);
-    if (save) localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
-  }
-
-  function markGridCell(input, state) {
-    const cell = input.closest('.gb-grid-score-cell');
-    if (!cell) return;
-    cell.classList.remove('saving', 'saved', 'save-error');
-    if (state) cell.classList.add(state);
-  }
-
-  function gridHidden(container, name) {
-    return container.querySelector('input[name="' + name + '"]')?.value || '';
-  }
-
-  function updateGridAverages(result, container) {
-    if (!result || !result.display) return;
-    const root = container || document;
-    const assignmentId = String(result.assignmentId || '');
-    const studentId = String(result.studentId || '');
-    const assignmentAverage = assignmentId ? root.querySelector('[data-grid-assignment-average="' + assignmentId + '"]') : null;
-    const studentAverage = studentId ? root.querySelector('[data-grid-student-average="' + studentId + '"]') : null;
-    const classAverage = root.querySelector('[data-grid-class-average]');
-    if (assignmentAverage && result.display.assignmentAverage !== undefined) assignmentAverage.innerHTML = result.display.assignmentAverage;
-    if (studentAverage && result.display.studentAverage !== undefined) studentAverage.innerHTML = result.display.studentAverage;
-    if (classAverage && result.display.classAverage !== undefined) classAverage.innerHTML = result.display.classAverage;
-  }
-
-  function autosaveGridInput(input) {
-    const container = input.closest('[data-grid-autosave]');
-    if (!container || input.value === input.dataset.originalValue) return;
-    const valueToSave = input.value;
-    gridSaveQueue = gridSaveQueue
-      .catch(function() {})
-      .then(function() {
-        return saveGridInput(input, container, valueToSave);
-      });
-  }
-
-  function saveGridInput(input, container, valueToSave) {
-    if (!input.isConnected || !container.isConnected || valueToSave === input.dataset.originalValue) return Promise.resolve();
-    const formData = new FormData();
-    formData.set('csrfToken', gridHidden(container, 'csrfToken'));
-    formData.set('action', 'grid-score');
-    formData.set('schoolYearId', gridHidden(container, 'schoolYearId'));
-    formData.set('markingPeriodId', gridHidden(container, 'markingPeriodId'));
-    formData.set('gradeLevel', gridHidden(container, 'gradeLevel'));
-    formData.set('subjectId', gridHidden(container, 'subjectId'));
-    formData.set('scoreMode', gridHidden(container, 'scoreMode'));
-    formData.set('assignmentId', input.dataset.assignmentId || '');
-    formData.set('studentId', input.dataset.studentId || '');
-    formData.set('scoreValue', valueToSave);
-    const status = container.querySelector('[data-grid-autosave-status]');
-    markGridCell(input, 'saving');
-    if (status) status.textContent = 'Saving...';
-    return fetch(container.dataset.action || '/gradebook', { method: 'POST', body: formData, headers: { Accept: 'application/json' } })
-      .then(function(response) {
-        if (!response.ok) throw new Error('Save failed');
-        return response.json();
-      })
-      .then(function(result) {
-        if (!input.isConnected || !container.isConnected) return;
-        input.dataset.originalValue = valueToSave;
-        if (input.value !== valueToSave) return;
-        const letter = input.closest('.gb-grid-score-cell')?.querySelector('.gb-cell-letter');
-        if (letter && result.letter !== undefined) letter.textContent = result.letter || '';
-        updateGridAverages(result, container);
-        markGridCell(input, 'saved');
-        if (status) status.textContent = 'Saved';
-      })
-      .catch(function() {
-        markGridCell(input, 'save-error');
-        if (status) status.textContent = 'Could not save';
-      });
-  }
-
-  function syncRoleOptions(form) {
-    if (!form) return;
-    const groupSelect = form.querySelector('select[name="groupId"]');
-    const roleSelect = form.querySelector('select[name="roleTypeId"]');
-    if (!groupSelect || !roleSelect) return;
-    const groupId = groupSelect.value;
-    Array.from(roleSelect.options).forEach(function(option) {
-      if (!option.value) return;
-      const matches = !groupId || option.dataset.roleGroup === groupId;
-      option.disabled = !matches;
-      option.hidden = !matches;
-    });
-    if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
-  }
-
-  function initUpdateTools(scope) {
-    const panel = scope.querySelector('[data-update-status]');
-    if (!panel) return;
-    const updateForm = scope.querySelector('[data-update-form]');
-    const updateCheckForm = scope.querySelector('[data-update-check-form]');
-    const updateDownloadRow = scope.querySelector('[data-update-download-row]');
-    const updateDownloadLink = scope.querySelector('[data-update-download]');
-    const updateReleaseLink = scope.querySelector('[data-update-release]');
-    function renderUpdateStatus(status) {
-      if (!panel.isConnected || !status) return;
-      const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
-      const message = panel.querySelector('[data-update-message]');
-      const percentLabel = panel.querySelector('[data-update-percent]');
-      const progress = panel.querySelector('[data-update-progress]');
-      const phase = panel.querySelector('[data-update-phase]');
-      const log = panel.querySelector('[data-update-log]');
-      if (message) message.textContent = status.message || '';
-      if (percentLabel) percentLabel.textContent = percent + '%';
-      if (progress) progress.style.setProperty('--progress-value', percent + '%');
-      if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
-      if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
-      if (updateDownloadRow && updateDownloadLink) {
-        const downloadUrl = status.downloadUrl || status.installerDownloadUrl || '';
-        updateDownloadRow.style.display = downloadUrl || status.releaseUrl ? 'flex' : 'none';
-        updateDownloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
-        if (downloadUrl) updateDownloadLink.href = downloadUrl;
-        if (status.installerAssetName) updateDownloadLink.textContent = 'Download ' + status.installerAssetName;
-      }
-      if (updateReleaseLink) {
-        updateReleaseLink.style.display = status.releaseUrl ? 'inline-flex' : 'none';
-        if (status.releaseUrl) updateReleaseLink.href = status.releaseUrl;
-      }
-      [updateForm, updateCheckForm].forEach(function(form) {
-        const button = form?.querySelector('button[type="submit"]');
-        if (button) button.disabled = Boolean(status.running);
-      });
-      const channelInput = updateForm?.querySelector('input[name="channel"]');
-      if (channelInput && status.channel) channelInput.value = status.channel;
-    }
-    function pollUpdateStatus() {
-      if (!panel.isConnected) return;
-      fetch('/system-update/status', { headers: { Accept: 'application/json' } })
-        .then(function(response) { return response.ok ? response.json() : null; })
-        .then(function(status) {
-          renderUpdateStatus(status);
-          if (status && status.running) setTimeout(pollUpdateStatus, 1400);
-        })
-        .catch(function() {});
-    }
-    if (updateForm && !updateForm.dataset.bound) {
-      updateForm.dataset.bound = '1';
-      updateForm.addEventListener('submit', function(event) {
-        event.preventDefault();
-        const button = updateForm.querySelector('button[type="submit"]');
-        if (button) button.disabled = true;
-        fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
-          .then(function(response) { return response.json(); })
-          .then(function(status) {
-            renderUpdateStatus(status);
-            if (status && (status.downloadUrl || status.installerDownloadUrl)) {
-              window.location.href = status.downloadUrl || status.installerDownloadUrl;
-            }
-            setTimeout(pollUpdateStatus, 800);
-          })
-          .catch(function() { if (button) button.disabled = false; });
-      });
-      pollUpdateStatus();
-    }
-    if (updateCheckForm && !updateCheckForm.dataset.bound) {
-      updateCheckForm.dataset.bound = '1';
-      updateCheckForm.addEventListener('submit', function(event) {
-        event.preventDefault();
-        const button = updateCheckForm.querySelector('button[type="submit"]');
-        if (button) button.disabled = true;
-        fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
-          .then(function(response) { return response.json(); })
-          .then(function(status) { renderUpdateStatus(status); })
-          .catch(function() {})
-          .finally(function() { if (button) button.disabled = false; });
-      });
-    }
-  }
-
-  function initDynamicContent(scope) {
-    scope = scope || document;
-    scope.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
-    scope.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
-      syncGridLettersToggle(toggle, false);
-    });
-    scope.querySelectorAll('form[action="/person-roles"]').forEach(syncRoleOptions);
-    initUpdateTools(scope);
-  }
-
-  initDynamicContent(document);
-})();`;
-const APP_CLIENT_SCRIPT_HASH = crypto.createHash('sha256').update(APP_CLIENT_SCRIPT).digest('base64');
-const {
-  appendSetCookie,
-  cookieValue,
-  csrfInput,
-  getOrCreateCsrfToken,
-  parseBody,
-  parseCookies,
-  redirect,
-  requireCsrf,
-  securityHeaders,
-  sendHtml,
-  sendJson,
-  sendText
-} = createHttpHelpers({ escapeHtml: esc, maxBodySize: MAX_BODY_SIZE, scriptHash: APP_CLIENT_SCRIPT_HASH });
-let ACTIVE_NETWORK = {
-  host: DEFAULT_HOST,
-  port: DEFAULT_PORT,
-  hostOverridden: Boolean(process.env.HOST),
-  portOverridden: Boolean(process.env.PORT)
-};
-
-const ROLE_ADMIN = 'admin';
-const ROLE_PRINCIPAL = 'principal';
-const ROLE_TEACHER = 'teacher';
-const ROLE_PARENT = 'parent';
-const ROLES = [ROLE_ADMIN, ROLE_PRINCIPAL, ROLE_TEACHER, ROLE_PARENT];
-const CATEGORIES = ['Lesson / Homework', 'Quiz', 'Test'];
-const DEFAULT_LETTER_GRADES = [
-  ['A+', 100],
-  ['A', 96],
-  ['A-', 94],
-  ['B+', 92],
-  ['B', 88],
-  ['B-', 86],
-  ['C+', 84],
-  ['C', 79],
-  ['C-', 76],
-  ['D', 70],
-  ['E', 63],
-  ['F', 0]
-];
-const loginAttempts = new Map();
-
-function ensureRuntimeDirs() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-
-function scoreInputControl(studentId, value, maxScore, mode) {
-  const points = compactNumber(asPoints(maxScore));
-  const scoreMode = cleanScoreMode(mode);
-  return `<div class="score-entry-cell">
-    <input data-score-input data-score-points="${points}" data-score-mode="${scoreMode}" name="score_${studentId}" type="number" inputmode="decimal" min="0" max="${scoreMode === 'percent' ? '100' : points}" step="0.01" value="${esc(value)}" autocomplete="off" />
-    <small class="score-preview" data-score-preview></small>
-  </div>`;
-}
-
-function scoreModeToggle(percentUrl, wrongUrl, mode) {
-  const scoreMode = cleanScoreMode(mode);
-  return `<div class="score-mode" aria-label="Score entry mode">
-    <span>Percent</span>
-    <label class="score-switch">
-      <input type="checkbox" data-score-mode-toggle data-percent-url="${esc(percentUrl)}" data-wrong-url="${esc(wrongUrl)}" ${scoreMode === 'wrong' ? 'checked' : ''} />
-      <span class="score-switch-track" aria-hidden="true"><span class="score-switch-thumb"></span></span>
-      <span class="sr-only">Use number wrong</span>
-    </label>
-    <span>Number wrong</span>
-  </div>`;
-}
-
-function gridModeToggle(offUrl, onUrl, isGrid) {
-  return `<div class="gradebook-layout-toggle" aria-label="Gradebook grid layout">
-    <span>Grid</span>
-    <label class="score-switch">
-      <input type="checkbox" data-grid-toggle data-off-url="${esc(offUrl)}" data-on-url="${esc(onUrl)}" ${isGrid ? 'checked' : ''} />
-      <span class="score-switch-track" aria-hidden="true"><span class="score-switch-thumb"></span></span>
-      <span class="sr-only">Toggle grid gradebook layout</span>
-    </label>
-    <strong>${isGrid ? 'On' : 'Off'}</strong>
-  </div>`;
-}
-
-function runSql(sql) {
-  return execFileSync(SQLITE_BIN, [DB_FILE, sql], { encoding: 'utf8' });
-}
-
-function querySql(sql) {
-  const out = execFileSync(SQLITE_BIN, ['-json', DB_FILE, sql], { encoding: 'utf8' }).trim();
-  return out ? JSON.parse(out) : [];
-}
-
-function insertReturningId(sql) {
-  const row = querySql(`${sql} RETURNING id;`)[0];
-  return asInt(row?.id);
-}
-
-function runSqlBatch(statements) {
-  const sql = buildTransaction(statements);
-  if (!sql) return;
-  runSql(sql);
-}
-
-function timestampForFile(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, '-');
-}
-
-function backupPath(fileName) {
-  const base = path.basename(String(fileName || ''));
-  if (!/^oakstead-backup-[0-9T-]+Z(?:-[a-z0-9-]+)?\.db$/i.test(base)) return '';
-  const target = path.join(BACKUP_DIR, base);
-  return target.startsWith(BACKUP_DIR) ? target : '';
-}
-
-function createDatabaseBackup(reason = 'manual') {
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  const safeReason = cleanText(reason, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'manual';
-  const fileName = `oakstead-backup-${timestampForFile()}-${safeReason}.db`;
-  const target = path.join(BACKUP_DIR, fileName);
-  fs.copyFileSync(DB_FILE, target);
-  setSetting('backup_last_at', new Date().toISOString());
-  setSetting('backup_last_file', fileName);
-  return { fileName, path: target, size: fs.statSync(target).size };
-}
-
-function listDatabaseBackups() {
-  if (!fs.existsSync(BACKUP_DIR)) return [];
-  return fs.readdirSync(BACKUP_DIR)
-    .map((fileName) => {
-      const target = backupPath(fileName);
-      if (!target || !fs.existsSync(target)) return null;
-      const stat = fs.statSync(target);
-      return { fileName, size: stat.size, createdAt: stat.mtime };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.createdAt - a.createdAt);
-}
-
-function validateBackupDatabase(filePath) {
-  const output = execFileSync(SQLITE_BIN, [filePath, 'PRAGMA quick_check;'], { encoding: 'utf8' }).trim();
-  if (output !== 'ok') throw new Error('Backup database did not pass integrity check.');
-}
-
-function refreshDemoData(reason = 'scheduled') {
-  const script = path.join(__dirname, 'scripts', 'seed-demo.js');
-  if (!fs.existsSync(script)) {
-    console.error('Demo seed script is missing.');
-    return;
-  }
-  const result = spawnSync(process.execPath, [script, '--reset'], {
-    cwd: __dirname,
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024 * 16,
-    env: { ...process.env, DB_FILE, SQLITE_BIN }
-  });
-  if (result.stdout) console.log(result.stdout.trim());
-  if (result.stderr) console.error(result.stderr.trim());
-  if (result.status !== 0) console.error(`Demo data refresh failed during ${reason}.`);
-}
-
-function ensureColumn(table, column, definition) {
-  const columns = querySql(`PRAGMA table_info(${table});`).map((row) => row.name);
-  if (!columns.includes(column)) runSql(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
-}
-
-function addDays(dateText, days) {
-  const date = new Date(`${dateText}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return '';
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function daysBetween(startDate, endDate) {
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-  return Math.max(0, Math.round((end - start) / 86400000) + 1);
-}
-
-function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
-  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, encoded) {
-  if (!encoded || !String(encoded).includes(':')) return false;
-  const [salt, expected] = String(encoded).split(':');
-  const actual = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
-  } catch {
-    return false;
-  }
-}
-
-function clientIp(req) {
-  return req.socket?.remoteAddress || 'unknown';
-}
-
-function loginAttemptKeys(req, username) {
-  const ip = clientIp(req);
-  return [`ip:${ip}`, `user:${username || 'blank'}:${ip}`];
-}
-
-function pruneLoginAttempts(now = Date.now()) {
-  for (const [key, attempt] of loginAttempts.entries()) {
-    if (attempt.lockedUntil > now || now - attempt.firstAt <= LOGIN_WINDOW_MS) continue;
-    loginAttempts.delete(key);
-  }
-}
-
-function loginThrottleStatus(req, username) {
-  pruneLoginAttempts();
-  const now = Date.now();
-  const locked = loginAttemptKeys(req, username)
-    .map((key) => loginAttempts.get(key))
-    .filter((attempt) => attempt?.lockedUntil > now)
-    .sort((a, b) => b.lockedUntil - a.lockedUntil)[0];
-  if (!locked) return null;
-  return { retryAfter: Math.max(1, Math.ceil((locked.lockedUntil - now) / 1000)) };
-}
-
-function recordLoginFailure(req, username) {
-  pruneLoginAttempts();
-  const now = Date.now();
-  loginAttemptKeys(req, username).forEach((key) => {
-    const previous = loginAttempts.get(key);
-    const attempt = previous && now - previous.firstAt <= LOGIN_WINDOW_MS
-      ? previous
-      : { count: 0, firstAt: now, lockedUntil: 0 };
-    attempt.count += 1;
-    if (attempt.count >= MAX_LOGIN_FAILURES) attempt.lockedUntil = now + LOGIN_LOCK_MS;
-    loginAttempts.set(key, attempt);
-  });
-}
-
-function clearLoginFailures(req, username) {
-  loginAttemptKeys(req, username).forEach((key) => loginAttempts.delete(key));
-}
-
-function ensureDb() {
-  runSql(`
-PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS os_school_years (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  start_date TEXT,
-  end_date TEXT,
-  is_active INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_school_districts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_congregations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_families (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_name TEXT NOT NULL,
-  school_district_id INTEGER,
-  congregation_id INTEGER,
-  father_name TEXT,
-  mother_name TEXT,
-  father_phone TEXT,
-  mother_phone TEXT,
-  phone TEXT,
-  email TEXT,
-  address TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_district_id) REFERENCES os_school_districts(id),
-  FOREIGN KEY (congregation_id) REFERENCES os_congregations(id)
-);
-CREATE TABLE IF NOT EXISTS os_students (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_id INTEGER NOT NULL,
-  first_name TEXT NOT NULL,
-  middle_name TEXT,
-  last_name TEXT NOT NULL,
-  birth_date TEXT,
-  gender TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (family_id) REFERENCES os_families(id)
-);
-CREATE TABLE IF NOT EXISTS os_emergency_contacts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_id INTEGER NOT NULL,
-  priority INTEGER NOT NULL DEFAULT 1,
-  name TEXT NOT NULL,
-  relationship TEXT,
-  phone TEXT,
-  notes TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (family_id) REFERENCES os_families(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_teachers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT,
-  phone TEXT,
-  mobile_phone TEXT,
-  address TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_role_groups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_role_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  UNIQUE (group_id, name),
-  FOREIGN KEY (group_id) REFERENCES os_role_groups(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_person_roles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  person_type TEXT NOT NULL,
-  person_id INTEGER NOT NULL,
-  group_id INTEGER NOT NULL,
-  role_type_id INTEGER NOT NULL,
-  is_assistant INTEGER NOT NULL DEFAULT 0,
-  term_start TEXT,
-  term_end TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (group_id) REFERENCES os_role_groups(id),
-  FOREIGN KEY (role_type_id) REFERENCES os_role_types(id)
-);
-CREATE TABLE IF NOT EXISTS os_classrooms (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  teacher_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
-);
-CREATE TABLE IF NOT EXISTS os_classroom_grades (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  classroom_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  UNIQUE (classroom_id, grade_level),
-  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_student_years (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  student_id INTEGER NOT NULL,
-  school_year_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  classroom_id INTEGER,
-  status TEXT NOT NULL DEFAULT 'enrolled',
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (student_id, school_year_id),
-  FOREIGN KEY (student_id) REFERENCES os_students(id),
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id)
-);
-CREATE TABLE IF NOT EXISTS os_subjects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_grade_subjects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  UNIQUE (school_year_id, grade_level, subject_id),
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
-);
-CREATE TABLE IF NOT EXISTS os_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  classroom_id INTEGER,
-  title TEXT NOT NULL,
-  category TEXT NOT NULL,
-  assignment_date TEXT,
-  max_score REAL NOT NULL DEFAULT 100,
-  teacher_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id),
-  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id),
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
-);
-CREATE TABLE IF NOT EXISTS os_scores (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  assignment_id INTEGER NOT NULL,
-  student_id INTEGER NOT NULL,
-  score REAL,
-  note TEXT,
-  UNIQUE (assignment_id, student_id),
-  FOREIGN KEY (assignment_id) REFERENCES os_assignments(id) ON DELETE CASCADE,
-  FOREIGN KEY (student_id) REFERENCES os_students(id)
-);
-CREATE TABLE IF NOT EXISTS os_users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  username TEXT NOT NULL UNIQUE,
-  role TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  teacher_id INTEGER,
-  parent_family_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id),
-  FOREIGN KEY (parent_family_id) REFERENCES os_families(id)
-);
-CREATE TABLE IF NOT EXISTS os_sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_token TEXT NOT NULL UNIQUE,
-  user_id INTEGER NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES os_users(id)
-);
-CREATE TABLE IF NOT EXISTS os_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_absences (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  student_id INTEGER NOT NULL,
-  absence_date TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  amount REAL NOT NULL DEFAULT 1,
-  unit TEXT NOT NULL DEFAULT 'days',
-  notes TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
-  FOREIGN KEY (student_id) REFERENCES os_students(id)
-);
-CREATE TABLE IF NOT EXISTS os_marking_periods (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  period_number INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  start_date TEXT,
-  end_date TEXT,
-  UNIQUE (school_year_id, period_number),
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_grade_weight_groups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  min_grade TEXT NOT NULL,
-  max_grade TEXT NOT NULL,
-  subject_id INTEGER,
-  rounding_mode TEXT NOT NULL DEFAULT 'nearest',
-  calculation_mode TEXT NOT NULL DEFAULT 'weighted',
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
-);
-CREATE TABLE IF NOT EXISTS os_grade_weight_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL,
-  category TEXT NOT NULL,
-  weight REAL NOT NULL,
-  UNIQUE (group_id, category),
-  FOREIGN KEY (group_id) REFERENCES os_grade_weight_groups(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_letter_grade_groups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  min_grade TEXT NOT NULL,
-  max_grade TEXT NOT NULL,
-  subject_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
-);
-CREATE TABLE IF NOT EXISTS os_letter_grade_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL,
-  letter TEXT NOT NULL,
-  threshold REAL NOT NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (group_id, letter),
-  FOREIGN KEY (group_id) REFERENCES os_letter_grade_groups(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
-CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
-CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
-`);
-
-  ensureColumn('os_school_years', 'school_days', 'school_days INTEGER DEFAULT 180');
-  ensureColumn('os_assignments', 'marking_period_id', 'marking_period_id INTEGER');
-  ensureColumn('os_families', 'school_district_id', 'school_district_id INTEGER');
-  ensureColumn('os_families', 'congregation_id', 'congregation_id INTEGER');
-  ensureColumn('os_families', 'father_phone', 'father_phone TEXT');
-  ensureColumn('os_families', 'mother_phone', 'mother_phone TEXT');
-  ensureColumn('os_students', 'middle_name', 'middle_name TEXT');
-  ensureColumn('os_students', 'gender', 'gender TEXT');
-  ensureColumn('os_teachers', 'mobile_phone', 'mobile_phone TEXT');
-  ensureColumn('os_teachers', 'address', 'address TEXT');
-  ensureColumn('os_users', 'parent_family_id', 'parent_family_id INTEGER');
-
-  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
-  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
-  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
-  createDefaultRoleGroups();
-  migrateLessonHomeworkWeights();
-
-  const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
-  if (!yearCount) {
-    runSql(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
-      VALUES ('2025-2026', '2025-08-15', '2026-05-31', 1);`);
-  }
-
-  const userCount = querySql('SELECT COUNT(*) AS count FROM os_users')[0]?.count || 0;
-  if (!userCount) {
-    runSql(`INSERT INTO os_users (name, username, role, password_hash)
-      VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
-  }
-
-  querySql('SELECT id, name, start_date, end_date FROM os_school_years;').forEach((year) => {
-    const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
-    if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
-    const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
-    if (!weightCount) createDefaultWeightGroups(asInt(year.id));
-    const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
-    if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
-  });
-
-  runSql("DELETE FROM os_sessions WHERE expires_at <= datetime('now');");
-}
-
-function createMarkingPeriods(yearId, count, startDate = '', endDate = '') {
-  const periods = Math.max(1, Math.min(12, asInt(count) || 6));
-  const span = daysBetween(startDate, endDate);
-  for (let index = 0; index < periods; index += 1) {
-    const periodStart = span ? addDays(startDate, Math.floor((span * index) / periods)) : '';
-    const periodEnd = span ? addDays(startDate, Math.floor((span * (index + 1)) / periods) - 1) : '';
-    runSql(`INSERT OR REPLACE INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
-      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)});`);
-  }
-}
-
-function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
-  const groupId = insertReturningId(`INSERT INTO os_grade_weight_groups (school_year_id, name, min_grade, max_grade)
-    VALUES (${yearId}, ${sqlValue(name)}, ${sqlValue(minGrade)}, ${sqlValue(maxGrade)})`);
-  Object.entries(weights).forEach(([category, weight]) => {
-    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
-      VALUES (${groupId}, ${sqlValue(category)}, ${Number(weight) || 0});`);
-  });
-}
-
-function createDefaultWeightGroups(yearId) {
-  createWeightGroup(yearId, 'Grades 1-2', '1', '2', { 'Lesson / Homework': 50, Quiz: 25, Test: 25 });
-  createWeightGroup(yearId, 'Grades 3-9', '3', '9', { 'Lesson / Homework': 25, Quiz: 25, Test: 50 });
-}
-
-function createDefaultLetterGradeGroup(yearId) {
-  const groupId = insertReturningId(`INSERT INTO os_letter_grade_groups (school_year_id, name, min_grade, max_grade, subject_id)
-    VALUES (${yearId}, 'Default Letter Grades', '1', '12', NULL)`);
-  DEFAULT_LETTER_GRADES.forEach(([letter, threshold], index) => {
-    runSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
-      VALUES (${groupId}, ${sqlValue(letter)}, ${Number(threshold)}, ${index});`);
-  });
-}
-
-function createDefaultRoleGroups() {
-  const defaults = {
-    'Board Members': ['Chairman', 'Secretary', 'Treasurer'],
-    'Faculty Team': ['Teacher', 'Principal', 'Librarian', 'Nurse']
-  };
-  Object.entries(defaults).forEach(([groupName, roles]) => {
-    const groupId = insertReturningId(`INSERT INTO os_role_groups (name) VALUES (${sqlValue(groupName)})
-      ON CONFLICT(name) DO UPDATE SET name=excluded.name`);
-    roles.forEach((roleName) => {
-      runSql(`INSERT OR IGNORE INTO os_role_types (group_id, name) VALUES (${groupId}, ${sqlValue(roleName)});`);
-    });
-  });
-}
-
-function migrateLessonHomeworkWeights() {
-  querySql('SELECT DISTINCT group_id FROM os_grade_weight_items;').forEach((row) => {
-    const groupId = asInt(row.group_id);
-    const legacyItems = querySql(`SELECT category, weight FROM os_grade_weight_items
-      WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
-    if (!legacyItems.length) return;
-    const combinedWeight = Math.min(100, legacyItems.reduce((sum, item) => sum + Number(item.weight || 0), 0));
-    runSql(`DELETE FROM os_grade_weight_items WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
-    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
-      VALUES (${groupId}, 'Lesson / Homework', ${combinedWeight});`);
-  });
-}
-
-function createSession(userId, headers) {
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + SESSION_HOURS * 60 * 60 * 1000).toISOString();
-  runSql(`INSERT INTO os_sessions (session_token, user_id, expires_at)
-    VALUES (${sqlValue(token)}, ${asInt(userId)}, ${sqlValue(expiresAt)});`);
-  appendSetCookie(headers, `sessionToken=${cookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_HOURS * 3600}`);
-}
-
-function clearSession(req, headers) {
-  const token = parseCookies(req).sessionToken;
-  if (token) runSql(`DELETE FROM os_sessions WHERE session_token=${sqlValue(token)};`);
-  appendSetCookie(headers, 'sessionToken=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
-}
-
-function currentUser(req) {
-  if (DEMO_MODE) return { id: 0, name: 'Demo Admin', username: 'demo', role: ROLE_ADMIN, teacher_id: null, parent_family_id: null };
-  const token = parseCookies(req).sessionToken;
-  if (!token) return null;
-  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id
-    FROM os_sessions s
-    JOIN os_users u ON u.id = s.user_id
-    WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
-    LIMIT 1;`);
-  return rows[0] || null;
-}
-
-function isAdmin(user) {
-  return user?.role === ROLE_ADMIN;
-}
-
-function isPrincipal(user) {
-  return user?.role === ROLE_PRINCIPAL;
-}
-
-function isTeacher(user) {
-  return user?.role === ROLE_TEACHER;
-}
-
-function isParent(user) {
-  return user?.role === ROLE_PARENT;
-}
-
-function canAccessSetup(user) {
-  return isAdmin(user) || isPrincipal(user);
-}
-
-function canManageAdminUsers(user) {
-  return isAdmin(user);
-}
-
-function canManageSchoolUsers(user) {
-  return isAdmin(user) || isPrincipal(user);
-}
-
-function canManageSchoolSetup(user) {
-  return isAdmin(user) || isPrincipal(user);
-}
-
-function canManageAcademicRecords(user) {
-  return isAdmin(user) || isPrincipal(user) || isTeacher(user);
-}
-
-function teacherStudentClause(user, yearId, alias = 'sy') {
-  return isTeacher(user) ? `AND ${alias}.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${asInt(yearId)})` : '';
-}
-
-function studentAccessClause(user, yearId, studentAlias = 'st', enrollmentAlias = 'sy') {
-  if (isAdmin(user) || isPrincipal(user)) return '';
-  if (isTeacher(user)) return teacherStudentClause(user, yearId, enrollmentAlias);
-  if (isParent(user)) return `AND ${studentAlias}.family_id=${asInt(user.parent_family_id)}`;
-  return 'AND 1=0';
-}
-
-function canViewStudent(user, studentId, yearId) {
-  if (isAdmin(user) || isPrincipal(user)) return true;
-  if (!studentId || !yearId) return false;
-  if (isTeacher(user)) {
-    const rows = querySql(`SELECT sy.student_id
-      FROM os_student_years sy
-      JOIN os_classrooms c ON c.id = sy.classroom_id
-      WHERE sy.student_id=${asInt(studentId)}
-        AND sy.school_year_id=${asInt(yearId)}
-        AND sy.status='enrolled'
-        AND c.teacher_id=${asInt(user.teacher_id)}
-      LIMIT 1;`);
-    return Boolean(rows.length);
-  }
-  if (isParent(user)) {
-    const rows = querySql(`SELECT st.id
-      FROM os_students st
-      JOIN os_student_years sy ON sy.student_id = st.id
-      WHERE st.id=${asInt(studentId)}
-        AND st.family_id=${asInt(user.parent_family_id)}
-        AND sy.school_year_id=${asInt(yearId)}
-        AND sy.status='enrolled'
-      LIMIT 1;`);
-    return Boolean(rows.length);
-  }
-  return false;
-}
-
-function canModifyStudentAcademicRecord(user, studentId, yearId) {
-  if (isAdmin(user) || isPrincipal(user)) return true;
-  if (!isTeacher(user)) return false;
-  return canViewStudent(user, studentId, yearId);
-}
-
-function roleOptionsForUser(user, selected = '') {
-  const roles = canManageAdminUsers(user) ? ROLES : [ROLE_TEACHER, ROLE_PARENT];
-  return roles.map((role) => `<option value="${role}" ${selectedAttr(role, selected)}>${roleLabel(role)}</option>`).join('');
-}
-
-function roleLabel(role) {
-  if (role === ROLE_ADMIN) return 'Admin';
-  if (role === ROLE_PRINCIPAL) return 'Principal';
-  if (role === ROLE_PARENT) return 'Parent';
-  return 'Teacher';
-}
-
-function getSchoolYears() {
-  return querySql('SELECT * FROM os_school_years ORDER BY start_date DESC, id DESC;');
-}
-
-function getSelectedYear(req, url) {
-  const years = getSchoolYears();
-  const requested = asInt(url.searchParams.get('yearId')) || asInt(parseCookies(req).selectedYearId);
-  const selected = years.find((year) => year.id === requested)
-    || years.find((year) => year.is_active)
-    || years[0]
-    || null;
-  return { years, selected };
-}
-
-function getSetting(key, fallback = '') {
-  const row = querySql(`SELECT value FROM os_settings WHERE key=${sqlValue(key)} LIMIT 1;`)[0];
-  return row?.value || fallback;
-}
-
-function setSetting(key, value) {
-  runSql(`INSERT INTO os_settings (key, value, updated_at)
-    VALUES (${sqlValue(key)}, ${sqlValue(value)}, CURRENT_TIMESTAMP)
-    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;`);
-}
-
-function appSettings() {
-  const rows = querySql('SELECT key, value, updated_at FROM os_settings;');
-  const byKey = rows.reduce((settings, row) => {
-    settings[row.key] = row;
-    return settings;
-  }, {});
-  const schoolName = byKey.school_name?.value || DEFAULT_SCHOOL_NAME;
-  const logoPath = byKey.logo_path?.value || '';
-  const faviconPath = byKey.favicon_path?.value || '';
-  const logoVersion = encodeURIComponent(byKey.logo_path?.updated_at || 'default');
-  const faviconVersion = encodeURIComponent(byKey.favicon_path?.updated_at || logoVersion);
-  return {
-    schoolName,
-    logoPath,
-    faviconPath,
-    logoUrl: `/assets/logo?v=${logoVersion}`,
-    faviconUrl: `/assets/favicon?v=${faviconVersion}`,
-    hasCustomLogo: Boolean(logoPath),
-    hasCustomFavicon: Boolean(faviconPath)
-  };
-}
-
-function backupFrequency(value) {
-  const clean = cleanText(value, 20).toLowerCase();
-  return ['manual', 'daily', 'weekly', 'monthly'].includes(clean) ? clean : 'manual';
-}
-
-function desiredNetworkConfig() {
-  const storedHost = getSetting('network_bind_host', DEFAULT_HOST);
-  const storedPort = getSetting('network_port', String(DEFAULT_PORT));
-  return {
-    host: process.env.HOST ? cleanBindHost(process.env.HOST, DEFAULT_HOST) : cleanBindHost(storedHost, DEFAULT_HOST),
-    port: process.env.PORT ? parsePort(process.env.PORT, DEFAULT_PORT) : parsePort(storedPort, DEFAULT_PORT),
-    hostOverridden: Boolean(process.env.HOST),
-    portOverridden: Boolean(process.env.PORT)
-  };
-}
-
-function localNetworkAddresses() {
-  return Object.values(os.networkInterfaces())
-    .flat()
-    .filter((item) => item && item.family === 'IPv4' && !item.internal)
-    .map((item) => item.address)
-    .filter((address, index, addresses) => addresses.indexOf(address) === index)
-    .sort();
-}
-
-function networkAccessLabel(host) {
-  return host === '0.0.0.0' ? 'LAN access' : 'Local only';
-}
-
-function networkAccessHostForMode(value) {
-  const mode = String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
-  if (['lan', 'trusted-lan', 'network', 'local-network', '0.0.0.0'].includes(mode)) return '0.0.0.0';
-  if (['local', 'local-only', 'localhost', '127.0.0.1'].includes(mode)) return '127.0.0.1';
-  return '';
-}
-
-function networkUrls(config = ACTIVE_NETWORK) {
-  if (config.host === '0.0.0.0') {
-    const addresses = localNetworkAddresses();
-    return (addresses.length ? addresses : [os.hostname()]).map((host) => `http://${host}:${config.port}`);
-  }
-  return [`http://${config.host === 'localhost' ? '127.0.0.1' : config.host}:${config.port}`];
-}
-
-function networkStatus() {
-  const desired = desiredNetworkConfig();
-  return {
-    desired,
-    active: ACTIVE_NETWORK,
-    hostName: os.hostname(),
-    addresses: localNetworkAddresses(),
-    urls: networkUrls(ACTIVE_NETWORK),
-    desiredUrls: networkUrls(desired),
-    restartRequired: desired.host !== ACTIVE_NETWORK.host || desired.port !== ACTIVE_NETWORK.port,
-    envManaged: desired.hostOverridden || desired.portOverridden
-  };
-}
-
-function printNetworkStatus() {
-  const savedHost = cleanBindHost(getSetting('network_bind_host', DEFAULT_HOST), DEFAULT_HOST);
-  const savedPort = parsePort(getSetting('network_port', String(DEFAULT_PORT)), DEFAULT_PORT);
-  const effective = desiredNetworkConfig();
-  console.log(`Saved network access: ${networkAccessLabel(savedHost)} (${savedHost}:${savedPort})`);
-  if (effective.hostOverridden || effective.portOverridden) {
-    console.log(`Environment override: ${effective.hostOverridden ? `HOST=${effective.host}` : 'HOST unset'}, ${effective.portOverridden ? `PORT=${effective.port}` : 'PORT unset'}`);
-  }
-  console.log(`Effective on next start: ${networkAccessLabel(effective.host)} (${effective.host}:${effective.port})`);
-  networkUrls(effective).forEach((item) => console.log(`URL: ${item}`));
-}
-
-function printNetworkAccessUsage() {
-  console.log([
-    'Usage:',
-    '  node server.js --network-status',
-    '  node server.js --set-network-access <lan|local> [port]',
-    '',
-    'Examples:',
-    '  node server.js --set-network-access lan',
-    '  node server.js --set-network-access local 3000'
-  ].join('\n'));
-}
-
-function setNetworkAccessFromCli(args) {
-  const [modeValue, portValue] = args;
-  if (!modeValue || modeValue === '--help' || modeValue === '-h') {
-    printNetworkAccessUsage();
-    return Boolean(modeValue);
-  }
-  const host = networkAccessHostForMode(modeValue);
-  if (!host) {
-    console.error(`Unknown network access mode: ${modeValue}`);
-    printNetworkAccessUsage();
-    return false;
-  }
-  const currentPort = parsePort(getSetting('network_port', String(DEFAULT_PORT)), DEFAULT_PORT);
-  const port = portValue === undefined ? currentPort : parsePort(portValue, 0);
-  if (!port) {
-    console.error(`Invalid port: ${portValue}`);
-    printNetworkAccessUsage();
-    return false;
-  }
-  setSetting('network_bind_host', host);
-  setSetting('network_port', String(port));
-  setSetting('network_restart_required_at', new Date().toISOString());
-  console.log(`Saved network access: ${networkAccessLabel(host)} (${host}:${port})`);
-  networkUrls({ host, port }).forEach((item) => console.log(`URL after restart: ${item}`));
-  if (process.env.HOST || process.env.PORT) {
-    console.log('Note: HOST or PORT is currently set, so the environment override wins until it is removed.');
-  }
-  console.log('Restart Oakstead for this change to take effect.');
-  return true;
-}
-
-function backupFrequencyLabel(value) {
-  return { manual: 'Manual only', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[backupFrequency(value)];
-}
-
-function scheduledBackupDue(now = new Date()) {
-  const frequency = backupFrequency(getSetting('backup_frequency', 'manual'));
-  if (frequency === 'manual') return false;
-  const lastAt = getSetting('backup_last_at', '');
-  if (!lastAt) return true;
-  const last = new Date(lastAt);
-  if (Number.isNaN(last.getTime())) return true;
-  const ageMs = now - last;
-  const dayMs = 24 * 60 * 60 * 1000;
-  if (frequency === 'daily') return ageMs >= dayMs;
-  if (frequency === 'weekly') return ageMs >= dayMs * 7;
-  return ageMs >= dayMs * 30;
-}
-
-function runScheduledBackupIfDue() {
-  try {
-    if (fs.existsSync(DB_FILE) && scheduledBackupDue()) createDatabaseBackup('scheduled');
-  } catch (error) {
-    console.error('Scheduled backup failed:', error.message || error);
-  }
-}
-
-function defaultUpdateStatus() {
-  return {
-    running: false,
-    phase: 'idle',
-    percent: 0,
-    message: UPDATE_MODE === 'installer' ? 'Ready to check GitHub releases for a Windows installer.' : 'Ready to check for updates.',
-    updateMode: UPDATE_MODE,
-    channel: 'stable',
-    version: APP_VERSION,
-    targetVersion: '',
-    latestVersion: '',
-    latestTag: '',
-    updateAvailable: false,
-    releaseUrl: '',
-    installerAssetName: '',
-    installerDownloadUrl: '',
-    downloadUrl: '',
-    updatedAt: new Date().toISOString(),
-    log: []
-  };
-}
-
-function readUpdateStatus() {
-  try {
-    if (!fs.existsSync(UPDATE_STATUS_FILE)) return defaultUpdateStatus();
-    const status = { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
-    if (status.latestVersion && compareVersions(status.latestVersion, APP_VERSION) <= 0) {
-      status.updateAvailable = false;
-      status.downloadUrl = '';
-      status.installerDownloadUrl = '';
-    }
-    return status;
-  } catch {
-    return defaultUpdateStatus();
-  }
-}
-
-function writeUpdateStatus(patch) {
-  const previous = readUpdateStatus();
-  const log = patch.log ? [...(previous.log || []), ...patch.log].slice(-80) : previous.log || [];
-  const next = { ...previous, ...patch, log, updateMode: UPDATE_MODE, version: APP_VERSION, updatedAt: new Date().toISOString() };
-  fs.writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(next, null, 2));
-  return next;
-}
-
-function updateLog(message) {
-  return `${new Date().toLocaleTimeString('en-US', { hour12: false })} ${message}`;
-}
-
-function compareVersions(a, b) {
-  const parse = (value) => {
-    const [version, prerelease = ''] = String(value || '').replace(/^v/i, '').split('-', 2);
-    const parts = version.split('.').map((part) => Number(part) || 0);
-    return { parts: [parts[0] || 0, parts[1] || 0, parts[2] || 0], prerelease };
-  };
-  const left = parse(a);
-  const right = parse(b);
-  for (let index = 0; index < 3; index += 1) {
-    if (left.parts[index] !== right.parts[index]) return left.parts[index] > right.parts[index] ? 1 : -1;
-  }
-  if (left.prerelease === right.prerelease) return 0;
-  if (!left.prerelease) return 1;
-  if (!right.prerelease) return -1;
-  return left.prerelease.localeCompare(right.prerelease);
-}
-
-function httpsJson(url) {
-  return new Promise((resolve, reject) => {
-    const request = https.get(url, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        'User-Agent': `Oakstead/${APP_VERSION}`
-      }
-    }, (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => {
-        body += chunk;
-        if (body.length > 1024 * 1024 * 4) {
-          request.destroy(new Error('GitHub response was too large.'));
-        }
-      });
-      response.on('end', () => {
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(`GitHub returned HTTP ${response.statusCode}`));
-          return;
-        }
-        try {
-          resolve(JSON.parse(body));
-        } catch (error) {
-          reject(new Error(`GitHub returned invalid JSON: ${error.message}`));
-        }
-      });
-    });
-    request.setTimeout(15000, () => request.destroy(new Error('Timed out checking GitHub releases.')));
-    request.on('error', reject);
-  });
-}
-
-async function githubReleaseForChannel(channel) {
-  const releases = await httpsJson(`https://api.github.com/repos/${RELEASE_REPO}/releases?per_page=20`);
-  if (!Array.isArray(releases)) throw new Error('GitHub release list was not an array.');
-  const published = releases.filter((release) => !release.draft);
-  if (channel === 'prerelease') return published.find((release) => release.prerelease) || published.find((release) => !release.prerelease) || null;
-  return published.find((release) => !release.prerelease) || null;
-}
-
-function installerAssetForRelease(release, version) {
-  const assets = Array.isArray(release?.assets) ? release.assets : [];
-  const escapedVersion = String(version || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const versionedSetup = new RegExp(`oakstead.*setup.*v?${escapedVersion}.*\\.exe$`, 'i');
-  return assets.find((asset) => versionedSetup.test(asset.name || ''))
-    || assets.find((asset) => /oakstead.*setup.*\.exe$/i.test(asset.name || ''))
-    || assets.find((asset) => /\.exe$/i.test(asset.name || ''))
-    || null;
-}
-
-function runUpdateCommand(label, command, args, options = {}) {
-  writeUpdateStatus({ message: label, log: [updateLog(label)] });
-  const result = spawnSync(command, args, {
-    cwd: APP_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024 * 8,
-    ...options
-  });
-  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-  if (output) writeUpdateStatus({ log: output.split('\n').slice(-30).map((line) => `  ${line.slice(0, 500)}`) });
-  if (result.status !== 0) {
-    throw new Error(`${label} failed${result.error ? `: ${result.error.message}` : ''}`);
-  }
-  return output;
-}
-
-function latestReleaseTag(channel) {
-  const tags = runUpdateCommand('Reading release tags', 'git', ['tag', '--list', '--sort=-v:refname'])
-    .split('\n')
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-  const stable = tags.find((tag) => /^v?\d+\.\d+\.\d+$/.test(tag));
-  const prerelease = tags.find((tag) => /^v?\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/.test(tag));
-  return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
-}
-
-function checkLatestGitRelease(channel) {
-  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
-  writeUpdateStatus({
-    phase: 'checking',
-    percent: 4,
-    channel: updateChannel,
-    releaseUrl: '',
-    installerAssetName: '',
-    installerDownloadUrl: '',
-    downloadUrl: '',
-    message: 'Checking GitHub for available releases.',
-    log: [updateLog(`Checking ${updateChannel} releases`)]
-  });
-  runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
-  const tag = latestReleaseTag(updateChannel);
-  const latestVersion = tag ? tag.replace(/^v/, '') : '';
-  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
-  return writeUpdateStatus({
-    running: false,
-    phase: 'checked',
-    percent: 0,
-    channel: updateChannel,
-    targetVersion: latestVersion,
-    latestVersion,
-    latestTag: tag,
-    updateAvailable,
-    message: tag ? `${updateAvailable ? 'Update available' : 'Already current'}: ${tag}` : 'No release tag was found.',
-    log: [updateLog(tag ? `Latest ${updateChannel} release is ${tag}` : 'No release tag found')]
-  });
-}
-
-async function checkLatestInstallerRelease(channel) {
-  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
-  writeUpdateStatus({
-    phase: 'checking',
-    percent: 10,
-    channel: updateChannel,
-    releaseUrl: '',
-    installerAssetName: '',
-    installerDownloadUrl: '',
-    downloadUrl: '',
-    message: `Checking GitHub releases for ${RELEASE_REPO}.`,
-    log: [updateLog(`Checking ${updateChannel} installer releases from ${RELEASE_REPO}`)]
-  });
-  const release = await githubReleaseForChannel(updateChannel);
-  if (!release) {
-    return writeUpdateStatus({
-      running: false,
-      phase: 'checked',
-      percent: 0,
-      updateAvailable: false,
-      message: 'No published GitHub release was found.',
-      log: [updateLog('No published GitHub release was found')]
-    });
-  }
-  const latestVersion = String(release.tag_name || release.name || '').replace(/^v/i, '');
-  const asset = installerAssetForRelease(release, latestVersion);
-  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
-  const hasInstaller = Boolean(asset?.browser_download_url);
-  return writeUpdateStatus({
-    running: false,
-    phase: 'checked',
-    percent: 0,
-    channel: updateChannel,
-    targetVersion: latestVersion,
-    latestVersion,
-    latestTag: release.tag_name || '',
-    updateAvailable,
-    releaseUrl: release.html_url || '',
-    installerAssetName: asset?.name || '',
-    installerDownloadUrl: asset?.browser_download_url || '',
-    downloadUrl: asset?.browser_download_url || '',
-    message: updateAvailable
-      ? (hasInstaller ? `Windows installer available: v${latestVersion}` : `v${latestVersion} is available, but no Windows installer asset was attached.`)
-      : `Already current: v${latestVersion || APP_VERSION}`,
-    log: [
-      updateLog(`Latest ${updateChannel} release is ${release.tag_name || latestVersion || 'unknown'}`),
-      updateLog(hasInstaller ? `Installer asset: ${asset.name}` : 'No installer asset found on the release')
-    ]
-  });
-}
-
-async function checkLatestRelease(channel) {
-  return UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel);
-}
-
-function restartApplication() {
-  writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
-  const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
-  if (!supervised) {
-    const child = spawn(process.execPath, [__filename], {
-      cwd: APP_ROOT,
-      detached: true,
-      stdio: 'ignore',
-      env: process.env
-    });
-    child.unref();
-  }
-  setTimeout(() => process.exit(0), 900);
-}
-
-async function startInstallerUpdate(channel) {
-  const active = readUpdateStatus();
-  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
-  const activeIsCurrent = active.installerDownloadUrl
-    && active.channel === updateChannel
-    && active.latestVersion
-    && compareVersions(active.latestVersion, APP_VERSION) > 0;
-  const status = activeIsCurrent ? active : await checkLatestInstallerRelease(updateChannel);
-  if (!status.updateAvailable) {
-    return writeUpdateStatus({
-      running: false,
-      phase: 'checked',
-      percent: 0,
-      channel: updateChannel,
-      message: status.message || 'No installer update is available.',
-      log: [updateLog('Installer update was requested, but no update is available')]
-    });
-  }
-  if (!status.installerDownloadUrl) {
-    return writeUpdateStatus({
-      running: false,
-      phase: 'missing installer',
-      percent: 0,
-      channel: updateChannel,
-      message: 'A release is available, but it does not include a Windows installer asset.',
-      log: [updateLog('Installer update cannot continue because no .exe asset was found')]
-    });
-  }
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const backup = createDatabaseBackup('pre-installer-update');
-      writeUpdateStatus({ log: [updateLog(`Created pre-installer backup ${backup.fileName}`)] });
-    }
-  } catch (error) {
-    writeUpdateStatus({ log: [updateLog(`Backup before installer download failed: ${error.message || error}`)] });
-  }
-  return writeUpdateStatus({
-    running: false,
-    phase: 'download ready',
-    percent: 100,
-    channel: updateChannel,
-    message: `Download ${status.installerAssetName || 'the Windows installer'} and run it on this computer to complete the update.`,
-    downloadUrl: status.installerDownloadUrl,
-    installerDownloadUrl: status.installerDownloadUrl,
-    log: [updateLog('Installer download is ready')]
-  });
-}
-
-async function startSystemUpdate(channel) {
-  const active = readUpdateStatus();
-  if (active.running) return active;
-  if (UPDATE_MODE === 'installer') return startInstallerUpdate(channel);
-  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
-  writeUpdateStatus({
-    running: true,
-    phase: 'starting',
-    percent: 2,
-    channel: updateChannel,
-    targetVersion: '',
-    message: 'Starting update.',
-    log: [updateLog(`Starting ${updateChannel} update from version ${APP_VERSION}`)]
-  });
-  const child = spawn(process.execPath, [__filename, '--run-system-update', updateChannel], {
-    cwd: APP_ROOT,
-    detached: true,
-    stdio: 'ignore',
-    env: process.env
-  });
-  child.unref();
-  return readUpdateStatus();
-}
-
-function runSystemUpdateWorker(channel) {
-  try {
-    writeUpdateStatus({ phase: 'backup', percent: 5, message: 'Creating a database backup before updating.' });
-    const backup = createDatabaseBackup('pre-update');
-    writeUpdateStatus({ log: [updateLog(`Created pre-update backup ${backup.fileName}`)] });
-    writeUpdateStatus({ phase: 'checking', percent: 8, message: 'Checking local repository state.' });
-    runUpdateCommand('Checking for tracked local changes', 'git', ['diff', '--quiet']);
-    runUpdateCommand('Checking staged changes', 'git', ['diff', '--cached', '--quiet']);
-    writeUpdateStatus({ phase: 'fetching', percent: 22, message: 'Fetching releases from GitHub.' });
-    runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
-    const tag = latestReleaseTag(channel);
-    writeUpdateStatus({ phase: 'downloading', percent: 42, targetVersion: tag.replace(/^v/, ''), message: tag ? `Downloading ${tag}.` : 'No release tag found; updating current branch.' });
-    if (tag) {
-      runUpdateCommand(`Checking out ${tag}`, 'git', ['checkout', tag]);
-    } else {
-      const branch = runUpdateCommand('Reading current branch', 'git', ['branch', '--show-current']).trim() || 'main';
-      runUpdateCommand(`Pulling origin/${branch}`, 'git', ['pull', '--ff-only', 'origin', branch]);
-    }
-    writeUpdateStatus({ phase: 'installing', percent: 66, message: 'Installing npm dependencies.' });
-    runUpdateCommand('Running npm install', 'npm', ['install']);
-    writeUpdateStatus({ phase: 'validating', percent: 84, message: 'Validating server code.' });
-    runUpdateCommand('Running npm run check', 'npm', ['run', 'check']);
-    writeUpdateStatus({ running: false, phase: 'complete', percent: 96, message: 'Update complete. Restarting now.', log: [updateLog('Update completed successfully')] });
-    restartApplication();
-  } catch (error) {
-    writeUpdateStatus({
-      running: false,
-      phase: 'failed',
-      percent: 100,
-      message: error.message || 'Update failed.',
-      log: [updateLog(`ERROR ${error.message || error}`)]
-    });
-  }
-}
-
-function contentTypeFor(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.svg') return 'image/svg+xml';
-  if (ext === '.png') return 'image/png';
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-  if (ext === '.webp') return 'image/webp';
-  if (ext === '.ico') return 'image/x-icon';
-  return 'application/octet-stream';
-}
-
-function imageUploadError(message) {
-  const error = new Error(message);
-  error.statusCode = 400;
-  return error;
-}
-
-function detectedImageExtension(buffer) {
-  if (!Buffer.isBuffer(buffer) || !buffer.length) return '';
-  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return '.png';
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return '.jpg';
-  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return '.webp';
-  if (buffer.length >= 4 && buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x01 && buffer[3] === 0x00) return '.ico';
-  return '';
-}
-
-function uploadExtension(file) {
-  const nameExt = path.extname(String(file?.filename || '')).toLowerCase();
-  if (nameExt === '.svg') throw imageUploadError('SVG uploads are not supported. Use PNG, JPEG, WebP, or ICO.');
-  const detectedExt = detectedImageExtension(file?.data);
-  if (!detectedExt) throw imageUploadError('Unsupported image upload. Use PNG, JPEG, WebP, or ICO.');
-  const compatibleExts = detectedExt === '.jpg' ? new Set(['.jpg', '.jpeg']) : new Set([detectedExt]);
-  if (nameExt && !compatibleExts.has(nameExt)) {
-    throw imageUploadError('Uploaded image extension does not match the file contents.');
-  }
-  return detectedExt;
-}
-
-function saveUploadedImage(file, basename) {
-  if (!file?.data?.length) return '';
-  const ext = uploadExtension(file);
-  if (!ext) return '';
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const fileName = `${basename}${ext}`;
-  const target = path.join(UPLOAD_DIR, fileName);
-  fs.writeFileSync(target, file.data);
-  return `uploads/${fileName}`;
-}
-
-function gradeRank(grade) {
-  const text = String(grade);
-  if (/^pre-?k$/i.test(text)) return -2;
-  if (/^k(indergarten)?$/i.test(text)) return -1;
-  const number = Number(text);
-  return Number.isFinite(number) ? number : 100 + text.toLowerCase().charCodeAt(0);
-}
-
-function sortGrades(grades) {
-  return [...new Set(grades.filter(Boolean))].sort((a, b) => gradeRank(a) - gradeRank(b) || String(a).localeCompare(String(b)));
-}
-
-function promoteGrade(grade) {
-  const text = String(grade || '').trim();
-  if (/^pre-?k$/i.test(text)) return 'K';
-  if (/^k(indergarten)?$/i.test(text)) return '1';
-  const number = Number(text);
-  if (Number.isFinite(number)) return number >= 12 ? 'Graduated' : String(number + 1);
-  return text;
-}
-
-function average(values) {
-  const numeric = values.map(Number).filter(Number.isFinite);
-  if (!numeric.length) return null;
-  return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
-}
-
-function formatPercent(value) {
-  return value === null || value === undefined ? '&mdash;' : `${Number(value).toFixed(1)}%`;
-}
-
-function gradeTone(value) {
-  const score = Number(value);
-  if (!Number.isFinite(score)) return 'quiet';
-  if (score >= 90) return 'good';
-  if (score >= 75) return 'watch';
-  return 'low';
-}
-
-function scoreBand(value) {
-  const score = Number(value);
-  if (!Number.isFinite(score)) return 'No score';
-  if (score >= 90) return '90-100';
-  if (score >= 80) return '80-89';
-  if (score >= 70) return '70-79';
-  return 'Below 70';
-}
-
-function gradeOptions(selected = '') {
-  return gradeChoices().map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
-}
-
-function gradeChoices() {
-  return ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'Graduated'];
-}
-
-function cleanGender(value) {
-  const gender = cleanText(value, 12).toLowerCase();
-  return gender === 'female' || gender === 'male' ? gender : '';
-}
-
-function cleanPersonRoleType(value) {
-  const type = cleanText(value, 20).toLowerCase();
-  return ['teacher', 'father', 'mother'].includes(type) ? type : '';
-}
-
-function genderOptions(selected = '') {
-  const gender = cleanGender(selected);
-  return `<option value="">Not set</option><option value="female" ${selectedAttr(gender, 'female')}>Girl</option><option value="male" ${selectedAttr(gender, 'male')}>Boy</option>`;
-}
-
-function studentDisplayName(student) {
-  return [student.first_name, student.middle_name, student.last_name].filter(Boolean).join(' ');
-}
-
-function genderIcon(gender) {
-  const clean = cleanGender(gender);
-  const cls = clean === 'female' ? 'girl' : clean === 'male' ? 'boy' : 'neutral';
-  return `<span class="student-icon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></span>`;
-}
-
-function categoryOptions(selected = 'Lesson / Homework') {
-  const selectedCategory = normalizeCategory(selected);
-  return CATEGORIES.map((category) => `<option value="${esc(category)}" ${category === selectedCategory ? 'selected' : ''}>${esc(category)}</option>`).join('');
-}
-
-function displayCategory(category) {
-  return esc(normalizeCategory(category));
-}
-
-function displayCategoryShort(category) {
-  const cat = normalizeCategory(category);
-  if (cat === 'Lesson / Homework') return 'Lesson';
-  return esc(cat);
-}
-
-function gradebookTitle(category, title) {
-  const cleanTitle = cleanText(title, 140);
-  return cleanTitle || displayCategoryShort(category);
-}
-
-function gradebookLetter(value, scale = DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }))) {
-  const score = Number(value);
-  if (!Number.isFinite(score)) return '';
-  const rows = [...scale]
-    .map((row) => ({ letter: cleanText(row.letter, 12), threshold: Number(row.threshold) }))
-    .filter((row) => row.letter && Number.isFinite(row.threshold))
-    .sort((a, b) => b.threshold - a.threshold);
-  return rows.find((row) => score >= row.threshold)?.letter || rows.at(-1)?.letter || '';
-}
-
-function compactPercent(value, decimals = 0) {
-  if (value === null || value === undefined || value === '') return '';
-  const number = Number(value);
-  if (!Number.isFinite(number)) return '';
-  return number.toFixed(decimals).replace(/\.?0+$/, '');
-}
-
-function gradebookDisplayScore(value, scale) {
-  const percent = compactPercent(value);
-  if (!percent) return '&mdash;';
-  const letter = gradebookLetter(value, scale);
-  return `${percent}<sup>${esc(letter)}</sup>`;
-}
-
-function gradebookCategoryClass(category) {
-  const cat = normalizeCategory(category);
-  if (cat === 'Quiz') return 'quiz';
-  if (cat === 'Test') return 'test';
-  return 'lesson';
-}
-
-function matchingLetterGradeGroup(groups, grade, subjectId) {
-  const rank = gradeRank(grade);
-  return groups.find((group) => group.subject_id === subjectId && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
-    || groups.find((group) => !group.subject_id && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
-    || null;
-}
-
-function letterGradeScale(yearId, grade, subjectId) {
-  const groups = querySql(`SELECT * FROM os_letter_grade_groups WHERE school_year_id=${yearId};`);
-  const group = matchingLetterGradeGroup(groups, grade, subjectId);
-  if (!group) return DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
-  const items = querySql(`SELECT letter, threshold FROM os_letter_grade_items WHERE group_id=${asInt(group.id)} ORDER BY threshold DESC, sort_order, letter;`);
-  return items.length ? items : DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
-}
-
-function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
-  if (!user) return false;
-  if (isAdmin(user) || isPrincipal(user)) return true;
-  if (!isTeacher(user)) return false;
-  if (!user.teacher_id) return false;
-  const roomClause = classroomId ? `AND c.id=${asInt(classroomId)}` : '';
-  const rows = querySql(`SELECT c.id
-    FROM os_classrooms c
-    JOIN os_classroom_grades cg ON cg.classroom_id = c.id
-    WHERE c.school_year_id=${asInt(yearId)}
-      AND c.teacher_id=${asInt(user.teacher_id)}
-      AND cg.grade_level=${sqlValue(grade)}
-      ${roomClause}
-    LIMIT 1;`);
-  return Boolean(rows.length);
-}
-
-const KPI_ICONS = {
-  families: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3ZM8 11c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 12.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5C23 14.17 18.33 13 16 13Z"/></svg>`,
-  students: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82ZM12 3 1 9l11 6 9-4.91V17h2V9L12 3Z"/></svg>`,
-  teachers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2Zm0 14H5.17L4 17.17V4h16v12ZM7 9h2v2H7V9Zm4 0h2v2h-2V9Zm4 0h2v2h-2V9Z"/></svg>`,
-  classrooms: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2Zm-8-1.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3ZM16 18H8V5h8v13Z"/></svg>`,
-  assignments: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2Zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1Zm2 14H7v-2h7v2Zm3-4H7v-2h10v2Zm0-4H7V7h10v2Z"/></svg>`
-};
-
-const NAV_ICONS = {
-  dashboard: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-11h6V4h-6v5Z"></path></svg>',
-  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a5 5 0 0 1 10 0H3Zm8.5 0a6.5 6.5 0 0 0-1.3-3.9A5 5 0 0 1 21 20h-9.5Z"></path></svg>',
-  setup: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v3H4V5Zm0 6h10v3H4v-3Zm0 6h16v3H4v-3Zm13.5-6 2.5 1.5-2.5 1.5V11Z"></path></svg>',
-  gradebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5V3Zm2 2v14h10V7h-3V5H7Zm2 5h6v2H9v-2Zm0 4h6v2H9v-2Z"></path></svg>',
-  assignments: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>',
-  reportcards: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6V3Zm2 2v14h8V5H8Zm1.5 3h5v2h-5V8Zm0 3h5v2h-5v-2Zm0 3h3v2h-3v-2Z"></path></svg>',
-  absences: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10Zm-9 3h2v2H9v-2Zm4 0h2v2h-2v-2Z"></path></svg>',
-  reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
-};
-
-const REPORT_ICONS = {
-  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20v-1a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v1"/><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 12.5a3 3 0 0 0 0-6"/><path d="M18.5 20v-1a4 4 0 0 0-2-3.46"/></svg>',
-  students: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12.2V17c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.8"/><path d="M22 10v6"/></svg>',
-  'school-board': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8"/><path d="M9 4v5l-4 7"/><path d="M15 4v5l4 7"/><path d="M5 16h14"/><path d="M7 20h10"/><path d="M12 9v11"/></svg>',
-  birthdays: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11h16v9H4z"/><path d="M4 15c1.4 0 1.4-1 2.8-1s1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1"/><path d="M8 11V8"/><path d="M12 11V8"/><path d="M16 11V8"/><path d="M8 5l.8 1L8 7 7.2 6 8 5Z"/><path d="m12 5 .8 1-.8 1-.8-1L12 5Z"/><path d="m16 5 .8 1-.8 1-.8-1L16 5Z"/></svg>',
-  'grade-graph': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m6 15 4-4 3 3 5-7"/><path d="M10 11h.01"/><path d="M13 14h.01"/><path d="M18 7h.01"/></svg>'
-};
-
-const REPORT_METER_COLORS = ['#2f6f5e', '#2563eb', '#a16207', '#be123c', '#6d28d9', '#0e7490', '#7c2d12', '#4d7c0f'];
-
-function navItemActive(pathname, currentPath) {
-  return currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
-}
-
-function navLink(pathname, currentPath, label, iconKey) {
-  const active = navItemActive(pathname, currentPath);
-  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
-}
-
-function navItemsForUser(user) {
-  if (isParent(user)) return [{ pathname: '/parent', label: 'Parent Portal', iconKey: 'reports' }];
-  return [
-    { pathname: '/', label: 'Dashboard', iconKey: 'dashboard' },
-    { pathname: '/assignments', label: 'Assignments', iconKey: 'assignments' },
-    { pathname: '/gradebook', label: 'Gradebook', iconKey: 'gradebook' },
-    { pathname: '/absences', label: 'Absences', iconKey: 'absences' },
-    { pathname: '/reports', label: 'Reports', iconKey: 'reports' },
-    { pathname: '/report-cards', label: 'Report Card', iconKey: 'reportcards' },
-    ...(canAccessSetup(user) ? [{ pathname: '/setup', label: 'School Setup', iconKey: 'setup' }] : [])
-  ];
-}
-
-function actionPanel(title, body, meta = '') {
-  return `<section class="panel">
-    <div class="panel-title"><h2>${esc(title)}</h2>${meta ? `<p>${meta}</p>` : ''}</div>
-    ${body}
-  </section>`;
-}
-
-function emptyState(text) {
-  return `<p class="empty">${esc(text)}</p>`;
-}
-
-function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
-  const settings = appSettings();
-  const yearSwitcher = (extraClass = '') => user && selectedYear ? `<form class="year-form ${extraClass}" method="post" action="/switch-year">
-      ${csrfInput(csrfToken)}
-      <select name="yearId" aria-label="School year">
-        ${years.map((year) => `<option value="${year.id}" ${year.id === selectedYear.id ? 'selected' : ''}>${esc(year.name)}</option>`).join('')}
-      </select>
-      <button class="sr-only" type="submit">Switch school year</button>
-    </form>` : '';
-  const navItems = user ? navItemsForUser(user) : [];
-  const navMarkup = navItems.map((item) => navLink(item.pathname, currentPath, item.label, item.iconKey)).join('');
-  const activeNav = navItems.find((item) => navItemActive(item.pathname, currentPath)) || navItems[0] || null;
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>${esc(title)} &middot; ${esc(settings.schoolName)}</title>
-<link rel="icon" href="${settings.faviconUrl}" />
-<style>
-:root {
+const APP_STYLESHEET = `:root {
   color-scheme: light;
   --bg: #f7f8fb;
   --paper: #ffffff;
@@ -4837,8 +2756,2125 @@ tr:last-child td { border-bottom: 0; }
   body.report-card-printing .conduct-table td,
   body.report-card-printing .attendance-table th,
   body.report-card-printing .attendance-table td { border-width: .75px; }
+}`;
+const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
+  var orig = btn.textContent;
+  btn.textContent = 'Preparing…';
+  btn.disabled = true;
+  function restore() {
+    btn.textContent = orig; btn.disabled = false;
+    document.body.classList.remove('report-card-printing');
+  }
+  document.body.classList.add('report-card-printing');
+  setTimeout(function() {
+    window.print();
+    setTimeout(restore, 700);
+  }, 50);
 }
-</style>
+(function(){
+  const root = document.documentElement;
+  const saved = localStorage.getItem('oakstead-theme');
+  const gridTimers = new WeakMap();
+  let gridSaveQueue = Promise.resolve();
+  let activeScoreInput = null;
+  let navAbort = null;
+  if (saved === 'dark') root.setAttribute('data-theme', 'dark');
+
+  function mainEl() {
+    return document.querySelector('[data-app-main]') || document.querySelector('.main');
+  }
+
+  function setMobileNav(open) {
+    const navToggle = document.getElementById('navToggle');
+    document.body.classList.toggle('nav-open', open);
+    if (navToggle) navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  function canUseAppNav(url) {
+    return url.origin === window.location.origin
+      && !url.pathname.startsWith('/assets/')
+      && url.pathname !== '/backup/download'
+      && url.pathname !== '/system-update/status';
+  }
+
+  function isSamePageHash(url) {
+    return url.hash && url.pathname === window.location.pathname && url.search === window.location.search;
+  }
+
+  function updateShellFrom(doc) {
+    const currentNav = document.querySelector('.nav-links');
+    const nextNav = doc.querySelector('.nav-links');
+    if (currentNav && nextNav) currentNav.innerHTML = nextNav.innerHTML;
+    const currentMobileLabel = document.querySelector('#navToggle .nav-toggle-main span');
+    const nextMobileLabel = doc.querySelector('#navToggle .nav-toggle-main span');
+    if (currentMobileLabel && nextMobileLabel) currentMobileLabel.textContent = nextMobileLabel.textContent;
+  }
+
+  function navigateApp(to, options) {
+    options = options || {};
+    const nextUrl = new URL(to, window.location.href);
+    if (!canUseAppNav(nextUrl)) {
+      window.location.href = nextUrl.toString();
+      return Promise.resolve(false);
+    }
+    const currentMain = mainEl();
+    if (!currentMain) {
+      window.location.href = nextUrl.toString();
+      return Promise.resolve(false);
+    }
+    if (navAbort) navAbort.abort();
+    navAbort = new AbortController();
+    currentMain.classList.add('app-loading');
+    return fetch(nextUrl.toString(), {
+      signal: navAbort.signal,
+      headers: { Accept: 'text/html', 'X-Requested-With': 'Oakstead-App-Shell' }
+    }).then(function(response) {
+      if (!response.ok) throw new Error('Navigation failed');
+      return response.text().then(function(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const nextMain = doc.querySelector('[data-app-main]') || doc.querySelector('.main');
+        if (!nextMain) {
+          window.location.href = response.url || nextUrl.toString();
+          return false;
+        }
+        document.title = doc.title || document.title;
+        updateShellFrom(doc);
+        const liveMain = mainEl();
+        liveMain.replaceWith(document.importNode(nextMain, true));
+        if (options.push !== false) history.pushState({ oaksteadApp: true }, '', nextUrl.toString());
+        if (options.scroll !== false) window.scrollTo(0, 0);
+        setMobileNav(false);
+        initDynamicContent(mainEl());
+        return true;
+      });
+    }).catch(function(error) {
+      if (error.name === 'AbortError') return false;
+      window.location.href = nextUrl.toString();
+      return false;
+    }).finally(function() {
+      const liveMain = mainEl();
+      if (liveMain) liveMain.classList.remove('app-loading');
+    });
+  }
+
+  function formToUrl(form) {
+    const url = new URL(form.getAttribute('action') || window.location.href, window.location.href);
+    url.search = '';
+    new FormData(form).forEach(function(value, key) {
+      if (key) url.searchParams.append(key, value);
+    });
+    return url;
+  }
+
+  function submitFormSmoothly(form, options) {
+    if (!form) return;
+    const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) {
+      form.submit();
+      return;
+    }
+    navigateApp(formToUrl(form), options);
+  }
+
+  function goToUrl(url, options) {
+    const nextUrl = new URL(url, window.location.href);
+    if (canUseAppNav(nextUrl)) navigateApp(nextUrl, options);
+    else window.location.href = nextUrl.toString();
+  }
+
+  const themeToggle = document.getElementById('themeToggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', function(){
+      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next === 'dark' ? 'dark' : '');
+      localStorage.setItem('oakstead-theme', next);
+    });
+  }
+
+  const navToggle = document.getElementById('navToggle');
+  const primaryNav = document.getElementById('primaryNav');
+  if (navToggle && primaryNav) {
+    navToggle.addEventListener('click', function(event) {
+      event.stopPropagation();
+      setMobileNav(!document.body.classList.contains('nav-open'));
+    });
+    primaryNav.addEventListener('click', function(event) {
+      if (event.target.closest('a')) setMobileNav(false);
+    });
+    document.addEventListener('click', function(event) {
+      if (!document.body.classList.contains('nav-open')) return;
+      if (primaryNav.contains(event.target) || navToggle.contains(event.target)) return;
+      setMobileNav(false);
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') setMobileNav(false);
+    });
+  }
+
+  document.querySelectorAll('.year-form select').forEach(function(select) {
+    select.addEventListener('change', function() {
+      select.form.submit();
+    });
+  });
+
+  document.addEventListener('click', function(event) {
+    const printButton = event.target.closest('[data-print-page]');
+    if (printButton) {
+      window.print();
+      return;
+    }
+    const pdfButton = event.target.closest('[data-generate-pdf]');
+    if (pdfButton) {
+      generateReportCardPdf(pdfButton);
+      return;
+    }
+    const closeButton = event.target.closest('[data-dialog-close]');
+    if (closeButton) {
+      closeButton.closest('dialog')?.close();
+      return;
+    }
+    const dialogButton = event.target.closest('[data-dialog-target]');
+    if (dialogButton) {
+      const dialog = document.getElementById(dialogButton.dataset.dialogTarget);
+      if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+      return;
+    }
+    if (event.target.matches('.assignment-dialog')) {
+      event.target.close();
+      return;
+    }
+    const scoreChip = event.target.closest('[data-score-chip]');
+    if (scoreChip) {
+      const target = activeScoreInput || document.querySelector('[data-score-input]');
+      if (!target) return;
+      target.value = scoreChip.dataset.scoreChip;
+      updateScorePreview(target);
+      const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
+      if (next) {
+        next.focus();
+        next.select();
+      }
+      return;
+    }
+    const anchor = event.target.closest('a[href]');
+    if (!anchor || event.defaultPrevented) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (anchor.target || anchor.hasAttribute('download') || anchor.dataset.noAppNav !== undefined) return;
+    const url = new URL(anchor.href, window.location.href);
+    if (!canUseAppNav(url) || isSamePageHash(url)) return;
+    event.preventDefault();
+    navigateApp(url);
+  });
+
+  document.addEventListener('submit', function(event) {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) return;
+    event.preventDefault();
+    navigateApp(formToUrl(form));
+  });
+
+  document.addEventListener('change', function(event) {
+    const assignmentSelect = event.target.closest('[data-assignment-select]');
+    if (assignmentSelect) {
+      if (assignmentSelect.dataset.baseUrl) {
+        const nextUrl = new URL(assignmentSelect.dataset.baseUrl, window.location.origin);
+        if (assignmentSelect.value === '__new__') {
+          nextUrl.searchParams.delete('assignmentId');
+          nextUrl.searchParams.set('action', 'add');
+        } else if (assignmentSelect.value) {
+          nextUrl.searchParams.delete('action');
+          nextUrl.searchParams.set('assignmentId', assignmentSelect.value);
+        }
+        goToUrl(nextUrl);
+        return;
+      }
+      if (assignmentSelect.value) {
+        submitFormSmoothly(assignmentSelect.form);
+      } else {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('assignmentId');
+        goToUrl(url);
+      }
+      return;
+    }
+    const scoreModeToggle = event.target.closest('[data-score-mode-toggle]');
+    if (scoreModeToggle) {
+      goToUrl(scoreModeToggle.checked ? scoreModeToggle.dataset.wrongUrl : scoreModeToggle.dataset.percentUrl);
+      return;
+    }
+    const gridToggle = event.target.closest('[data-grid-toggle]');
+    if (gridToggle) {
+      goToUrl(gridToggle.checked ? gridToggle.dataset.onUrl : gridToggle.dataset.offUrl);
+      return;
+    }
+    const lettersToggle = event.target.closest('[data-grid-letters-toggle]');
+    if (lettersToggle) {
+      syncGridLettersToggle(lettersToggle, true);
+      return;
+    }
+    if (event.target.matches('select[name="groupId"]')) {
+      syncRoleOptions(event.target.closest('form'));
+      return;
+    }
+    const gridInput = event.target.closest('[data-grid-score-input]');
+    if (gridInput) {
+      clearTimeout(gridTimers.get(gridInput));
+      autosaveGridInput(gridInput);
+      return;
+    }
+    const auto = event.target.closest('[data-auto-submit]');
+    if (auto && auto.form) submitFormSmoothly(auto.form, { scroll: false });
+  });
+
+  document.addEventListener('focusin', function(event) {
+    if (event.target.matches('[data-score-input]')) {
+      activeScoreInput = event.target;
+      window.setTimeout(function() { event.target.select?.(); }, 0);
+    }
+  });
+
+  document.addEventListener('input', function(event) {
+    if (event.target.matches('[data-score-input]')) {
+      updateScorePreview(event.target);
+      return;
+    }
+    if (event.target.matches('[data-grid-score-input]')) {
+      const input = event.target;
+      clearTimeout(gridTimers.get(input));
+      gridTimers.set(input, setTimeout(function() { autosaveGridInput(input); }, 550));
+      return;
+    }
+    if (event.target.matches('input[name="maxScore"]')) {
+      event.target.form?.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    }
+  });
+
+  document.addEventListener('keydown', function(event) {
+    const input = event.target.closest('[data-grid-score-input]');
+    if (!input || event.key !== 'Tab') return;
+    const inputs = Array.from(document.querySelectorAll('[data-grid-score-input][data-assignment-id="' + input.dataset.assignmentId + '"]'));
+    const index = inputs.indexOf(input);
+    const next = inputs[index + (event.shiftKey ? -1 : 1)];
+    if (!next) return;
+    event.preventDefault();
+    autosaveGridInput(input);
+    next.focus();
+    next.select?.();
+  });
+
+  window.addEventListener('popstate', function() {
+    navigateApp(window.location.href, { push: false, scroll: false });
+  });
+
+  history.replaceState({ oaksteadApp: true }, '', window.location.href);
+
+  function formatScorePreviewNumber(value) {
+    if (!Number.isFinite(value)) return '';
+    return value.toFixed(1).replace(/\\.0$/, '');
+  }
+
+  function updateScorePreview(input) {
+    const preview = input.closest('.score-entry-cell')?.querySelector('[data-score-preview]');
+    if (!preview) return;
+    const formPoints = Number(input.form?.querySelector('input[name="maxScore"]')?.value);
+    const points = Number.isFinite(formPoints) && formPoints > 0 ? formPoints : Number(input.dataset.scorePoints || 100);
+    const raw = Number(input.value);
+    const mode = input.dataset.scoreMode || input.form?.querySelector('input[name="scoreMode"]')?.value || 'wrong';
+    input.max = mode === 'percent' ? '100' : String(points);
+    if (!Number.isFinite(raw)) {
+      preview.textContent = mode === 'percent' ? formatScorePreviewNumber(points) + ' pts possible' : 'out of ' + formatScorePreviewNumber(points);
+      return;
+    }
+    if (mode === 'percent') {
+      const earned = Math.max(0, Math.min(points, (Math.max(0, Math.min(100, raw)) / 100) * points));
+      preview.textContent = formatScorePreviewNumber(earned) + ' / ' + formatScorePreviewNumber(points) + ' pts';
+      return;
+    }
+    const wrong = Math.max(0, Math.min(points, raw));
+    const percent = points > 0 ? ((points - wrong) / points) * 100 : 0;
+    preview.textContent = formatScorePreviewNumber(percent) + '%';
+  }
+
+  function syncGridLettersToggle(toggle, save) {
+    const shell = toggle.closest('.gb-grid-shell');
+    if (!save && localStorage.getItem('oakstead-gradebook-letters') === 'off') toggle.checked = false;
+    shell?.classList.toggle('letters-hidden', !toggle.checked);
+    if (save) localStorage.setItem('oakstead-gradebook-letters', toggle.checked ? 'on' : 'off');
+  }
+
+  function markGridCell(input, state) {
+    const cell = input.closest('.gb-grid-score-cell');
+    if (!cell) return;
+    cell.classList.remove('saving', 'saved', 'save-error');
+    if (state) cell.classList.add(state);
+  }
+
+  function gridHidden(container, name) {
+    return container.querySelector('input[name="' + name + '"]')?.value || '';
+  }
+
+  function updateGridAverages(result, container) {
+    if (!result || !result.display) return;
+    const root = container || document;
+    const assignmentId = String(result.assignmentId || '');
+    const studentId = String(result.studentId || '');
+    const assignmentAverage = assignmentId ? root.querySelector('[data-grid-assignment-average="' + assignmentId + '"]') : null;
+    const studentAverage = studentId ? root.querySelector('[data-grid-student-average="' + studentId + '"]') : null;
+    const classAverage = root.querySelector('[data-grid-class-average]');
+    if (assignmentAverage && result.display.assignmentAverage !== undefined) assignmentAverage.innerHTML = result.display.assignmentAverage;
+    if (studentAverage && result.display.studentAverage !== undefined) studentAverage.innerHTML = result.display.studentAverage;
+    if (classAverage && result.display.classAverage !== undefined) classAverage.innerHTML = result.display.classAverage;
+  }
+
+  function autosaveGridInput(input) {
+    const container = input.closest('[data-grid-autosave]');
+    if (!container || input.value === input.dataset.originalValue) return;
+    const valueToSave = input.value;
+    gridSaveQueue = gridSaveQueue
+      .catch(function() {})
+      .then(function() {
+        return saveGridInput(input, container, valueToSave);
+      });
+  }
+
+  function saveGridInput(input, container, valueToSave) {
+    if (!input.isConnected || !container.isConnected || valueToSave === input.dataset.originalValue) return Promise.resolve();
+    const formData = new FormData();
+    formData.set('csrfToken', gridHidden(container, 'csrfToken'));
+    formData.set('action', 'grid-score');
+    formData.set('schoolYearId', gridHidden(container, 'schoolYearId'));
+    formData.set('markingPeriodId', gridHidden(container, 'markingPeriodId'));
+    formData.set('gradeLevel', gridHidden(container, 'gradeLevel'));
+    formData.set('subjectId', gridHidden(container, 'subjectId'));
+    formData.set('scoreMode', gridHidden(container, 'scoreMode'));
+    formData.set('assignmentId', input.dataset.assignmentId || '');
+    formData.set('studentId', input.dataset.studentId || '');
+    formData.set('scoreValue', valueToSave);
+    const status = container.querySelector('[data-grid-autosave-status]');
+    markGridCell(input, 'saving');
+    if (status) status.textContent = 'Saving...';
+    return fetch(container.dataset.action || '/gradebook', { method: 'POST', body: formData, headers: { Accept: 'application/json' } })
+      .then(function(response) {
+        if (!response.ok) throw new Error('Save failed');
+        return response.json();
+      })
+      .then(function(result) {
+        if (!input.isConnected || !container.isConnected) return;
+        input.dataset.originalValue = valueToSave;
+        if (input.value !== valueToSave) return;
+        const letter = input.closest('.gb-grid-score-cell')?.querySelector('.gb-cell-letter');
+        if (letter && result.letter !== undefined) letter.textContent = result.letter || '';
+        updateGridAverages(result, container);
+        markGridCell(input, 'saved');
+        if (status) status.textContent = 'Saved';
+      })
+      .catch(function() {
+        markGridCell(input, 'save-error');
+        if (status) status.textContent = 'Could not save';
+      });
+  }
+
+  function syncRoleOptions(form) {
+    if (!form) return;
+    const groupSelect = form.querySelector('select[name="groupId"]');
+    const roleSelect = form.querySelector('select[name="roleTypeId"]');
+    if (!groupSelect || !roleSelect) return;
+    const groupId = groupSelect.value;
+    Array.from(roleSelect.options).forEach(function(option) {
+      if (!option.value) return;
+      const matches = !groupId || option.dataset.roleGroup === groupId;
+      option.disabled = !matches;
+      option.hidden = !matches;
+    });
+    if (roleSelect.selectedOptions[0] && roleSelect.selectedOptions[0].disabled) roleSelect.value = '';
+  }
+
+  function initUpdateTools(scope) {
+    const panel = scope.querySelector('[data-update-status]');
+    if (!panel) return;
+    const updateForm = scope.querySelector('[data-update-form]');
+    const updateCheckForm = scope.querySelector('[data-update-check-form]');
+    const updateDownloadRow = scope.querySelector('[data-update-download-row]');
+    const updateDownloadLink = scope.querySelector('[data-update-download]');
+    const updateReleaseLink = scope.querySelector('[data-update-release]');
+    function renderUpdateStatus(status) {
+      if (!panel.isConnected || !status) return;
+      const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
+      const message = panel.querySelector('[data-update-message]');
+      const percentLabel = panel.querySelector('[data-update-percent]');
+      const progress = panel.querySelector('[data-update-progress]');
+      const phase = panel.querySelector('[data-update-phase]');
+      const log = panel.querySelector('[data-update-log]');
+      if (message) message.textContent = status.message || '';
+      if (percentLabel) percentLabel.textContent = percent + '%';
+      if (progress) progress.style.setProperty('--progress-value', percent + '%');
+      if (phase) phase.textContent = (status.phase || 'idle') + (status.targetVersion ? ' / target v' + status.targetVersion : '');
+      if (log) log.textContent = status.log && status.log.length ? status.log.join('\\n') : 'No update activity yet.';
+      if (updateDownloadRow && updateDownloadLink) {
+        const downloadUrl = status.downloadUrl || status.installerDownloadUrl || '';
+        updateDownloadRow.style.display = downloadUrl || status.releaseUrl ? 'flex' : 'none';
+        updateDownloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
+        if (downloadUrl) updateDownloadLink.href = downloadUrl;
+        if (status.installerAssetName) updateDownloadLink.textContent = 'Download ' + status.installerAssetName;
+      }
+      if (updateReleaseLink) {
+        updateReleaseLink.style.display = status.releaseUrl ? 'inline-flex' : 'none';
+        if (status.releaseUrl) updateReleaseLink.href = status.releaseUrl;
+      }
+      [updateForm, updateCheckForm].forEach(function(form) {
+        const button = form?.querySelector('button[type="submit"]');
+        if (button) button.disabled = Boolean(status.running);
+      });
+      const channelInput = updateForm?.querySelector('input[name="channel"]');
+      if (channelInput && status.channel) channelInput.value = status.channel;
+    }
+    function pollUpdateStatus() {
+      if (!panel.isConnected) return;
+      fetch('/system-update/status', { headers: { Accept: 'application/json' } })
+        .then(function(response) { return response.ok ? response.json() : null; })
+        .then(function(status) {
+          renderUpdateStatus(status);
+          if (status && status.running) setTimeout(pollUpdateStatus, 1400);
+        })
+        .catch(function() {});
+    }
+    if (updateForm && !updateForm.dataset.bound) {
+      updateForm.dataset.bound = '1';
+      updateForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const button = updateForm.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
+          .then(function(response) { return response.json(); })
+          .then(function(status) {
+            renderUpdateStatus(status);
+            if (status && (status.downloadUrl || status.installerDownloadUrl)) {
+              window.location.href = status.downloadUrl || status.installerDownloadUrl;
+            }
+            setTimeout(pollUpdateStatus, 800);
+          })
+          .catch(function() { if (button) button.disabled = false; });
+      });
+      pollUpdateStatus();
+    }
+    if (updateCheckForm && !updateCheckForm.dataset.bound) {
+      updateCheckForm.dataset.bound = '1';
+      updateCheckForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        const button = updateCheckForm.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
+          .then(function(response) { return response.json(); })
+          .then(function(status) { renderUpdateStatus(status); })
+          .catch(function() {})
+          .finally(function() { if (button) button.disabled = false; });
+      });
+    }
+  }
+
+  function initDynamicContent(scope) {
+    scope = scope || document;
+    scope.querySelectorAll('[data-score-input]').forEach(updateScorePreview);
+    scope.querySelectorAll('[data-grid-letters-toggle]').forEach(function(toggle) {
+      syncGridLettersToggle(toggle, false);
+    });
+    scope.querySelectorAll('form[action="/person-roles"]').forEach(syncRoleOptions);
+    initUpdateTools(scope);
+  }
+
+  initDynamicContent(document);
+})();`;
+function contentVersion(text) {
+  return crypto.createHash('sha256').update(text).digest('hex').slice(0, 8);
+}
+const APP_STYLESHEET_VERSION = contentVersion(APP_STYLESHEET);
+const APP_CLIENT_SCRIPT_VERSION = contentVersion(APP_CLIENT_SCRIPT);
+function staticAsset(text, contentType) {
+  const body = Buffer.from(text);
+  return { contentType, body, gzipped: zlib.gzipSync(body) };
+}
+const STATIC_ASSETS = new Map([
+  ['/assets/app.css', staticAsset(APP_STYLESHEET, 'text/css; charset=utf-8')],
+  ['/assets/app.js', staticAsset(APP_CLIENT_SCRIPT, 'text/javascript; charset=utf-8')]
+]);
+const {
+  appendSetCookie,
+  cookieValue,
+  csrfInput,
+  getOrCreateCsrfToken,
+  parseBody,
+  parseCookies,
+  redirect,
+  requireCsrf,
+  securityHeaders,
+  sendHtml,
+  sendJson,
+  sendText
+} = createHttpHelpers({ escapeHtml: esc, maxBodySize: MAX_BODY_SIZE });
+let ACTIVE_NETWORK = {
+  host: DEFAULT_HOST,
+  port: DEFAULT_PORT,
+  hostOverridden: Boolean(process.env.HOST),
+  portOverridden: Boolean(process.env.PORT)
+};
+
+const ROLE_ADMIN = 'admin';
+const ROLE_PRINCIPAL = 'principal';
+const ROLE_TEACHER = 'teacher';
+const ROLE_PARENT = 'parent';
+const ROLES = [ROLE_ADMIN, ROLE_PRINCIPAL, ROLE_TEACHER, ROLE_PARENT];
+const CATEGORIES = ['Lesson / Homework', 'Quiz', 'Test'];
+const DEFAULT_LETTER_GRADES = [
+  ['A+', 100],
+  ['A', 96],
+  ['A-', 94],
+  ['B+', 92],
+  ['B', 88],
+  ['B-', 86],
+  ['C+', 84],
+  ['C', 79],
+  ['C-', 76],
+  ['D', 70],
+  ['E', 63],
+  ['F', 0]
+];
+const loginAttempts = new Map();
+
+function ensureRuntimeDirs() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+function scoreInputControl(studentId, value, maxScore, mode) {
+  const points = compactNumber(asPoints(maxScore));
+  const scoreMode = cleanScoreMode(mode);
+  return `<div class="score-entry-cell">
+    <input data-score-input data-score-points="${points}" data-score-mode="${scoreMode}" name="score_${studentId}" type="number" inputmode="decimal" min="0" max="${scoreMode === 'percent' ? '100' : points}" step="0.01" value="${esc(value)}" autocomplete="off" />
+    <small class="score-preview" data-score-preview></small>
+  </div>`;
+}
+
+function scoreModeToggle(percentUrl, wrongUrl, mode) {
+  const scoreMode = cleanScoreMode(mode);
+  return `<div class="score-mode" aria-label="Score entry mode">
+    <span>Percent</span>
+    <label class="score-switch">
+      <input type="checkbox" data-score-mode-toggle data-percent-url="${esc(percentUrl)}" data-wrong-url="${esc(wrongUrl)}" ${scoreMode === 'wrong' ? 'checked' : ''} />
+      <span class="score-switch-track" aria-hidden="true"><span class="score-switch-thumb"></span></span>
+      <span class="sr-only">Use number wrong</span>
+    </label>
+    <span>Number wrong</span>
+  </div>`;
+}
+
+function gridModeToggle(offUrl, onUrl, isGrid) {
+  return `<div class="gradebook-layout-toggle" aria-label="Gradebook grid layout">
+    <span>Grid</span>
+    <label class="score-switch">
+      <input type="checkbox" data-grid-toggle data-off-url="${esc(offUrl)}" data-on-url="${esc(onUrl)}" ${isGrid ? 'checked' : ''} />
+      <span class="score-switch-track" aria-hidden="true"><span class="score-switch-thumb"></span></span>
+      <span class="sr-only">Toggle grid gradebook layout</span>
+    </label>
+    <strong>${isGrid ? 'On' : 'Off'}</strong>
+  </div>`;
+}
+
+const db = createDb({ dbFile: DB_FILE });
+const { runSql, querySql, insertReturningId, validateBackupDatabase } = db;
+
+function runSqlBatch(statements) {
+  db.runSqlTransaction(buildTransaction(statements));
+}
+
+function timestampForFile(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+function backupPath(fileName) {
+  const base = path.basename(String(fileName || ''));
+  if (!/^oakstead-backup-[0-9T-]+Z(?:-[a-z0-9-]+)?\.db$/i.test(base)) return '';
+  const target = path.join(BACKUP_DIR, base);
+  return target.startsWith(BACKUP_DIR) ? target : '';
+}
+
+function createDatabaseBackup(reason = 'manual') {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const safeReason = cleanText(reason, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'manual';
+  const fileName = `oakstead-backup-${timestampForFile()}-${safeReason}.db`;
+  const target = path.join(BACKUP_DIR, fileName);
+  // Under WAL, committed data can live only in the -wal sidecar; fold it into
+  // the main file before copying so the backup is complete and self-contained.
+  let checkpointed = false;
+  for (let attempt = 0; attempt < 3 && !checkpointed; attempt += 1) {
+    checkpointed = !db.checkpoint().busy;
+  }
+  if (checkpointed) {
+    fs.copyFileSync(DB_FILE, target);
+  } else {
+    db.withDatabaseClosed(() => fs.copyFileSync(DB_FILE, target));
+  }
+  setSetting('backup_last_at', new Date().toISOString());
+  setSetting('backup_last_file', fileName);
+  return { fileName, path: target, size: fs.statSync(target).size };
+}
+
+function listDatabaseBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs.readdirSync(BACKUP_DIR)
+    .map((fileName) => {
+      const target = backupPath(fileName);
+      if (!target || !fs.existsSync(target)) return null;
+      const stat = fs.statSync(target);
+      return { fileName, size: stat.size, createdAt: stat.mtime };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function refreshDemoData(reason = 'scheduled') {
+  const script = path.join(__dirname, 'scripts', 'seed-demo.js');
+  if (!fs.existsSync(script)) {
+    console.error('Demo seed script is missing.');
+    return;
+  }
+  const result = spawnSync(process.execPath, [script, '--reset'], {
+    cwd: __dirname,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024 * 16,
+    env: { ...process.env, DB_FILE }
+  });
+  if (result.stdout) console.log(result.stdout.trim());
+  if (result.stderr) console.error(result.stderr.trim());
+  if (result.status !== 0) console.error(`Demo data refresh failed during ${reason}.`);
+  invalidateAppCaches();
+}
+
+function ensureColumn(table, column, definition) {
+  const columns = querySql(`PRAGMA table_info(${table});`).map((row) => row.name);
+  if (!columns.includes(column)) runSql(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
+}
+
+function addDays(dateText, days) {
+  const date = new Date(`${dateText}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetween(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  return Math.max(0, Math.round((end - start) / 86400000) + 1);
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, encoded) {
+  if (!encoded || !String(encoded).includes(':')) return false;
+  const [salt, expected] = String(encoded).split(':');
+  const actual = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+  } catch {
+    return false;
+  }
+}
+
+function clientIp(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function loginAttemptKeys(req, username) {
+  const ip = clientIp(req);
+  return [`ip:${ip}`, `user:${username || 'blank'}:${ip}`];
+}
+
+function pruneLoginAttempts(now = Date.now()) {
+  for (const [key, attempt] of loginAttempts.entries()) {
+    if (attempt.lockedUntil > now || now - attempt.firstAt <= LOGIN_WINDOW_MS) continue;
+    loginAttempts.delete(key);
+  }
+}
+
+function loginThrottleStatus(req, username) {
+  pruneLoginAttempts();
+  const now = Date.now();
+  const locked = loginAttemptKeys(req, username)
+    .map((key) => loginAttempts.get(key))
+    .filter((attempt) => attempt?.lockedUntil > now)
+    .sort((a, b) => b.lockedUntil - a.lockedUntil)[0];
+  if (!locked) return null;
+  return { retryAfter: Math.max(1, Math.ceil((locked.lockedUntil - now) / 1000)) };
+}
+
+function recordLoginFailure(req, username) {
+  pruneLoginAttempts();
+  const now = Date.now();
+  loginAttemptKeys(req, username).forEach((key) => {
+    const previous = loginAttempts.get(key);
+    const attempt = previous && now - previous.firstAt <= LOGIN_WINDOW_MS
+      ? previous
+      : { count: 0, firstAt: now, lockedUntil: 0 };
+    attempt.count += 1;
+    if (attempt.count >= MAX_LOGIN_FAILURES) attempt.lockedUntil = now + LOGIN_LOCK_MS;
+    loginAttempts.set(key, attempt);
+  });
+}
+
+function clearLoginFailures(req, username) {
+  loginAttemptKeys(req, username).forEach((key) => loginAttempts.delete(key));
+}
+
+function ensureDb() {
+  runSql(`
+CREATE TABLE IF NOT EXISTS os_school_years (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  start_date TEXT,
+  end_date TEXT,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_school_districts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_congregations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_families (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_name TEXT NOT NULL,
+  school_district_id INTEGER,
+  congregation_id INTEGER,
+  father_name TEXT,
+  mother_name TEXT,
+  father_phone TEXT,
+  mother_phone TEXT,
+  phone TEXT,
+  email TEXT,
+  address TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_district_id) REFERENCES os_school_districts(id),
+  FOREIGN KEY (congregation_id) REFERENCES os_congregations(id)
+);
+CREATE TABLE IF NOT EXISTS os_students (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_id INTEGER NOT NULL,
+  first_name TEXT NOT NULL,
+  middle_name TEXT,
+  last_name TEXT NOT NULL,
+  birth_date TEXT,
+  gender TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (family_id) REFERENCES os_families(id)
+);
+CREATE TABLE IF NOT EXISTS os_emergency_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_id INTEGER NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 1,
+  name TEXT NOT NULL,
+  relationship TEXT,
+  phone TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (family_id) REFERENCES os_families(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_teachers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  mobile_phone TEXT,
+  address TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_role_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_role_types (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  UNIQUE (group_id, name),
+  FOREIGN KEY (group_id) REFERENCES os_role_groups(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_person_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_type TEXT NOT NULL,
+  person_id INTEGER NOT NULL,
+  group_id INTEGER NOT NULL,
+  role_type_id INTEGER NOT NULL,
+  is_assistant INTEGER NOT NULL DEFAULT 0,
+  term_start TEXT,
+  term_end TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (group_id) REFERENCES os_role_groups(id),
+  FOREIGN KEY (role_type_id) REFERENCES os_role_types(id)
+);
+CREATE TABLE IF NOT EXISTS os_classrooms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  teacher_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
+);
+CREATE TABLE IF NOT EXISTS os_classroom_grades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  classroom_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  UNIQUE (classroom_id, grade_level),
+  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_student_years (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL,
+  school_year_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  classroom_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'enrolled',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (student_id, school_year_id),
+  FOREIGN KEY (student_id) REFERENCES os_students(id),
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id)
+);
+CREATE TABLE IF NOT EXISTS os_subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_grade_subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  UNIQUE (school_year_id, grade_level, subject_id),
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
+);
+CREATE TABLE IF NOT EXISTS os_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  grade_level TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  classroom_id INTEGER,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  assignment_date TEXT,
+  max_score REAL NOT NULL DEFAULT 100,
+  teacher_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id),
+  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id),
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
+);
+CREATE TABLE IF NOT EXISTS os_scores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  assignment_id INTEGER NOT NULL,
+  student_id INTEGER NOT NULL,
+  score REAL,
+  note TEXT,
+  UNIQUE (assignment_id, student_id),
+  FOREIGN KEY (assignment_id) REFERENCES os_assignments(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES os_students(id)
+);
+CREATE TABLE IF NOT EXISTS os_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  username TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  teacher_id INTEGER,
+  parent_family_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id),
+  FOREIGN KEY (parent_family_id) REFERENCES os_families(id)
+);
+CREATE TABLE IF NOT EXISTS os_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_token TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES os_users(id)
+);
+CREATE TABLE IF NOT EXISTS os_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS os_absences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  student_id INTEGER NOT NULL,
+  absence_date TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  amount REAL NOT NULL DEFAULT 1,
+  unit TEXT NOT NULL DEFAULT 'days',
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES os_students(id)
+);
+CREATE TABLE IF NOT EXISTS os_marking_periods (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  period_number INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  start_date TEXT,
+  end_date TEXT,
+  UNIQUE (school_year_id, period_number),
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_grade_weight_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  min_grade TEXT NOT NULL,
+  max_grade TEXT NOT NULL,
+  subject_id INTEGER,
+  rounding_mode TEXT NOT NULL DEFAULT 'nearest',
+  calculation_mode TEXT NOT NULL DEFAULT 'weighted',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
+);
+CREATE TABLE IF NOT EXISTS os_grade_weight_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  weight REAL NOT NULL,
+  UNIQUE (group_id, category),
+  FOREIGN KEY (group_id) REFERENCES os_grade_weight_groups(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS os_letter_grade_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_year_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  min_grade TEXT NOT NULL,
+  max_grade TEXT NOT NULL,
+  subject_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
+);
+CREATE TABLE IF NOT EXISTS os_letter_grade_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  letter TEXT NOT NULL,
+  threshold REAL NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (group_id, letter),
+  FOREIGN KEY (group_id) REFERENCES os_letter_grade_groups(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
+CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
+`);
+
+  ensureColumn('os_school_years', 'school_days', 'school_days INTEGER DEFAULT 180');
+  ensureColumn('os_assignments', 'marking_period_id', 'marking_period_id INTEGER');
+  ensureColumn('os_families', 'school_district_id', 'school_district_id INTEGER');
+  ensureColumn('os_families', 'congregation_id', 'congregation_id INTEGER');
+  ensureColumn('os_families', 'father_phone', 'father_phone TEXT');
+  ensureColumn('os_families', 'mother_phone', 'mother_phone TEXT');
+  ensureColumn('os_students', 'middle_name', 'middle_name TEXT');
+  ensureColumn('os_students', 'gender', 'gender TEXT');
+  ensureColumn('os_teachers', 'mobile_phone', 'mobile_phone TEXT');
+  ensureColumn('os_teachers', 'address', 'address TEXT');
+  ensureColumn('os_users', 'parent_family_id', 'parent_family_id INTEGER');
+
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
+  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
+  createDefaultRoleGroups();
+  migrateLessonHomeworkWeights();
+
+  const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
+  if (!yearCount) {
+    runSql(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
+      VALUES ('2025-2026', '2025-08-15', '2026-05-31', 1);`);
+  }
+
+  const userCount = querySql('SELECT COUNT(*) AS count FROM os_users')[0]?.count || 0;
+  if (!userCount) {
+    runSql(`INSERT INTO os_users (name, username, role, password_hash)
+      VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
+  }
+
+  querySql('SELECT id, name, start_date, end_date FROM os_school_years;').forEach((year) => {
+    const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+    if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
+    const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+    if (!weightCount) createDefaultWeightGroups(asInt(year.id));
+    const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+    if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
+  });
+
+  runSql("DELETE FROM os_sessions WHERE expires_at <= datetime('now');");
+}
+
+function createMarkingPeriods(yearId, count, startDate = '', endDate = '') {
+  const periods = Math.max(1, Math.min(12, asInt(count) || 6));
+  const span = daysBetween(startDate, endDate);
+  for (let index = 0; index < periods; index += 1) {
+    const periodStart = span ? addDays(startDate, Math.floor((span * index) / periods)) : '';
+    const periodEnd = span ? addDays(startDate, Math.floor((span * (index + 1)) / periods) - 1) : '';
+    runSql(`INSERT OR REPLACE INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
+      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)});`);
+  }
+}
+
+function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
+  const groupId = insertReturningId(`INSERT INTO os_grade_weight_groups (school_year_id, name, min_grade, max_grade)
+    VALUES (${yearId}, ${sqlValue(name)}, ${sqlValue(minGrade)}, ${sqlValue(maxGrade)})`);
+  Object.entries(weights).forEach(([category, weight]) => {
+    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+      VALUES (${groupId}, ${sqlValue(category)}, ${Number(weight) || 0});`);
+  });
+}
+
+function createDefaultWeightGroups(yearId) {
+  createWeightGroup(yearId, 'Grades 1-2', '1', '2', { 'Lesson / Homework': 50, Quiz: 25, Test: 25 });
+  createWeightGroup(yearId, 'Grades 3-9', '3', '9', { 'Lesson / Homework': 25, Quiz: 25, Test: 50 });
+}
+
+function createDefaultLetterGradeGroup(yearId) {
+  const groupId = insertReturningId(`INSERT INTO os_letter_grade_groups (school_year_id, name, min_grade, max_grade, subject_id)
+    VALUES (${yearId}, 'Default Letter Grades', '1', '12', NULL)`);
+  DEFAULT_LETTER_GRADES.forEach(([letter, threshold], index) => {
+    runSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
+      VALUES (${groupId}, ${sqlValue(letter)}, ${Number(threshold)}, ${index});`);
+  });
+}
+
+function createDefaultRoleGroups() {
+  const defaults = {
+    'Board Members': ['Chairman', 'Secretary', 'Treasurer'],
+    'Faculty Team': ['Teacher', 'Principal', 'Librarian', 'Nurse']
+  };
+  Object.entries(defaults).forEach(([groupName, roles]) => {
+    const groupId = insertReturningId(`INSERT INTO os_role_groups (name) VALUES (${sqlValue(groupName)})
+      ON CONFLICT(name) DO UPDATE SET name=excluded.name`);
+    roles.forEach((roleName) => {
+      runSql(`INSERT OR IGNORE INTO os_role_types (group_id, name) VALUES (${groupId}, ${sqlValue(roleName)});`);
+    });
+  });
+}
+
+function migrateLessonHomeworkWeights() {
+  querySql('SELECT DISTINCT group_id FROM os_grade_weight_items;').forEach((row) => {
+    const groupId = asInt(row.group_id);
+    const legacyItems = querySql(`SELECT category, weight FROM os_grade_weight_items
+      WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
+    if (!legacyItems.length) return;
+    const combinedWeight = Math.min(100, legacyItems.reduce((sum, item) => sum + Number(item.weight || 0), 0));
+    runSql(`DELETE FROM os_grade_weight_items WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
+    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+      VALUES (${groupId}, 'Lesson / Homework', ${combinedWeight});`);
+  });
+}
+
+function createSession(userId, headers) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + SESSION_HOURS * 60 * 60 * 1000).toISOString();
+  runSql(`INSERT INTO os_sessions (session_token, user_id, expires_at)
+    VALUES (${sqlValue(token)}, ${asInt(userId)}, ${sqlValue(expiresAt)});`);
+  appendSetCookie(headers, `sessionToken=${cookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_HOURS * 3600}`);
+}
+
+function clearSession(req, headers) {
+  const token = parseCookies(req).sessionToken;
+  if (token) runSql(`DELETE FROM os_sessions WHERE session_token=${sqlValue(token)};`);
+  appendSetCookie(headers, 'sessionToken=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+}
+
+function currentUser(req) {
+  if (DEMO_MODE) return { id: 0, name: 'Demo Admin', username: 'demo', role: ROLE_ADMIN, teacher_id: null, parent_family_id: null };
+  const token = parseCookies(req).sessionToken;
+  if (!token) return null;
+  const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id
+    FROM os_sessions s
+    JOIN os_users u ON u.id = s.user_id
+    WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
+    LIMIT 1;`);
+  return rows[0] || null;
+}
+
+function isAdmin(user) {
+  return user?.role === ROLE_ADMIN;
+}
+
+function isPrincipal(user) {
+  return user?.role === ROLE_PRINCIPAL;
+}
+
+function isTeacher(user) {
+  return user?.role === ROLE_TEACHER;
+}
+
+function isParent(user) {
+  return user?.role === ROLE_PARENT;
+}
+
+function canAccessSetup(user) {
+  return isAdmin(user) || isPrincipal(user);
+}
+
+function canManageAdminUsers(user) {
+  return isAdmin(user);
+}
+
+function canManageSchoolUsers(user) {
+  return isAdmin(user) || isPrincipal(user);
+}
+
+function canManageSchoolSetup(user) {
+  return isAdmin(user) || isPrincipal(user);
+}
+
+function canManageAcademicRecords(user) {
+  return isAdmin(user) || isPrincipal(user) || isTeacher(user);
+}
+
+function teacherStudentClause(user, yearId, alias = 'sy') {
+  return isTeacher(user) ? `AND ${alias}.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${asInt(yearId)})` : '';
+}
+
+function studentAccessClause(user, yearId, studentAlias = 'st', enrollmentAlias = 'sy') {
+  if (isAdmin(user) || isPrincipal(user)) return '';
+  if (isTeacher(user)) return teacherStudentClause(user, yearId, enrollmentAlias);
+  if (isParent(user)) return `AND ${studentAlias}.family_id=${asInt(user.parent_family_id)}`;
+  return 'AND 1=0';
+}
+
+function canViewStudent(user, studentId, yearId) {
+  if (isAdmin(user) || isPrincipal(user)) return true;
+  if (!studentId || !yearId) return false;
+  if (isTeacher(user)) {
+    const rows = querySql(`SELECT sy.student_id
+      FROM os_student_years sy
+      JOIN os_classrooms c ON c.id = sy.classroom_id
+      WHERE sy.student_id=${asInt(studentId)}
+        AND sy.school_year_id=${asInt(yearId)}
+        AND sy.status='enrolled'
+        AND c.teacher_id=${asInt(user.teacher_id)}
+      LIMIT 1;`);
+    return Boolean(rows.length);
+  }
+  if (isParent(user)) {
+    const rows = querySql(`SELECT st.id
+      FROM os_students st
+      JOIN os_student_years sy ON sy.student_id = st.id
+      WHERE st.id=${asInt(studentId)}
+        AND st.family_id=${asInt(user.parent_family_id)}
+        AND sy.school_year_id=${asInt(yearId)}
+        AND sy.status='enrolled'
+      LIMIT 1;`);
+    return Boolean(rows.length);
+  }
+  return false;
+}
+
+function canModifyStudentAcademicRecord(user, studentId, yearId) {
+  if (isAdmin(user) || isPrincipal(user)) return true;
+  if (!isTeacher(user)) return false;
+  return canViewStudent(user, studentId, yearId);
+}
+
+// Bulk equivalent of canModifyStudentAcademicRecord: one query instead of one
+// per student. Returns null when every student is allowed.
+function modifiableStudentIdSet(user, yearId) {
+  if (isAdmin(user) || isPrincipal(user)) return null;
+  if (!isTeacher(user)) return new Set();
+  const rows = querySql(`SELECT sy.student_id
+    FROM os_student_years sy
+    WHERE sy.school_year_id=${asInt(yearId)}
+      AND sy.status='enrolled'
+      ${teacherStudentClause(user, yearId, 'sy')};`);
+  return new Set(rows.map((row) => asInt(row.student_id)));
+}
+
+function setAllowsStudent(allowedIds, studentId) {
+  return !allowedIds || allowedIds.has(asInt(studentId));
+}
+
+function roleOptionsForUser(user, selected = '') {
+  const roles = canManageAdminUsers(user) ? ROLES : [ROLE_TEACHER, ROLE_PARENT];
+  return roles.map((role) => `<option value="${role}" ${selectedAttr(role, selected)}>${roleLabel(role)}</option>`).join('');
+}
+
+function roleLabel(role) {
+  if (role === ROLE_ADMIN) return 'Admin';
+  if (role === ROLE_PRINCIPAL) return 'Principal';
+  if (role === ROLE_PARENT) return 'Parent';
+  return 'Teacher';
+}
+
+// Every data mutation flows through handlePost (which invalidates), the demo
+// reseeder, or a backup restore — so these read-mostly lookups are safe to
+// memoize for the GET hot path.
+let cachedSchoolYears = null;
+let cachedAppSettings = null;
+
+function invalidateAppCaches() {
+  cachedSchoolYears = null;
+  cachedAppSettings = null;
+}
+
+function getSchoolYears() {
+  if (!cachedSchoolYears) cachedSchoolYears = querySql('SELECT * FROM os_school_years ORDER BY start_date DESC, id DESC;');
+  return cachedSchoolYears;
+}
+
+function getSelectedYear(req, url) {
+  const years = getSchoolYears();
+  const requested = asInt(url.searchParams.get('yearId')) || asInt(parseCookies(req).selectedYearId);
+  const selected = years.find((year) => year.id === requested)
+    || years.find((year) => year.is_active)
+    || years[0]
+    || null;
+  return { years, selected };
+}
+
+function getSetting(key, fallback = '') {
+  const row = querySql(`SELECT value FROM os_settings WHERE key=${sqlValue(key)} LIMIT 1;`)[0];
+  return row?.value || fallback;
+}
+
+function setSetting(key, value) {
+  runSql(`INSERT INTO os_settings (key, value, updated_at)
+    VALUES (${sqlValue(key)}, ${sqlValue(value)}, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;`);
+  invalidateAppCaches();
+}
+
+function appSettings() {
+  if (cachedAppSettings) return cachedAppSettings;
+  const rows = querySql('SELECT key, value, updated_at FROM os_settings;');
+  const byKey = rows.reduce((settings, row) => {
+    settings[row.key] = row;
+    return settings;
+  }, {});
+  const schoolName = byKey.school_name?.value || DEFAULT_SCHOOL_NAME;
+  const logoPath = byKey.logo_path?.value || '';
+  const faviconPath = byKey.favicon_path?.value || '';
+  const logoVersion = encodeURIComponent(byKey.logo_path?.updated_at || 'default');
+  const faviconVersion = encodeURIComponent(byKey.favicon_path?.updated_at || logoVersion);
+  cachedAppSettings = {
+    schoolName,
+    logoPath,
+    faviconPath,
+    logoUrl: `/assets/logo?v=${logoVersion}`,
+    faviconUrl: `/assets/favicon?v=${faviconVersion}`,
+    hasCustomLogo: Boolean(logoPath),
+    hasCustomFavicon: Boolean(faviconPath)
+  };
+  return cachedAppSettings;
+}
+
+function backupFrequency(value) {
+  const clean = cleanText(value, 20).toLowerCase();
+  return ['manual', 'daily', 'weekly', 'monthly'].includes(clean) ? clean : 'manual';
+}
+
+function desiredNetworkConfig() {
+  const storedHost = getSetting('network_bind_host', DEFAULT_HOST);
+  const storedPort = getSetting('network_port', String(DEFAULT_PORT));
+  return {
+    host: process.env.HOST ? cleanBindHost(process.env.HOST, DEFAULT_HOST) : cleanBindHost(storedHost, DEFAULT_HOST),
+    port: process.env.PORT ? parsePort(process.env.PORT, DEFAULT_PORT) : parsePort(storedPort, DEFAULT_PORT),
+    hostOverridden: Boolean(process.env.HOST),
+    portOverridden: Boolean(process.env.PORT)
+  };
+}
+
+function localNetworkAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((item) => item && item.family === 'IPv4' && !item.internal)
+    .map((item) => item.address)
+    .filter((address, index, addresses) => addresses.indexOf(address) === index)
+    .sort();
+}
+
+function networkAccessLabel(host) {
+  return host === '0.0.0.0' ? 'LAN access' : 'Local only';
+}
+
+function networkAccessHostForMode(value) {
+  const mode = String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (['lan', 'trusted-lan', 'network', 'local-network', '0.0.0.0'].includes(mode)) return '0.0.0.0';
+  if (['local', 'local-only', 'localhost', '127.0.0.1'].includes(mode)) return '127.0.0.1';
+  return '';
+}
+
+function networkUrls(config = ACTIVE_NETWORK) {
+  if (config.host === '0.0.0.0') {
+    const addresses = localNetworkAddresses();
+    return (addresses.length ? addresses : [os.hostname()]).map((host) => `http://${host}:${config.port}`);
+  }
+  return [`http://${config.host === 'localhost' ? '127.0.0.1' : config.host}:${config.port}`];
+}
+
+function networkStatus() {
+  const desired = desiredNetworkConfig();
+  return {
+    desired,
+    active: ACTIVE_NETWORK,
+    hostName: os.hostname(),
+    addresses: localNetworkAddresses(),
+    urls: networkUrls(ACTIVE_NETWORK),
+    desiredUrls: networkUrls(desired),
+    restartRequired: desired.host !== ACTIVE_NETWORK.host || desired.port !== ACTIVE_NETWORK.port,
+    envManaged: desired.hostOverridden || desired.portOverridden
+  };
+}
+
+function printNetworkStatus() {
+  const savedHost = cleanBindHost(getSetting('network_bind_host', DEFAULT_HOST), DEFAULT_HOST);
+  const savedPort = parsePort(getSetting('network_port', String(DEFAULT_PORT)), DEFAULT_PORT);
+  const effective = desiredNetworkConfig();
+  console.log(`Saved network access: ${networkAccessLabel(savedHost)} (${savedHost}:${savedPort})`);
+  if (effective.hostOverridden || effective.portOverridden) {
+    console.log(`Environment override: ${effective.hostOverridden ? `HOST=${effective.host}` : 'HOST unset'}, ${effective.portOverridden ? `PORT=${effective.port}` : 'PORT unset'}`);
+  }
+  console.log(`Effective on next start: ${networkAccessLabel(effective.host)} (${effective.host}:${effective.port})`);
+  networkUrls(effective).forEach((item) => console.log(`URL: ${item}`));
+}
+
+function printNetworkAccessUsage() {
+  console.log([
+    'Usage:',
+    '  node server.js --network-status',
+    '  node server.js --set-network-access <lan|local> [port]',
+    '',
+    'Examples:',
+    '  node server.js --set-network-access lan',
+    '  node server.js --set-network-access local 3000'
+  ].join('\n'));
+}
+
+function setNetworkAccessFromCli(args) {
+  const [modeValue, portValue] = args;
+  if (!modeValue || modeValue === '--help' || modeValue === '-h') {
+    printNetworkAccessUsage();
+    return Boolean(modeValue);
+  }
+  const host = networkAccessHostForMode(modeValue);
+  if (!host) {
+    console.error(`Unknown network access mode: ${modeValue}`);
+    printNetworkAccessUsage();
+    return false;
+  }
+  const currentPort = parsePort(getSetting('network_port', String(DEFAULT_PORT)), DEFAULT_PORT);
+  const port = portValue === undefined ? currentPort : parsePort(portValue, 0);
+  if (!port) {
+    console.error(`Invalid port: ${portValue}`);
+    printNetworkAccessUsage();
+    return false;
+  }
+  setSetting('network_bind_host', host);
+  setSetting('network_port', String(port));
+  setSetting('network_restart_required_at', new Date().toISOString());
+  console.log(`Saved network access: ${networkAccessLabel(host)} (${host}:${port})`);
+  networkUrls({ host, port }).forEach((item) => console.log(`URL after restart: ${item}`));
+  if (process.env.HOST || process.env.PORT) {
+    console.log('Note: HOST or PORT is currently set, so the environment override wins until it is removed.');
+  }
+  console.log('Restart Oakstead for this change to take effect.');
+  return true;
+}
+
+function backupFrequencyLabel(value) {
+  return { manual: 'Manual only', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[backupFrequency(value)];
+}
+
+function scheduledBackupDue(now = new Date()) {
+  const frequency = backupFrequency(getSetting('backup_frequency', 'manual'));
+  if (frequency === 'manual') return false;
+  const lastAt = getSetting('backup_last_at', '');
+  if (!lastAt) return true;
+  const last = new Date(lastAt);
+  if (Number.isNaN(last.getTime())) return true;
+  const ageMs = now - last;
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (frequency === 'daily') return ageMs >= dayMs;
+  if (frequency === 'weekly') return ageMs >= dayMs * 7;
+  return ageMs >= dayMs * 30;
+}
+
+function runScheduledBackupIfDue() {
+  try {
+    if (fs.existsSync(DB_FILE) && scheduledBackupDue()) createDatabaseBackup('scheduled');
+  } catch (error) {
+    console.error('Scheduled backup failed:', error.message || error);
+  }
+}
+
+function defaultUpdateStatus() {
+  return {
+    running: false,
+    phase: 'idle',
+    percent: 0,
+    message: UPDATE_MODE === 'installer' ? 'Ready to check GitHub releases for a Windows installer.' : 'Ready to check for updates.',
+    updateMode: UPDATE_MODE,
+    channel: 'stable',
+    version: APP_VERSION,
+    targetVersion: '',
+    latestVersion: '',
+    latestTag: '',
+    updateAvailable: false,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    updatedAt: new Date().toISOString(),
+    log: []
+  };
+}
+
+function readUpdateStatus() {
+  try {
+    if (!fs.existsSync(UPDATE_STATUS_FILE)) return defaultUpdateStatus();
+    const status = { ...defaultUpdateStatus(), ...JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')) };
+    if (status.latestVersion && compareVersions(status.latestVersion, APP_VERSION) <= 0) {
+      status.updateAvailable = false;
+      status.downloadUrl = '';
+      status.installerDownloadUrl = '';
+    }
+    return status;
+  } catch {
+    return defaultUpdateStatus();
+  }
+}
+
+function writeUpdateStatus(patch) {
+  const previous = readUpdateStatus();
+  const log = patch.log ? [...(previous.log || []), ...patch.log].slice(-80) : previous.log || [];
+  const next = { ...previous, ...patch, log, updateMode: UPDATE_MODE, version: APP_VERSION, updatedAt: new Date().toISOString() };
+  fs.writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(next, null, 2));
+  return next;
+}
+
+function updateLog(message) {
+  return `${new Date().toLocaleTimeString('en-US', { hour12: false })} ${message}`;
+}
+
+function compareVersions(a, b) {
+  const parse = (value) => {
+    const [version, prerelease = ''] = String(value || '').replace(/^v/i, '').split('-', 2);
+    const parts = version.split('.').map((part) => Number(part) || 0);
+    return { parts: [parts[0] || 0, parts[1] || 0, parts[2] || 0], prerelease };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < 3; index += 1) {
+    if (left.parts[index] !== right.parts[index]) return left.parts[index] > right.parts[index] ? 1 : -1;
+  }
+  if (left.prerelease === right.prerelease) return 0;
+  if (!left.prerelease) return 1;
+  if (!right.prerelease) return -1;
+  return left.prerelease.localeCompare(right.prerelease);
+}
+
+function httpsJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `Oakstead/${APP_VERSION}`
+      }
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1024 * 1024 * 4) {
+          request.destroy(new Error('GitHub response was too large.'));
+        }
+      });
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`GitHub returned HTTP ${response.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(new Error(`GitHub returned invalid JSON: ${error.message}`));
+        }
+      });
+    });
+    request.setTimeout(15000, () => request.destroy(new Error('Timed out checking GitHub releases.')));
+    request.on('error', reject);
+  });
+}
+
+async function githubReleaseForChannel(channel) {
+  const releases = await httpsJson(`https://api.github.com/repos/${RELEASE_REPO}/releases?per_page=20`);
+  if (!Array.isArray(releases)) throw new Error('GitHub release list was not an array.');
+  const published = releases.filter((release) => !release.draft);
+  if (channel === 'prerelease') return published.find((release) => release.prerelease) || published.find((release) => !release.prerelease) || null;
+  return published.find((release) => !release.prerelease) || null;
+}
+
+function installerAssetForRelease(release, version) {
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  const escapedVersion = String(version || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionedSetup = new RegExp(`oakstead.*setup.*v?${escapedVersion}.*\\.exe$`, 'i');
+  return assets.find((asset) => versionedSetup.test(asset.name || ''))
+    || assets.find((asset) => /oakstead.*setup.*\.exe$/i.test(asset.name || ''))
+    || assets.find((asset) => /\.exe$/i.test(asset.name || ''))
+    || null;
+}
+
+function runUpdateCommand(label, command, args, options = {}) {
+  writeUpdateStatus({ message: label, log: [updateLog(label)] });
+  const result = spawnSync(command, args, {
+    cwd: APP_ROOT,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024 * 8,
+    ...options
+  });
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  if (output) writeUpdateStatus({ log: output.split('\n').slice(-30).map((line) => `  ${line.slice(0, 500)}`) });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed${result.error ? `: ${result.error.message}` : ''}`);
+  }
+  return output;
+}
+
+function latestReleaseTag(channel) {
+  const tags = runUpdateCommand('Reading release tags', 'git', ['tag', '--list', '--sort=-v:refname'])
+    .split('\n')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const stable = tags.find((tag) => /^v?\d+\.\d+\.\d+$/.test(tag));
+  const prerelease = tags.find((tag) => /^v?\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/.test(tag));
+  return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
+}
+
+function checkLatestGitRelease(channel) {
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({
+    phase: 'checking',
+    percent: 4,
+    channel: updateChannel,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    message: 'Checking GitHub for available releases.',
+    log: [updateLog(`Checking ${updateChannel} releases`)]
+  });
+  runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
+  const tag = latestReleaseTag(updateChannel);
+  const latestVersion = tag ? tag.replace(/^v/, '') : '';
+  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
+  return writeUpdateStatus({
+    running: false,
+    phase: 'checked',
+    percent: 0,
+    channel: updateChannel,
+    targetVersion: latestVersion,
+    latestVersion,
+    latestTag: tag,
+    updateAvailable,
+    message: tag ? `${updateAvailable ? 'Update available' : 'Already current'}: ${tag}` : 'No release tag was found.',
+    log: [updateLog(tag ? `Latest ${updateChannel} release is ${tag}` : 'No release tag found')]
+  });
+}
+
+async function checkLatestInstallerRelease(channel) {
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({
+    phase: 'checking',
+    percent: 10,
+    channel: updateChannel,
+    releaseUrl: '',
+    installerAssetName: '',
+    installerDownloadUrl: '',
+    downloadUrl: '',
+    message: `Checking GitHub releases for ${RELEASE_REPO}.`,
+    log: [updateLog(`Checking ${updateChannel} installer releases from ${RELEASE_REPO}`)]
+  });
+  const release = await githubReleaseForChannel(updateChannel);
+  if (!release) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'checked',
+      percent: 0,
+      updateAvailable: false,
+      message: 'No published GitHub release was found.',
+      log: [updateLog('No published GitHub release was found')]
+    });
+  }
+  const latestVersion = String(release.tag_name || release.name || '').replace(/^v/i, '');
+  const asset = installerAssetForRelease(release, latestVersion);
+  const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
+  const hasInstaller = Boolean(asset?.browser_download_url);
+  return writeUpdateStatus({
+    running: false,
+    phase: 'checked',
+    percent: 0,
+    channel: updateChannel,
+    targetVersion: latestVersion,
+    latestVersion,
+    latestTag: release.tag_name || '',
+    updateAvailable,
+    releaseUrl: release.html_url || '',
+    installerAssetName: asset?.name || '',
+    installerDownloadUrl: asset?.browser_download_url || '',
+    downloadUrl: asset?.browser_download_url || '',
+    message: updateAvailable
+      ? (hasInstaller ? `Windows installer available: v${latestVersion}` : `v${latestVersion} is available, but no Windows installer asset was attached.`)
+      : `Already current: v${latestVersion || APP_VERSION}`,
+    log: [
+      updateLog(`Latest ${updateChannel} release is ${release.tag_name || latestVersion || 'unknown'}`),
+      updateLog(hasInstaller ? `Installer asset: ${asset.name}` : 'No installer asset found on the release')
+    ]
+  });
+}
+
+async function checkLatestRelease(channel) {
+  return UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel);
+}
+
+function restartApplication() {
+  writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
+  const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
+  if (!supervised) {
+    const child = spawn(process.execPath, [__filename], {
+      cwd: APP_ROOT,
+      detached: true,
+      stdio: 'ignore',
+      env: process.env
+    });
+    child.unref();
+  }
+  setTimeout(() => process.exit(0), 900);
+}
+
+async function startInstallerUpdate(channel) {
+  const active = readUpdateStatus();
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  const activeIsCurrent = active.installerDownloadUrl
+    && active.channel === updateChannel
+    && active.latestVersion
+    && compareVersions(active.latestVersion, APP_VERSION) > 0;
+  const status = activeIsCurrent ? active : await checkLatestInstallerRelease(updateChannel);
+  if (!status.updateAvailable) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'checked',
+      percent: 0,
+      channel: updateChannel,
+      message: status.message || 'No installer update is available.',
+      log: [updateLog('Installer update was requested, but no update is available')]
+    });
+  }
+  if (!status.installerDownloadUrl) {
+    return writeUpdateStatus({
+      running: false,
+      phase: 'missing installer',
+      percent: 0,
+      channel: updateChannel,
+      message: 'A release is available, but it does not include a Windows installer asset.',
+      log: [updateLog('Installer update cannot continue because no .exe asset was found')]
+    });
+  }
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const backup = createDatabaseBackup('pre-installer-update');
+      writeUpdateStatus({ log: [updateLog(`Created pre-installer backup ${backup.fileName}`)] });
+    }
+  } catch (error) {
+    writeUpdateStatus({ log: [updateLog(`Backup before installer download failed: ${error.message || error}`)] });
+  }
+  return writeUpdateStatus({
+    running: false,
+    phase: 'download ready',
+    percent: 100,
+    channel: updateChannel,
+    message: `Download ${status.installerAssetName || 'the Windows installer'} and run it on this computer to complete the update.`,
+    downloadUrl: status.installerDownloadUrl,
+    installerDownloadUrl: status.installerDownloadUrl,
+    log: [updateLog('Installer download is ready')]
+  });
+}
+
+async function startSystemUpdate(channel) {
+  const active = readUpdateStatus();
+  if (active.running) return active;
+  if (UPDATE_MODE === 'installer') return startInstallerUpdate(channel);
+  const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
+  writeUpdateStatus({
+    running: true,
+    phase: 'starting',
+    percent: 2,
+    channel: updateChannel,
+    targetVersion: '',
+    message: 'Starting update.',
+    log: [updateLog(`Starting ${updateChannel} update from version ${APP_VERSION}`)]
+  });
+  const child = spawn(process.execPath, [__filename, '--run-system-update', updateChannel], {
+    cwd: APP_ROOT,
+    detached: true,
+    stdio: 'ignore',
+    env: process.env
+  });
+  child.unref();
+  return readUpdateStatus();
+}
+
+function runSystemUpdateWorker(channel) {
+  try {
+    writeUpdateStatus({ phase: 'backup', percent: 5, message: 'Creating a database backup before updating.' });
+    const backup = createDatabaseBackup('pre-update');
+    writeUpdateStatus({ log: [updateLog(`Created pre-update backup ${backup.fileName}`)] });
+    writeUpdateStatus({ phase: 'checking', percent: 8, message: 'Checking local repository state.' });
+    runUpdateCommand('Checking for tracked local changes', 'git', ['diff', '--quiet']);
+    runUpdateCommand('Checking staged changes', 'git', ['diff', '--cached', '--quiet']);
+    writeUpdateStatus({ phase: 'fetching', percent: 22, message: 'Fetching releases from GitHub.' });
+    runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
+    const tag = latestReleaseTag(channel);
+    writeUpdateStatus({ phase: 'downloading', percent: 42, targetVersion: tag.replace(/^v/, ''), message: tag ? `Downloading ${tag}.` : 'No release tag found; updating current branch.' });
+    if (tag) {
+      runUpdateCommand(`Checking out ${tag}`, 'git', ['checkout', tag]);
+    } else {
+      const branch = runUpdateCommand('Reading current branch', 'git', ['branch', '--show-current']).trim() || 'main';
+      runUpdateCommand(`Pulling origin/${branch}`, 'git', ['pull', '--ff-only', 'origin', branch]);
+    }
+    writeUpdateStatus({ phase: 'installing', percent: 66, message: 'Installing npm dependencies.' });
+    runUpdateCommand('Running npm install', 'npm', ['install']);
+    writeUpdateStatus({ phase: 'validating', percent: 84, message: 'Validating server code.' });
+    runUpdateCommand('Running npm run check', 'npm', ['run', 'check']);
+    writeUpdateStatus({ running: false, phase: 'complete', percent: 96, message: 'Update complete. Restarting now.', log: [updateLog('Update completed successfully')] });
+    restartApplication();
+  } catch (error) {
+    writeUpdateStatus({
+      running: false,
+      phase: 'failed',
+      percent: 100,
+      message: error.message || 'Update failed.',
+      log: [updateLog(`ERROR ${error.message || error}`)]
+    });
+  }
+}
+
+function contentTypeFor(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.svg') return 'image/svg+xml';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.ico') return 'image/x-icon';
+  return 'application/octet-stream';
+}
+
+function imageUploadError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function detectedImageExtension(buffer) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) return '';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return '.png';
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return '.jpg';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return '.webp';
+  if (buffer.length >= 4 && buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x01 && buffer[3] === 0x00) return '.ico';
+  return '';
+}
+
+function uploadExtension(file) {
+  const nameExt = path.extname(String(file?.filename || '')).toLowerCase();
+  if (nameExt === '.svg') throw imageUploadError('SVG uploads are not supported. Use PNG, JPEG, WebP, or ICO.');
+  const detectedExt = detectedImageExtension(file?.data);
+  if (!detectedExt) throw imageUploadError('Unsupported image upload. Use PNG, JPEG, WebP, or ICO.');
+  const compatibleExts = detectedExt === '.jpg' ? new Set(['.jpg', '.jpeg']) : new Set([detectedExt]);
+  if (nameExt && !compatibleExts.has(nameExt)) {
+    throw imageUploadError('Uploaded image extension does not match the file contents.');
+  }
+  return detectedExt;
+}
+
+function saveUploadedImage(file, basename) {
+  if (!file?.data?.length) return '';
+  const ext = uploadExtension(file);
+  if (!ext) return '';
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const fileName = `${basename}${ext}`;
+  const target = path.join(UPLOAD_DIR, fileName);
+  fs.writeFileSync(target, file.data);
+  return `uploads/${fileName}`;
+}
+
+function gradeRank(grade) {
+  const text = String(grade);
+  if (/^pre-?k$/i.test(text)) return -2;
+  if (/^k(indergarten)?$/i.test(text)) return -1;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : 100 + text.toLowerCase().charCodeAt(0);
+}
+
+function sortGrades(grades) {
+  return [...new Set(grades.filter(Boolean))].sort((a, b) => gradeRank(a) - gradeRank(b) || String(a).localeCompare(String(b)));
+}
+
+function promoteGrade(grade) {
+  const text = String(grade || '').trim();
+  if (/^pre-?k$/i.test(text)) return 'K';
+  if (/^k(indergarten)?$/i.test(text)) return '1';
+  const number = Number(text);
+  if (Number.isFinite(number)) return number >= 12 ? 'Graduated' : String(number + 1);
+  return text;
+}
+
+function average(values) {
+  const numeric = values.map(Number).filter(Number.isFinite);
+  if (!numeric.length) return null;
+  return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
+}
+
+function formatPercent(value) {
+  return value === null || value === undefined ? '&mdash;' : `${Number(value).toFixed(1)}%`;
+}
+
+function gradeTone(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 'quiet';
+  if (score >= 90) return 'good';
+  if (score >= 75) return 'watch';
+  return 'low';
+}
+
+function scoreBand(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 'No score';
+  if (score >= 90) return '90-100';
+  if (score >= 80) return '80-89';
+  if (score >= 70) return '70-79';
+  return 'Below 70';
+}
+
+function gradeOptions(selected = '') {
+  return gradeChoices().map((grade) => `<option value="${esc(grade)}" ${grade === selected ? 'selected' : ''}>${esc(grade)}</option>`).join('');
+}
+
+function gradeChoices() {
+  return ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'Graduated'];
+}
+
+function cleanGender(value) {
+  const gender = cleanText(value, 12).toLowerCase();
+  return gender === 'female' || gender === 'male' ? gender : '';
+}
+
+function cleanPersonRoleType(value) {
+  const type = cleanText(value, 20).toLowerCase();
+  return ['teacher', 'father', 'mother'].includes(type) ? type : '';
+}
+
+function genderOptions(selected = '') {
+  const gender = cleanGender(selected);
+  return `<option value="">Not set</option><option value="female" ${selectedAttr(gender, 'female')}>Girl</option><option value="male" ${selectedAttr(gender, 'male')}>Boy</option>`;
+}
+
+function studentDisplayName(student) {
+  return [student.first_name, student.middle_name, student.last_name].filter(Boolean).join(' ');
+}
+
+function genderIcon(gender) {
+  const clean = cleanGender(gender);
+  const cls = clean === 'female' ? 'girl' : clean === 'male' ? 'boy' : 'neutral';
+  return `<span class="student-icon ${cls}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></span>`;
+}
+
+function categoryOptions(selected = 'Lesson / Homework') {
+  const selectedCategory = normalizeCategory(selected);
+  return CATEGORIES.map((category) => `<option value="${esc(category)}" ${category === selectedCategory ? 'selected' : ''}>${esc(category)}</option>`).join('');
+}
+
+function displayCategory(category) {
+  return esc(normalizeCategory(category));
+}
+
+function displayCategoryShort(category) {
+  const cat = normalizeCategory(category);
+  if (cat === 'Lesson / Homework') return 'Lesson';
+  return esc(cat);
+}
+
+function gradebookTitle(category, title) {
+  const cleanTitle = cleanText(title, 140);
+  return cleanTitle || displayCategoryShort(category);
+}
+
+function gradebookLetter(value, scale = DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }))) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return '';
+  const rows = [...scale]
+    .map((row) => ({ letter: cleanText(row.letter, 12), threshold: Number(row.threshold) }))
+    .filter((row) => row.letter && Number.isFinite(row.threshold))
+    .sort((a, b) => b.threshold - a.threshold);
+  return rows.find((row) => score >= row.threshold)?.letter || rows.at(-1)?.letter || '';
+}
+
+function compactPercent(value, decimals = 0) {
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return number.toFixed(decimals).replace(/\.?0+$/, '');
+}
+
+function gradebookDisplayScore(value, scale) {
+  const percent = compactPercent(value);
+  if (!percent) return '&mdash;';
+  const letter = gradebookLetter(value, scale);
+  return `${percent}<sup>${esc(letter)}</sup>`;
+}
+
+function gradebookCategoryClass(category) {
+  const cat = normalizeCategory(category);
+  if (cat === 'Quiz') return 'quiz';
+  if (cat === 'Test') return 'test';
+  return 'lesson';
+}
+
+function matchingLetterGradeGroup(groups, grade, subjectId) {
+  const rank = gradeRank(grade);
+  return groups.find((group) => group.subject_id === subjectId && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
+    || groups.find((group) => !group.subject_id && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
+    || null;
+}
+
+function letterGradeScale(yearId, grade, subjectId) {
+  const groups = querySql(`SELECT * FROM os_letter_grade_groups WHERE school_year_id=${yearId};`);
+  const group = matchingLetterGradeGroup(groups, grade, subjectId);
+  if (!group) return DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
+  const items = querySql(`SELECT letter, threshold FROM os_letter_grade_items WHERE group_id=${asInt(group.id)} ORDER BY threshold DESC, sort_order, letter;`);
+  return items.length ? items : DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
+}
+
+function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
+  if (!user) return false;
+  if (isAdmin(user) || isPrincipal(user)) return true;
+  if (!isTeacher(user)) return false;
+  if (!user.teacher_id) return false;
+  const roomClause = classroomId ? `AND c.id=${asInt(classroomId)}` : '';
+  const rows = querySql(`SELECT c.id
+    FROM os_classrooms c
+    JOIN os_classroom_grades cg ON cg.classroom_id = c.id
+    WHERE c.school_year_id=${asInt(yearId)}
+      AND c.teacher_id=${asInt(user.teacher_id)}
+      AND cg.grade_level=${sqlValue(grade)}
+      ${roomClause}
+    LIMIT 1;`);
+  return Boolean(rows.length);
+}
+
+const KPI_ICONS = {
+  families: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3ZM8 11c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 12.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5C23 14.17 18.33 13 16 13Z"/></svg>`,
+  students: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82ZM12 3 1 9l11 6 9-4.91V17h2V9L12 3Z"/></svg>`,
+  teachers: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2Zm0 14H5.17L4 17.17V4h16v12ZM7 9h2v2H7V9Zm4 0h2v2h-2V9Zm4 0h2v2h-2V9Z"/></svg>`,
+  classrooms: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2Zm-8-1.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3ZM16 18H8V5h8v13Z"/></svg>`,
+  assignments: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2Zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1Zm2 14H7v-2h7v2Zm3-4H7v-2h10v2Zm0-4H7V7h10v2Z"/></svg>`
+};
+
+const NAV_ICONS = {
+  dashboard: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-11h6V4h-6v5Z"></path></svg>',
+  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a5 5 0 0 1 10 0H3Zm8.5 0a6.5 6.5 0 0 0-1.3-3.9A5 5 0 0 1 21 20h-9.5Z"></path></svg>',
+  setup: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v3H4V5Zm0 6h10v3H4v-3Zm0 6h16v3H4v-3Zm13.5-6 2.5 1.5-2.5 1.5V11Z"></path></svg>',
+  gradebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5V3Zm2 2v14h10V7h-3V5H7Zm2 5h6v2H9v-2Zm0 4h6v2H9v-2Z"></path></svg>',
+  assignments: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>',
+  reportcards: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6V3Zm2 2v14h8V5H8Zm1.5 3h5v2h-5V8Zm0 3h5v2h-5v-2Zm0 3h3v2h-3v-2Z"></path></svg>',
+  absences: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10Zm-9 3h2v2H9v-2Zm4 0h2v2h-2v-2Z"></path></svg>',
+  reports: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14v2H5v-2Zm1-8h3v6H6v-6Zm5-6h3v12h-3V5Zm5 3h3v9h-3V8Z"></path></svg>'
+};
+
+const REPORT_ICONS = {
+  families: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20v-1a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v1"/><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 12.5a3 3 0 0 0 0-6"/><path d="M18.5 20v-1a4 4 0 0 0-2-3.46"/></svg>',
+  students: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12.2V17c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.8"/><path d="M22 10v6"/></svg>',
+  'school-board': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8"/><path d="M9 4v5l-4 7"/><path d="M15 4v5l4 7"/><path d="M5 16h14"/><path d="M7 20h10"/><path d="M12 9v11"/></svg>',
+  birthdays: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11h16v9H4z"/><path d="M4 15c1.4 0 1.4-1 2.8-1s1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1 1.4-1 2.8-1 1.4 1 2.8 1"/><path d="M8 11V8"/><path d="M12 11V8"/><path d="M16 11V8"/><path d="M8 5l.8 1L8 7 7.2 6 8 5Z"/><path d="m12 5 .8 1-.8 1-.8-1L12 5Z"/><path d="m16 5 .8 1-.8 1-.8-1L16 5Z"/></svg>',
+  'grade-graph': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m6 15 4-4 3 3 5-7"/><path d="M10 11h.01"/><path d="M13 14h.01"/><path d="M18 7h.01"/></svg>'
+};
+
+const REPORT_METER_COLORS = ['#2f6f5e', '#2563eb', '#a16207', '#be123c', '#6d28d9', '#0e7490', '#7c2d12', '#4d7c0f'];
+
+function navItemActive(pathname, currentPath) {
+  return currentPath === pathname || (pathname !== '/' && currentPath.startsWith(pathname));
+}
+
+function navLink(pathname, currentPath, label, iconKey) {
+  const active = navItemActive(pathname, currentPath);
+  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
+}
+
+function navItemsForUser(user) {
+  if (isParent(user)) return [{ pathname: '/parent', label: 'Parent Portal', iconKey: 'reports' }];
+  return [
+    { pathname: '/', label: 'Dashboard', iconKey: 'dashboard' },
+    { pathname: '/assignments', label: 'Assignments', iconKey: 'assignments' },
+    { pathname: '/gradebook', label: 'Gradebook', iconKey: 'gradebook' },
+    { pathname: '/absences', label: 'Absences', iconKey: 'absences' },
+    { pathname: '/reports', label: 'Reports', iconKey: 'reports' },
+    { pathname: '/report-cards', label: 'Report Card', iconKey: 'reportcards' },
+    ...(canAccessSetup(user) ? [{ pathname: '/setup', label: 'School Setup', iconKey: 'setup' }] : [])
+  ];
+}
+
+function actionPanel(title, body, meta = '') {
+  return `<section class="panel">
+    <div class="panel-title"><h2>${esc(title)}</h2>${meta ? `<p>${meta}</p>` : ''}</div>
+    ${body}
+  </section>`;
+}
+
+function emptyState(text) {
+  return `<p class="empty">${esc(text)}</p>`;
+}
+
+function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
+  const settings = appSettings();
+  const yearSwitcher = (extraClass = '') => user && selectedYear ? `<form class="year-form ${extraClass}" method="post" action="/switch-year">
+      ${csrfInput(csrfToken)}
+      <select name="yearId" aria-label="School year">
+        ${years.map((year) => `<option value="${year.id}" ${year.id === selectedYear.id ? 'selected' : ''}>${esc(year.name)}</option>`).join('')}
+      </select>
+      <button class="sr-only" type="submit">Switch school year</button>
+    </form>` : '';
+  const navItems = user ? navItemsForUser(user) : [];
+  const navMarkup = navItems.map((item) => navLink(item.pathname, currentPath, item.label, item.iconKey)).join('');
+  const activeNav = navItems.find((item) => navItemActive(item.pathname, currentPath)) || navItems[0] || null;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>${esc(title)} &middot; ${esc(settings.schoolName)}</title>
+<link rel="icon" href="${settings.faviconUrl}" />
+<link rel="stylesheet" href="/assets/app.css?v=${APP_STYLESHEET_VERSION}" />
 </head>
 <body>
 <div class="app">
@@ -4881,7 +4917,7 @@ tr:last-child td { border-bottom: 0; }
   <main class="main" data-app-main>${content}</main>
   <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><a href="${esc(APP_REPOSITORY_URL)}" target="_blank" rel="noopener noreferrer"><strong>Oakstead</strong> v${esc(APP_VERSION)}</a></span></footer>
 </div>
-<script>${APP_CLIENT_SCRIPT}</script>
+<script src="/assets/app.js?v=${APP_CLIENT_SCRIPT_VERSION}"></script>
 </body>
 </html>`;
 }
@@ -4895,7 +4931,7 @@ function loginPage(csrfToken, hasError) {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Sign in &middot; ${esc(settings.schoolName)}</title>
 <link rel="icon" href="${settings.faviconUrl}" />
-<style>${pageTemplate({ title: 'x', currentPath: '', content: '', csrfToken, user: null }).match(/<style>([\s\S]*?)<\/style>/)[1]}</style>
+<link rel="stylesheet" href="/assets/app.css?v=${APP_STYLESHEET_VERSION}" />
 </head>
 <body>
 <main class="login">
@@ -7245,9 +7281,6 @@ function reportCardsPage(url, selectedYear, user, options = {}) {
   const gradeSelect = `<select name="grade" data-auto-submit required><option value="">Grade</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
   const studentSelect = `<select name="studentId" required data-auto-submit><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${asInt(student.id) === effectiveSelectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
   const periodSelect = `<select name="markingPeriodId" required data-auto-submit><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${asInt(period.id) === effectiveSelectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
-  const pdfFilename = selectedStudent && selectedPeriod
-    ? `report-card-${selectedStudent.last_name}-${selectedStudent.first_name}-${selectedPeriod.name}.pdf`.replace(/[^a-z0-9._-]/gi, '-').toLowerCase()
-    : 'report-card.pdf';
   const periodHeaders = periods.map((period) => `<th>${esc(period.period_number)}</th>`).join('');
   const subjectPeriodHeaders = `${periodHeaders}<th class="average-col">Avg</th>`;
   const conductSectionStarts = new Set([0, 5, 11, 19, 22]);
@@ -7348,7 +7381,7 @@ function reportCardsPage(url, selectedYear, user, options = {}) {
         <button type="submit">Load Report Card</button>
       </form>
     </section>
-    ${selectedStudent && selectedPeriod ? `<div class="report-card-actions"><button type="button" class="page-action compact-action" data-filename="${esc(pdfFilename)}" data-generate-pdf>Generate PDF</button></div>` : ''}
+    ${selectedStudent && selectedPeriod ? `<div class="report-card-actions"><button type="button" class="page-action compact-action" data-generate-pdf>Generate PDF</button></div>` : ''}
     ${preview}
   </div>`;
 }
@@ -7546,6 +7579,9 @@ function roleAssignmentForm({ csrfToken, redirectTo, personType, personId, roleG
 }
 
 async function handlePost(req, res, p, body, user, headers) {
+  // Every mutation flows through POST; dropping the memoized lookups here
+  // keeps them trivially coherent without tracking individual write sites.
+  invalidateAppCaches();
   if (p === '/login') {
     if (!requireCsrf(req, body)) return sendText(res, 403, 'Invalid CSRF token');
     const username = cleanText(body.username, 80).toLowerCase();
@@ -7980,7 +8016,10 @@ async function handlePost(req, res, p, body, user, headers) {
     }
     if (!source || !fs.existsSync(source)) return sendText(res, 400, 'Backup file not found.');
     validateBackupDatabase(source);
-    fs.copyFileSync(source, DB_FILE);
+    // Copying over an open WAL database corrupts it (stale page cache plus a
+    // leftover -wal replayed against the restored file), so swap it closed.
+    db.withDatabaseClosed(() => fs.copyFileSync(source, DB_FILE));
+    invalidateAppCaches();
     setSetting('backup_last_restore_at', new Date().toISOString());
     return redirect(res, '/setup?section=backups', headers);
   }
@@ -8106,7 +8145,8 @@ async function handlePost(req, res, p, body, user, headers) {
       const scoreEntries = gridScoreEntries(body);
       const assignmentIds = new Set(scoreEntries.map((entry) => asInt(entry.assignmentId)));
       const submittedStudentIds = scoreEntries.map((entry) => asInt(entry.studentId)).filter(Boolean);
-      if (submittedStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
+      const gridAllowedStudents = modifiableStudentIdSet(user, schoolYearId);
+      if (submittedStudentIds.some((studentId) => !setAllowsStudent(gridAllowedStudents, studentId))) return sendText(res, 403, 'Forbidden');
       const allowedAssignments = assignmentIds.size ? new Map(querySql(`SELECT id, max_score FROM os_assignments
         WHERE school_year_id=${schoolYearId}
           AND grade_level=${sqlValue(gradeLevel)}
@@ -8133,10 +8173,10 @@ async function handlePost(req, res, p, body, user, headers) {
       VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
     const scoreEntries = scoreFieldEntries(body);
     const scoreStudentIds = scoreEntries.map((entry) => entry.studentId);
-    if (scoreStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
+    const allowedStudents = modifiableStudentIdSet(user, schoolYearId);
+    if (scoreStudentIds.some((studentId) => !setAllowsStudent(allowedStudents, studentId))) return sendText(res, 403, 'Forbidden');
     const statements = [];
     scoreEntries.forEach(({ key, studentId }) => {
-      if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return;
       const score = scoreInputToPoints(body[key], scoreMode, maxScore);
       if (score === null) return;
       statements.push(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
@@ -8184,10 +8224,10 @@ async function handlePost(req, res, p, body, user, headers) {
       const maxScore = asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${assignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score);
       const scoreEntries = scoreFieldEntries(body);
       const scoreStudentIds = scoreEntries.map((entry) => entry.studentId);
-      if (scoreStudentIds.some((studentId) => !canModifyStudentAcademicRecord(user, studentId, schoolYearId))) return sendText(res, 403, 'Forbidden');
+      const allowedStudents = modifiableStudentIdSet(user, schoolYearId);
+      if (scoreStudentIds.some((studentId) => !setAllowsStudent(allowedStudents, studentId))) return sendText(res, 403, 'Forbidden');
       const statements = [];
       scoreEntries.forEach(({ key, studentId }) => {
-        if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return;
         const score = scoreInputToPoints(body[key], scoreMode, maxScore);
         if (score === null) return;
         statements.push(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
@@ -8253,9 +8293,26 @@ function sendAssetFile(res, filePath, missingMessage) {
   res.writeHead(200, {
     ...securityHeaders(),
     'Content-Type': contentTypeFor(filePath),
-    'Cache-Control': 'no-cache'
+    // Logo/favicon URLs carry a ?v=<updated_at> version from appSettings, so a
+    // new upload changes the URL and long-lived caching is safe.
+    'Cache-Control': 'public, max-age=31536000, immutable'
   });
   return res.end(fs.readFileSync(filePath));
+}
+
+function sendStaticAsset(req, res, asset) {
+  const headers = {
+    ...securityHeaders(),
+    'Content-Type': asset.contentType,
+    // URLs carry a content-hash version query param, so long-lived caching is safe.
+    'Cache-Control': 'public, max-age=31536000, immutable'
+  };
+  if (acceptsGzip(req)) {
+    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+    return res.end(asset.gzipped);
+  }
+  res.writeHead(200, headers);
+  return res.end(asset.body);
 }
 
 function selectedPageContext(req, url, pathname, csrfToken, user) {
@@ -8267,14 +8324,14 @@ function selectedPageContext(req, url, pathname, csrfToken, user) {
   };
 }
 
-function sendAppPage(res, headers, pageArgs, title, content) {
-  return sendHtml(res, pageTemplate({ ...pageArgs, title, content }), headers);
+function sendAppPage(req, res, headers, pageArgs, title, content) {
+  return sendHtml(req, res, pageTemplate({ ...pageArgs, title, content }), headers);
 }
 
 function handleGet(req, res, url, pathname, user, csrfToken, headers) {
   if (pathname === '/login') {
     if (user) return redirect(res, '/', headers);
-    return sendHtml(res, loginPage(csrfToken, url.searchParams.get('error') === '1'), headers);
+    return sendHtml(req, res, loginPage(csrfToken, url.searchParams.get('error') === '1'), headers);
   }
 
   if (!user) return redirect(res, '/login', headers);
@@ -8306,11 +8363,11 @@ function handleGet(req, res, url, pathname, user, csrfToken, headers) {
 
   if (pathname === '/') {
     if (isParent(user)) return redirect(res, '/parent', headers);
-    return sendAppPage(res, headers, pageArgs, 'Dashboard', dashboardPage(selected));
+    return sendAppPage(req, res, headers, pageArgs, 'Dashboard', dashboardPage(selected));
   }
   if (pathname === '/parent') {
     if (!isParent(user)) return redirect(res, '/', headers);
-    return sendAppPage(res, headers, pageArgs, 'Parent Portal', parentPage(url, user, selected));
+    return sendAppPage(req, res, headers, pageArgs, 'Parent Portal', parentPage(url, user, selected));
   }
   if (pathname === '/families') {
     if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
@@ -8318,7 +8375,7 @@ function handleGet(req, res, url, pathname, user, csrfToken, headers) {
   }
   if (pathname === '/setup') {
     if (!canAccessSetup(user)) return sendText(res, 403, 'Forbidden');
-    return sendAppPage(res, headers, pageArgs, 'School Setup', setupPage(selected, csrfToken, url, user));
+    return sendAppPage(req, res, headers, pageArgs, 'School Setup', setupPage(selected, csrfToken, url, user));
   }
   if (pathname === '/gradebook') {
     if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
@@ -8326,23 +8383,23 @@ function handleGet(req, res, url, pathname, user, csrfToken, headers) {
     if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
     const gridParam = cleanText(url.searchParams.get('grid'), 12);
     if (gridParam === 'on' || gridParam === 'off') appendSetCookie(headers, `gradebookGrid=${gridParam}; Path=/; SameSite=Strict; Max-Age=31536000`);
-    return sendAppPage(res, headers, pageArgs, 'Gradebook', gradebookPage(req, url, user, selected, csrfToken));
+    return sendAppPage(req, res, headers, pageArgs, 'Gradebook', gradebookPage(req, url, user, selected, csrfToken));
   }
   if (pathname === '/assignments') {
     if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-    return sendAppPage(res, headers, pageArgs, 'Assignments', assignmentsPage(req, url, user, selected, csrfToken));
+    return sendAppPage(req, res, headers, pageArgs, 'Assignments', assignmentsPage(req, url, user, selected, csrfToken));
   }
   if (pathname === '/report-cards') {
     if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-    return sendAppPage(res, headers, pageArgs, 'Report Cards', reportCardsPage(url, selected, user));
+    return sendAppPage(req, res, headers, pageArgs, 'Report Cards', reportCardsPage(url, selected, user));
   }
   if (pathname === '/absences') {
     if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-    return sendAppPage(res, headers, pageArgs, 'Absences', absencesPage(url, selected, csrfToken, user));
+    return sendAppPage(req, res, headers, pageArgs, 'Absences', absencesPage(url, selected, csrfToken, user));
   }
   if (pathname === '/reports') {
     if (isParent(user)) return sendText(res, 403, 'Forbidden');
-    return sendAppPage(res, headers, pageArgs, 'Reports', reportsPage(url, selected, user));
+    return sendAppPage(req, res, headers, pageArgs, 'Reports', reportsPage(url, selected, user));
   }
   if (pathname === '/users') {
     if (!canManageSchoolUsers(user)) return sendText(res, 403, 'Forbidden');
@@ -8360,6 +8417,9 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
     const user = currentUser(req);
+
+    const bundledAsset = req.method === 'GET' ? STATIC_ASSETS.get(pathname) : undefined;
+    if (bundledAsset) return sendStaticAsset(req, res, bundledAsset);
 
     if (req.method === 'GET' && pathname === '/assets/logo') return sendAssetFile(res, logoAsset(), 'Logo not found');
 

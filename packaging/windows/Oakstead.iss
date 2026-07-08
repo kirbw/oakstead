@@ -39,7 +39,6 @@ Name: "{commonappdata}\Oakstead\logs"; Permissions: users-modify
 [Files]
 Source: "..\..\dist\windows\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\dist\windows\runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\dist\windows\runtime\sqlite\*"; DestDir: "{app}\runtime\sqlite"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\dist\windows\service\Oakstead.Service.exe"; DestDir: "{app}\service"; Flags: ignoreversion
 Source: "..\..\dist\windows\service\Oakstead.Service.xml"; DestDir: "{app}\service"; Flags: ignoreversion
 Source: "..\..\dist\windows\open-oakstead.cmd"; DestDir: "{app}"; Flags: ignoreversion

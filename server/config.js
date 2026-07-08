@@ -54,7 +54,6 @@ const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const DEFAULT_LOGO_FILE = path.join(APP_ROOT, 'assets', 'oakleaf.png');
 const LEGACY_LOGO_FILE = path.join(PUBLIC_DIR, 'oakstead-logo.svg');
 const UPDATE_STATUS_FILE = path.join(DATA_DIR, '.oakstead-update-status.json');
-const SQLITE_BIN = process.env.SQLITE_BIN || 'sqlite3';
 const UPDATE_MODE = cleanUpdateMode(process.env.OAKSTEAD_UPDATE_MODE || 'git');
 const PACKAGE_REPO = normalizeRepositorySlug(typeof PACKAGE_INFO.repository === 'string' ? PACKAGE_INFO.repository : PACKAGE_INFO.repository?.url)
   || 'kirbw/oakstead';
@@ -87,7 +86,6 @@ module.exports = {
   DEFAULT_LOGO_FILE,
   LEGACY_LOGO_FILE,
   UPDATE_STATUS_FILE,
-  SQLITE_BIN,
   UPDATE_MODE,
   PACKAGE_REPO,
   APP_REPOSITORY_URL,

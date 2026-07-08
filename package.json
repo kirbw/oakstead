@@ -12,6 +12,9 @@
   },
   "license": "MIT",
   "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js",

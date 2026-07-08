@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const querystring = require('querystring');
+const zlib = require('zlib');
 
 function safeInternalPath(value, fallback = '/') {
   try {
@@ -10,8 +11,11 @@ function safeInternalPath(value, fallback = '/') {
   }
 }
 
-function createHttpHelpers({ escapeHtml, maxBodySize, scriptHash }) {
-  const scriptSrc = scriptHash ? `'self' 'sha256-${scriptHash}'` : "'self' 'unsafe-inline'";
+function acceptsGzip(req) {
+  return /\bgzip\b/.test(String(req?.headers?.['accept-encoding'] || ''));
+}
+
+function createHttpHelpers({ escapeHtml, maxBodySize }) {
   function parseCookies(req) {
     return String(req.headers.cookie || '').split(';').reduce((cookies, part) => {
       const [key, ...rest] = part.trim().split('=');
@@ -103,8 +107,8 @@ function createHttpHelpers({ escapeHtml, maxBodySize, scriptHash }) {
 
   function securityHeaders() {
     return {
-      // style-src keeps 'unsafe-inline' as an accepted trade-off: the app uses inline style attributes and style-injection is far lower risk than script-injection. script-src is locked to a sha256 hash of the one static inline script.
-      'Content-Security-Policy': `default-src 'self'; style-src 'self' 'unsafe-inline'; script-src ${scriptSrc}; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+      // style-src keeps 'unsafe-inline' as an accepted trade-off: the app uses inline style attributes and style-injection is far lower risk than script-injection.
+      'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       'X-Frame-Options': 'DENY',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -112,8 +116,14 @@ function createHttpHelpers({ escapeHtml, maxBodySize, scriptHash }) {
     };
   }
 
-  function sendHtml(res, html, headers = {}) {
-    res.writeHead(200, { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' });
+  function sendHtml(req, res, html, headers = {}) {
+    const baseHeaders = { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' };
+    if (acceptsGzip(req)) {
+      res.writeHead(200, { ...baseHeaders, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+      res.end(zlib.gzipSync(Buffer.from(html)));
+      return;
+    }
+    res.writeHead(200, baseHeaders);
     res.end(html);
   }
 
@@ -148,4 +158,4 @@ function createHttpHelpers({ escapeHtml, maxBodySize, scriptHash }) {
   };
 }
 
-module.exports = { createHttpHelpers, safeInternalPath };
+module.exports = { acceptsGzip, createHttpHelpers, safeInternalPath };

@@ -1,4 +1,6 @@
 school.db
+school.db-wal
+school.db-shm
 .env
 dist/
 uploads/

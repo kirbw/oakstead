@@ -105,4 +105,44 @@ assert.strictEqual(
   'BEGIN;\nINSERT INTO t VALUES (1);\nDELETE FROM t WHERE id=2;\nCOMMIT;'
 );
 
+// server/db.js against a scratch database file.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createDb } = require('../server/db');
+
+const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oakstead-dbcheck-'));
+const dbFile = path.join(dbDir, 'check.db');
+const db = createDb({ dbFile });
+
+db.runSql('CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT); CREATE TABLE u (id INTEGER PRIMARY KEY);');
+assert.deepStrictEqual(db.querySql('SELECT * FROM t;'), []);
+const newId = db.insertReturningId("INSERT INTO t (v) VALUES ('alpha')");
+assert.strictEqual(newId, 1);
+const rows = db.querySql('SELECT id, v FROM t;');
+assert.strictEqual(rows.length, 1);
+assert.strictEqual(typeof rows[0].id, 'number');
+assert.strictEqual(rows[0].v, 'alpha');
+
+db.runSqlTransaction(buildTransaction(["INSERT INTO t (v) VALUES ('beta')", "INSERT INTO t (v) VALUES ('gamma')"]));
+assert.strictEqual(db.querySql('SELECT COUNT(*) AS c FROM t;')[0].c, 3);
+
+// A failed transaction must roll back and leave the connection usable.
+assert.throws(() => db.runSqlTransaction(buildTransaction(["INSERT INTO t (v) VALUES ('delta')", 'INSERT INTO nope VALUES (1)'])));
+assert.strictEqual(db.querySql('SELECT COUNT(*) AS c FROM t;')[0].c, 3);
+db.runSql("INSERT INTO t (v) VALUES ('epsilon');");
+assert.strictEqual(db.querySql('SELECT COUNT(*) AS c FROM t;')[0].c, 4);
+
+// Close/reopen survives (restore path), and validation accepts/rejects correctly.
+db.withDatabaseClosed(() => {});
+assert.strictEqual(db.querySql('SELECT COUNT(*) AS c FROM t;')[0].c, 4);
+db.checkpoint();
+db.validateBackupDatabase(dbFile);
+const garbageFile = path.join(dbDir, 'garbage.db');
+fs.writeFileSync(garbageFile, 'this is not a sqlite database at all');
+assert.throws(() => db.validateBackupDatabase(garbageFile), /integrity check/);
+
+db.close();
+fs.rmSync(dbDir, { recursive: true, force: true });
+
 console.log('Refactor regression checks passed.');

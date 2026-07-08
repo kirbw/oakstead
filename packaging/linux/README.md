@@ -25,7 +25,7 @@ For LAN access on a fresh database, keep `OAKSTEAD_DEFAULT_HOST=0.0.0.0`. After 
 
 ```bash
 sudo systemctl stop oakstead
-sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead SQLITE_BIN=/usr/bin/sqlite3 node /opt/oakstead/server.js --set-network-access lan
+sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead node /opt/oakstead/server.js --set-network-access lan
 sudo systemctl restart oakstead
 ```
 
