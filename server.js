@@ -62,52 +62,52 @@ const {
 } = require('./server/gradebook-utils');
 const APP_STYLESHEET = `:root {
   color-scheme: light;
-  --bg: #f7f8fb;
+  --bg: #fbfcfb;
   --paper: #ffffff;
   --paper-strong: #ffffff;
-  --ink: #101828;
-  --muted: #667085;
-  --line: #e4e7ec;
-  --line-strong: #cfd4dc;
-  --accent: #2563eb;
-  --accent-dark: #1d4ed8;
-  --accent-soft: #eff6ff;
-  --gold: #b54708;
-  --red: #b42318;
-  --blue: #2563eb;
-  --grade-grid-head: #dce8ff;
-  --grade-grid-head-ink: #172554;
-  --grade-grid-head-line: #8aa4d6;
-  --grade-grid-band: #dce8ff;
-  --grade-grid-band-strong: #c9dafb;
-  --grade-grid-band-ink: #172554;
-  --shadow: 0 18px 48px rgba(16, 24, 40, .07);
-  --radius: 4px;
+  --ink: #17211c;
+  --muted: #66716b;
+  --line: #e5e9e6;
+  --line-strong: #d3dad5;
+  --accent: #1f6f54;
+  --accent-dark: #175843;
+  --accent-soft: #e9f3ee;
+  --gold: #8a5a10;
+  --red: #a33a2e;
+  --blue: #3f72c4;
+  --grade-grid-head: #e2efe9;
+  --grade-grid-head-ink: #175843;
+  --grade-grid-head-line: #bcd4c8;
+  --grade-grid-band: #e9f3ee;
+  --grade-grid-band-strong: #d5e8de;
+  --grade-grid-band-ink: #175843;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 6px 16px rgba(16, 24, 40, .05);
+  --radius: 8px;
   --demo-offset: ${DEMO_MODE ? '34px' : '0px'};
   --topbar-height: 66px;
   --mobile-strip-height: 50px;
 }
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0f172a;
-  --paper: #111827;
-  --paper-strong: #172033;
-  --ink: #f8fafc;
-  --muted: #a8b3c7;
-  --line: #253047;
-  --line-strong: #35415c;
-  --accent: #60a5fa;
-  --accent-dark: #93c5fd;
-  --accent-soft: #172b4f;
-  --gold: #f6b95f;
-  --red: #fb7185;
-  --blue: #93c5fd;
-  --grade-grid-head: #171515;
-  --grade-grid-head-ink: #ffffff;
-  --grade-grid-head-line: #8a8a91;
-  --grade-grid-band: #273967;
-  --grade-grid-band-strong: #415995;
-  --grade-grid-band-ink: #ffffff;
+  --bg: #101613;
+  --paper: #171e1a;
+  --paper-strong: #1d2621;
+  --ink: #eaf1ec;
+  --muted: #98a69e;
+  --line: #27312b;
+  --line-strong: #37453d;
+  --accent: #4fae86;
+  --accent-dark: #8fd0b2;
+  --accent-soft: #1d3229;
+  --gold: #e2b46a;
+  --red: #eb9a8b;
+  --blue: #8fb2ec;
+  --grade-grid-head: #1b241f;
+  --grade-grid-head-ink: #cfe6d9;
+  --grade-grid-head-line: #3a4d43;
+  --grade-grid-band: #21382e;
+  --grade-grid-band-strong: #315444;
+  --grade-grid-band-ink: #dff0e6;
   --shadow: 0 18px 60px rgba(0, 0, 0, .34);
 }
 * { box-sizing: border-box; }
@@ -117,7 +117,7 @@ body {
   min-height: 100svh;
   background: var(--bg);
   color: var(--ink);
-  font-family: Inter, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Public Sans", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.5;
 }
 a { color: inherit; }
@@ -787,18 +787,19 @@ tr:last-child td { border-bottom: 0; }
   display: inline-flex;
   align-items: center;
   min-height: 25px;
-  padding: .18rem .5rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
   color: var(--muted);
-  background: var(--paper-strong);
+  background: color-mix(in srgb, var(--muted) 12%, var(--paper));
   font-size: .78rem;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
   margin: .05rem .18rem .05rem 0;
 }
-.badge.good { color: var(--accent-dark); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
-.badge.watch { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, var(--line)); }
-.badge.low { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+.badge.good { background: var(--accent-soft); color: var(--accent-dark); }
+.badge.watch { background: color-mix(in srgb, var(--gold) 15%, var(--paper)); color: var(--gold); }
+.badge.low { background: color-mix(in srgb, var(--red) 14%, var(--paper)); color: var(--red); }
 .type-chip { font-size: .78rem; font-weight: 700; color: var(--muted); }
 .selected-row > td { background: var(--accent-soft); color: var(--accent-dark); }
 .split {
@@ -4874,6 +4875,9 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>${esc(title)} &middot; ${esc(settings.schoolName)}</title>
 <link rel="icon" href="${settings.faviconUrl}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/app.css?v=${APP_STYLESHEET_VERSION}" />
 </head>
 <body>
@@ -4931,6 +4935,9 @@ function loginPage(csrfToken, hasError) {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Sign in &middot; ${esc(settings.schoolName)}</title>
 <link rel="icon" href="${settings.faviconUrl}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/app.css?v=${APP_STYLESHEET_VERSION}" />
 </head>
 <body>
