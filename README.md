@@ -1,258 +1,92 @@
-# Oakstead
+<p align="center">
+  <img src="assets/oakleaf.png" alt="Oakstead oak leaf" width="96" />
+</p>
 
-**Rooted Records for Growing Minds.**
+<h1 align="center">Oakstead</h1>
 
-Current version: **0.0.10**
+<p align="center">
+  <strong>Rooted Records for Growing Minds.</strong><br />
+  A straightforward school records and gradebook app for small schools.
+</p>
 
-Oakstead is a small-school records and gradebook app built for simple daily classroom use. It keeps families, children, birthdays, yearly grade placement, church and district affiliations, classrooms, teachers, grade-level subjects, gradebook entries, and averages in one responsive web app.
+<p align="center">
+  <a href="https://github.com/kirbw/oakstead/releases/latest"><img src="https://img.shields.io/github/v/release/kirbw/oakstead?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=2f6f52" alt="Latest Oakstead release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/kirbw/oakstead?style=flat-square&amp;color=2f6f52" alt="MIT license" /></a>
+  <a href="https://demo.oakstead.school"><img src="https://img.shields.io/badge/live_demo-open-2f6f52?style=flat-square" alt="Open the live demo" /></a>
+</p>
 
-## Highlights
+<p align="center">
+  <a href="https://demo.oakstead.school"><strong>Explore the live demo</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/kirbw/oakstead/releases/latest">View the latest release</a>
+  &nbsp;·&nbsp;
+  <a href="docs/INSTALLATION.md">Installation guide</a>
+</p>
 
-- Responsive layout for iPhone, iPad, and desktop
-- School-year switcher for viewing current or prior-year records
-- Year-specific enrollment history so students can be promoted without losing old grades
-- Family and child entry with birthdays, grade placement, and classroom assignment
-- Congregation and school district tracking for households
-- Teacher, classroom, grade, and subject setup
-- Fast gradebook entry by school year, grade, classroom, subject, and assignment
-- Lesson, quiz, and test categories
-- Quick score buttons for entering a whole class in one pass
-- Spreadsheet-style gradebook grid with inline score saving
-- Custom grade weights and letter grade scales by year, grade range, and subject
-- Reports for class averages and student subject averages
-- Polished report dashboard charts, report icons, and cleaner printable grade graphs
-- Printable family reports with congregation, contact, address, and enrolled-student counts
-- Absence tracking with grade and student filters, formatted type labels, and role-scoped visibility
-- Admin, principal, teacher, and parent sign-ins with secure sessions and CSRF protection
-- Parent portal for household-linked child grade graphs and report cards
-- Smoother app-shell navigation for internal pages and filters
-- In-app system updates from GitHub with current release and pre-release channels
-- Local-only or trusted-LAN hosting modes with visible host URLs
-- Windows installer packaging support with service and release-asset update checks
-- Static project website page in `website/`
+![Oakstead dashboard showing enrollment totals and recent gradebook activity](assets/screenshots/dashboard.png)
 
-## Tech
+## School records without enterprise complexity
 
-- Node.js built-in HTTP server
-- SQLite database via the built-in `node:sqlite` module (no external tools or npm dependencies)
-- Server-rendered HTML/CSS/JS with no frontend framework
+Oakstead gives small schools one calm, organized place for the information they use every day. Keep families and students together, enter grades quickly, track attendance, prepare reports, and carry records forward from one school year to the next.
 
-The app stores its primary data in `school.db` by default. For testing, you can point it at a different database file:
+It is a good fit for private schools, classical schools, microschools, homeschool co-ops, and anyone who has outgrown a collection of spreadsheets but does not want a large subscription-based student information system.
 
-```bash
-DB_FILE=/tmp/oakstead-test.db PORT=3001 npm start
-```
+## What Oakstead can do
 
-## Requirements
+| | |
+|---|---|
+| **Families and students**<br />Keep household contacts, birthdays, congregations, districts, enrollment history, grade placement, and classroom assignments together. | **Gradebook and assignments**<br />Enter an entire class quickly, use a spreadsheet-style grid, and calculate averages with custom weights and letter-grade scales. |
+| **Attendance and school years**<br />Record absences and tardies, filter by grade or student, promote students, and still view prior-year records. | **Reports and report cards**<br />Create printable family, student, birthday, grade, and school-board reports, plus polished report cards and grade graphs. |
+| **The right access for each person**<br />Give administrators, principals, teachers, and parents focused access to the records and tools appropriate to their role. | **Your data, under your control**<br />Run Oakstead on your own computer or trusted network, keep data in a single SQLite database, and create or restore backups from the app. |
 
-- Node.js 22.13 or newer with npm available on the server for source installs. Oakstead uses the built-in `node:sqlite` module; no separate SQLite install is needed. (Node 22.5–22.12 gate `node:sqlite` behind the `--experimental-sqlite` flag, so use 22.13+ or 24+.)
-- A writable runtime data directory for `school.db`, `backups/`, uploads, `.oakstead-update-status.json`, and any custom school assets.
-- Git available in `PATH` if you want to use in-app system updates from a GitHub remote.
-- A trusted local network, VPN, or protective reverse proxy. Oakstead should not be exposed directly to the public internet.
+## See it in action
 
-Packaged Windows installs bundle Node.js, run as a Windows service, and store runtime data outside the install folder.
+<table>
+  <tr>
+    <td width="50%">
+      <img src="assets/screenshots/gradebook.png" alt="Oakstead Gradebook showing Grade 5 Math assignments and scores" />
+      <br /><strong>Fast grade entry.</strong> Students, assignments, averages, and letter grades stay visible in one working view.
+    </td>
+    <td width="50%">
+      <img src="assets/screenshots/report-card.png" alt="Oakstead printable report card preview" />
+      <br /><strong>Reports families can use.</strong> Build a printable report card directly from marking periods, grades, and attendance.
+    </td>
+  </tr>
+</table>
 
-The database uses SQLite's WAL mode. To copy `school.db` by hand, stop the server first or use the in-app backup feature; a raw copy taken while the server is running can miss recent writes.
+The [public demo](https://demo.oakstead.school) is filled with sample school data and resets regularly, so you can explore freely.
 
-On Debian or Ubuntu, the system packages usually look like:
+## Get started
 
-```bash
-sudo apt install nodejs npm git
-```
+1. **Try it first.** Open the [live demo](https://demo.oakstead.school) to explore the Dashboard, Gradebook, Reports, Report Cards, and School Setup.
+2. **Ready to host it?** Follow the [installation and deployment guide](docs/INSTALLATION.md) for source-based Windows or Linux requirements, startup, configuration, networking, backups, and updates.
 
-## Install and Run
+Oakstead does not currently publish a tested Windows installer. For now, Windows and Linux installations run from source.
 
-Clone or copy the Oakstead project onto the server, then install npm metadata and start the app:
+The first real login uses `admin` / `ChangeMeNow!`. Change that password before entering school data.
 
-```bash
-npm install
-npm start
-```
+> [!IMPORTANT]
+> Oakstead stores sensitive student and family records. Run it on a trusted local network or VPN. If remote access is necessary, use HTTPS and a protective reverse proxy with appropriate access controls. Do not expose a real Oakstead installation directly to the public internet.
 
-Open `http://localhost:3000`.
+## Why self-host Oakstead?
 
-Default bootstrap login:
+- No required monthly subscription
+- No separate database server
+- Responsive on phones, tablets, and desktops
+- In-app backups and release updates
+- Local control over school records and uploaded assets
+- Open source under the MIT License
 
-```text
-admin / ChangeMeNow!
-```
+Oakstead uses a lightweight Node.js server and SQLite database, with server-rendered pages and no frontend framework. Technical requirements and configuration live in the [installation guide](docs/INSTALLATION.md).
 
-Change the default password before using this with real school data.
+## Documentation
 
-## User Roles
+- [Installation, configuration, and security](docs/INSTALLATION.md)
+- [Release notes](RELEASE_NOTES.md)
+- [Linux deployment](packaging/linux/README.md)
+- [Project website](https://oakstead.school)
+- [MIT License](LICENSE)
 
-Oakstead has four app login roles:
+---
 
-- **Admin**: full access, including creating and editing other admins.
-- **Principal**: full school operations access, including setup, reports, backups, updates, teachers, and parent/teacher users, but cannot create or edit admin or principal accounts.
-- **Teacher**: can manage assignments, grades, report cards, and absences for students in classrooms linked to their teacher record. Teachers cannot access School Setup.
-- **Parent**: can use the parent portal for children in their linked family household, including grade graphs and report cards. Parents cannot change school records.
-
-## Configuration
-
-Oakstead loads environment variables from a local `.env` file when present. Common settings:
-
-- `PORT`: HTTP port. Defaults to `3000`.
-- `HOST`: Explicit bind host. Use `127.0.0.1` for local-only access or `0.0.0.0` for LAN access. If set, it overrides the in-app Network Access setting.
-- `OAKSTEAD_DEFAULT_HOST`: Default bind host used when `HOST` is not set. Defaults to `127.0.0.1`.
-- `OAKSTEAD_DEFAULT_PORT`: Default port used when `PORT` is not set. Defaults to `3000`.
-- `OAKSTEAD_DATA_DIR`: Runtime data directory for `school.db`, backups, uploads, and update status. Defaults to the project directory for source installs.
-- `DB_FILE`: SQLite database path. Defaults to `school.db` inside `OAKSTEAD_DATA_DIR`.
-- `OAKSTEAD_UPDATE_MODE`: `git` for source installs or `installer` for packaged Windows installs. Defaults to `git`.
-- `OAKSTEAD_RELEASE_REPO`: GitHub release repository slug for installer updates, for example `kirbw/oakstead`.
-- `DEMO_MODE`: Set to `1`, `true`, `yes`, or `on` to run demo mode. **This disables all authentication — every visitor is treated as an admin with full read/write access.** Leave it off (the default) for any deployment with real student data; use it only for throwaway public demos.
-- `DEMO_REFRESH_HOURS`: Demo reset interval from 1 to 24 hours. Defaults to `2`.
-
-The in-app Network Access setting is saved in `school.db`. On a headless Linux host, you can update that saved mode from SSH:
-
-```bash
-sudo systemctl stop oakstead
-sudo -u oakstead env OAKSTEAD_DATA_DIR=/var/lib/oakstead node /opt/oakstead/server.js --set-network-access lan
-sudo systemctl restart oakstead
-```
-
-Use `--set-network-access local` to return to local-only mode, or `--network-status` to print the saved and next-start URLs. For emergency LAN recovery, setting `HOST=0.0.0.0` in the service environment also works because `HOST` overrides the saved setting until it is removed.
-
-Example `.env`:
-
-```bash
-PORT=3000
-OAKSTEAD_DATA_DIR=/srv/oakstead
-```
-
-Use the included demo seed script only for demo or disposable data:
-
-```bash
-node scripts/seed-demo.js --reset
-```
-
-## Security and Deployment
-
-Oakstead stores sensitive student and family records. Do not publish it directly to the internet. If it must be reachable outside a trusted local network or VPN, place it behind a protective edge layer such as Cloudflare, another WAF, or an equivalent reverse proxy with HTTPS, rate limiting, access controls, and request filtering.
-
-For production installs, run Oakstead under a supervisor such as systemd or pm2 so the app starts after reboots and can restart cleanly after in-app updates. Back up `school.db`, `backups/`, and uploaded assets before server maintenance or version upgrades.
-
-## Windows Installer and LAN Access
-
-Windows packaging files live in `packaging/windows/`. The installer path stages Oakstead with:
-
-- App files under `Program Files\Oakstead`.
-- Runtime data under `%ProgramData%\Oakstead`.
-- A Windows service that starts Oakstead on boot.
-- Bundled Node.js runtime.
-- Optional Windows Firewall rule for TCP port `3000`.
-
-Prepare the package after adding the local vendor runtimes described in `packaging/windows/README.md`:
-
-```bash
-npm run prepare:windows
-```
-
-Then compile `packaging/windows/Oakstead.iss` with Inno Setup. The service uses installer-update mode, so creating a new GitHub release should include an asset named like `Oakstead-Setup-v0.0.10.exe`.
-
-Admins can use **School Setup -> Network Access** to switch between local-only access and LAN access. LAN mode binds Oakstead to `0.0.0.0`; other devices use the host machine IP shown on that page.
-
-## Validate
-
-```bash
-npm run check
-```
-
-## System Updates
-
-Administrators can update Oakstead from **School Setup -> System Updates**. Choose **Current release** for the latest stable version, or **Pre-release** to install the newest pre-release when one is available.
-
-Source installs use `OAKSTEAD_UPDATE_MODE=git`: the updater fetches GitHub tags from the configured `origin` remote, checks out the selected release, runs `npm install`, validates the server with `npm run check`, and restarts the app.
-
-Packaged Windows installs use `OAKSTEAD_UPDATE_MODE=installer`: the updater checks GitHub Releases for a Windows installer asset, creates a pre-installer backup, and gives the admin the installer download. Running the installer replaces app files while preserving the data directory.
-
-Before updating, commit or clear local code changes. Oakstead creates a database backup before updating, but you should still keep an external backup plan for production data.
-
-## Release Notes
-
-Release notes are also kept in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
-
-### 0.0.10
-
-- **Breaking: requires Node.js 22.13 or newer.** Switched from the `sqlite3` CLI to Node's built-in `node:sqlite` module; upgrade Node before restarting an existing source install. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full note.
-- Major performance work: in-process SQLite with WAL, cached/versioned static assets, gzipped HTML, single-transaction score saves, and cached settings lookups.
-- Secure by default: authentication is on unless `DEMO_MODE` is explicitly set, `.env` is no longer tracked, and the CSP `script-src` is locked down.
-- Removed the unused 906KB `html2pdf` bundle and stopped tracking database backups.
-
-### 0.0.9
-
-- Refactored the server startup, configuration, HTTP helpers, input normalization, and gradebook form helpers into focused modules while preserving existing behavior.
-- Simplified GET request dispatch and shared gradebook score redirect/parsing logic for safer maintenance.
-- Added dependency-free refactor regression checks for the extracted helper behavior.
-
-### 0.0.8
-
-- Hid Network Access, Backups, and System Updates from School Setup while running in demo mode.
-- Fixed gradebook grid autosave ordering so student averages stay current when entering scores quickly.
-
-### 0.0.7
-
-- Improved the Reports dashboard with clearer visual summaries, more readable chart styling, and report-specific icons.
-- Cleaned up printable reports by removing the demo-mode banner from print output.
-- Fixed grade graph report pagination so the report content starts correctly and avoids extra blank pages.
-- Refined grade graph print charts with a more compact layout that fits the grade report more reliably.
-- Improved the Absences page with compact grade and student filters in the list header, a dedicated Grade column, formatted absence/tardy labels, and cleaner amount display.
-- Enforced teacher-scoped absence visibility so teachers only see students in the grades and classrooms they are responsible for.
-- Added smoother app-shell navigation for internal pages and GET filters so the header, logo, and sidebar stay in place while main content updates.
-
-### 0.0.6
-
-- Added cross-platform runtime configuration for data directories, SQLite executable paths, bind hosts, ports, and update modes.
-- Added School Setup -> Network Access for local-only or trusted-LAN hosting with visible host/IP URLs and restart-gated changes.
-- Added packaged Windows update checks that read GitHub release assets and download installer updates instead of running Git commands.
-- Added Windows installer/service packaging scaffolding with bundled runtime expectations, ProgramData storage, WinSW service config, and Inno Setup script.
-- Added Linux systemd packaging examples that keep source installs on the Git-based updater.
-
-### 0.0.5
-
-- Added principal and parent roles alongside admins and teachers, with role-scoped navigation and route permissions.
-- Added a parent portal for household-linked child grade graphs and report cards.
-- Scoped teacher academic workflows to assigned classrooms, including assignments, gradebook scores, report cards, reports, and absences.
-- Expanded user management with teacher and parent-family links, plus admin-only protection for admin and principal accounts.
-- Improved the responsive app shell with a compact mobile top bar, dropdown navigation, sticky desktop sidebar, safe-area spacing, and better small-screen table handling.
-- Refined absence entry with segmented type and unit controls plus responsive form layout.
-- Added demo principal, teacher, and parent users to the demo seed data for role testing.
-
-### 0.0.4
-
-- Added congregation tracking with setup management, family assignment, family-list display, and family report columns.
-- Reworked the family setup form into Household, Contact, and Church and District sections for faster data entry.
-- Stored parent names as first names in family workflows while keeping household last names separate.
-- Updated gradebook grid autosave so assignment, student, and class averages refresh immediately after a score is saved.
-- Simplified gradebook assignment display titles by removing generated category prefixes.
-- Expanded demo seed data with school districts, congregations, and first-name parent records.
-- Added a static project website page in `website/`.
-
-### 0.0.3
-
-- Added an optional spreadsheet-style gradebook grid with students down the side, assignments across the top, sticky headers, class averages, per-student averages, and inline score saving.
-- Added gradebook controls for switching between standard assignment entry and grid entry, remembering the selected grid mode and marking period.
-- Added inline assignment creation, editing, and deletion from the grid view.
-- Added customizable letter grade scales by school year, grade range, and subject, with default letter grade groups created automatically.
-- Added letter grade display alongside percentage averages in gradebook grid cells, class rows, and student averages, with an option to hide letters.
-- Improved assignment history in the standard gradebook view with selectable assignment cards and clearer score/average summaries.
-- Improved grade graph print charts with larger line graphs, clearer period labels, and score labels.
-
-### 0.0.2
-
-- Added demo mode with `.env` support, automatic refresh scheduling, and a demo seed script for realistic families, students, teachers, subjects, assignments, and scores.
-- Added database backup management with manual backups, scheduled backup frequency settings, backup downloads, restore from saved or uploaded `.db` files, and automatic pre-update/pre-restore backups.
-- Added richer report workflows including report navigation, family and student print reports, school board roles, birthday reports, and grade graph reporting for full grades or individual students.
-- Added role group and role assignment management for parents and teachers, including school board role reporting.
-- Improved account and security controls with teacher-linked users, login throttling, larger validated uploads, safer image detection, and added security/deployment guidance.
-- Improved system updates with explicit update checks, pre-update backup creation, and clearer update status handling.
-- Added project metadata and housekeeping updates including MIT license metadata, `.env.example`, ignored local env/backup files, and expanded documentation.
-
-### 0.0.1
-
-- Initial Oakstead release with family, student, teacher, classroom, subject, school-year, gradebook, absence, report, and report-card workflows.
-- Added admin and teacher accounts with session security and CSRF protection.
-- Added customizable school name, logo, and favicon settings.
-- Added default Oakstead oak leaf logo and favicon.
-- Added in-app GitHub system updater with progress display.
-- Added visible application versioning from `package.json`.
+<p align="center">Built for schools that want their records organized, understandable, and close to home.</p>

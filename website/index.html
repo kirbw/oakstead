@@ -228,22 +228,12 @@
     }
     .screenshot-slot img {
       width: 100%;
-      height: auto;
-      display: block;
-    }
-    .screenshot-placeholder {
       aspect-ratio: 16/10;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      background: var(--bg);
-      border-bottom: 1px dashed var(--border-mid);
-      color: var(--muted);
-      font-size: 0.82rem;
+      object-fit: cover;
+      object-position: top;
+      display: block;
+      border-bottom: 1px solid var(--border);
     }
-    .screenshot-placeholder .ph-icon { font-size: 2rem; opacity: 0.5; }
     .screenshot-caption {
       padding: 11px 16px;
       font-size: 0.82rem;
@@ -292,6 +282,13 @@
       margin-bottom: 10px;
     }
     .install-step p:last-child { margin-bottom: 0; }
+    .install-link {
+      color: var(--accent-dark);
+      font-size: 0.86rem;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .install-link:hover { text-decoration: underline; }
     pre {
       background: #0f172a;
       color: #e2e8f0;
@@ -388,19 +385,19 @@
     </a>
     <div class="nav-right">
       <a class="nav-gh" href="https://github.com/kirbw/oakstead" target="_blank" rel="noopener">GitHub</a>
-      <a class="nav-demo" href="https://oakstead.school/demo" target="_blank" rel="noopener">Try the Demo →</a>
+      <a class="nav-demo" href="https://demo.oakstead.school" target="_blank" rel="noopener">Try the Demo →</a>
     </div>
   </nav>
 
   <!-- HERO -->
   <header class="hero">
     <div class="hero-inner">
-      <div class="hero-badge">v0.0.9 &middot; Open Source &middot; Self-Hosted</div>
+      <div class="hero-badge">v0.0.10 &middot; Open Source &middot; Self-Hosted</div>
       <img class="hero-logo" src="../assets/oakleaf.png" alt="Oakstead oak leaf" />
       <h1>School records that stay out of your way</h1>
       <p class="tagline">Rooted Records for Growing Minds — a lightweight gradebook and student records app built for small schools.</p>
       <div class="hero-actions">
-        <a class="btn-primary" href="https://oakstead.school/demo" target="_blank" rel="noopener">Try the Live Demo</a>
+        <a class="btn-primary" href="https://demo.oakstead.school" target="_blank" rel="noopener">Try the Live Demo</a>
         <a class="btn-secondary" href="https://github.com/kirbw/oakstead" target="_blank" rel="noopener">View on GitHub</a>
       </div>
     </div>
@@ -459,34 +456,24 @@
   </section>
 
   <!-- SCREENSHOTS -->
-  <section class="screenshots">
+  <section class="screenshots" id="screenshots">
     <div class="container">
       <p class="section-eyebrow">Screenshots</p>
       <h2 class="section-title">See it in action</h2>
       <p class="section-desc">A clean, no-nonsense interface designed to get out of your way.</p>
 
       <div class="screenshot-grid">
-        <!-- Replace .screenshot-placeholder with <img src="..."> when you have real screenshots -->
         <div class="screenshot-slot">
-          <div class="screenshot-placeholder">
-            <span class="ph-icon">🖼️</span>
-            <span>Screenshot coming soon</span>
-          </div>
+          <img src="../assets/screenshots/dashboard.png" alt="Oakstead Dashboard showing enrollment totals and recent gradebook activity" loading="lazy" />
           <div class="screenshot-caption">Dashboard — school overview at a glance</div>
         </div>
         <div class="screenshot-slot">
-          <div class="screenshot-placeholder">
-            <span class="ph-icon">🖼️</span>
-            <span>Screenshot coming soon</span>
-          </div>
+          <img src="../assets/screenshots/gradebook.png" alt="Oakstead Gradebook showing Grade 5 Math assignments and scores" loading="lazy" />
           <div class="screenshot-caption">Gradebook — fast spreadsheet-style entry</div>
         </div>
         <div class="screenshot-slot">
-          <div class="screenshot-placeholder">
-            <span class="ph-icon">🖼️</span>
-            <span>Screenshot coming soon</span>
-          </div>
-          <div class="screenshot-caption">Student records — full enrollment history</div>
+          <img src="../assets/screenshots/report-card.png" alt="Oakstead printable report card preview" loading="lazy" />
+          <div class="screenshot-caption">Report cards — polished, printable family updates</div>
         </div>
       </div>
     </div>
@@ -496,45 +483,33 @@
   <section class="install">
     <div class="container">
       <p class="section-eyebrow">Installation</p>
-      <h2 class="section-title">Up and running in minutes</h2>
-      <p class="section-desc">Oakstead runs on Node.js and SQLite — no database server required. Works on a Raspberry Pi, a spare laptop, or any modest server on your local network.</p>
+      <h2 class="section-title">Explore first, then host it yourself</h2>
+      <p class="section-desc">Oakstead currently installs from source on Windows or Linux. No separate database server is required.</p>
 
       <div class="install-steps">
         <div class="install-step">
           <div class="step-num">1</div>
-          <h3>Clone the repository</h3>
-          <p>You'll need Node.js 18+ and the <code>sqlite3</code> CLI installed.</p>
-          <pre><code>git clone https://github.com/kirbw/oakstead.git
-cd oakstead</code></pre>
+          <h3>Explore the live demo</h3>
+          <p>See realistic sample families, students, assignments, grades, reports, and school settings before installing anything.</p>
+          <a class="install-link" href="https://demo.oakstead.school" target="_blank" rel="noopener">Open the live demo →</a>
         </div>
         <div class="install-step">
           <div class="step-num">2</div>
-          <h3>Install dependencies</h3>
-          <p>Oakstead has no npm dependencies — there's nothing to install beyond Node itself.</p>
-          <pre><code># No npm install needed.
-# Just Node.js 18+ and sqlite3 CLI.</code></pre>
+          <h3>Install from source</h3>
+          <p>Run Oakstead on Windows or Linux with Node.js 22.13 or newer. A tested Windows installer is not currently published.</p>
+          <a class="install-link" href="https://github.com/kirbw/oakstead/blob/main/docs/INSTALLATION.md" target="_blank" rel="noopener">Read the installation guide →</a>
         </div>
         <div class="install-step">
           <div class="step-num">3</div>
-          <h3>Start the server</h3>
-          <p>The server starts on port 3000 by default. Open your browser and configure your school on first launch.</p>
-          <pre><code>node server.js
-
-# Server running at http://localhost:3000</code></pre>
-        </div>
-        <div class="install-step">
-          <div class="step-num">4</div>
-          <h3>Run as a service (optional)</h3>
-          <p>To keep Oakstead running in the background, use <code>pm2</code> or a systemd service.</p>
-          <pre><code>npm install -g pm2
-pm2 start server.js --name oakstead
-pm2 save</code></pre>
+          <h3>Follow new releases</h3>
+          <p>Review release notes and source changes as Oakstead grows. Windows packaging remains under development and is not release-ready.</p>
+          <a class="install-link" href="https://github.com/kirbw/oakstead/releases/latest" target="_blank" rel="noopener">View the latest release →</a>
         </div>
       </div>
 
       <div class="install-note">
-        <span>💡</span>
-        <div><strong>Intended for local networks.</strong> Oakstead is designed to run inside your school's network. If you expose it to the public internet, put it behind a reverse proxy with HTTPS (e.g. nginx + Let's Encrypt).</div>
+        <span>🔒</span>
+        <div><strong>Designed for trusted networks.</strong> Oakstead stores sensitive school records. Use a local network or VPN, and protect any remote access with HTTPS, request filtering, and appropriate access controls.</div>
       </div>
     </div>
   </section>
@@ -571,7 +546,7 @@ pm2 save</code></pre>
     <div class="container">
       <h2>See it for yourself</h2>
       <p>The live demo is pre-loaded with realistic sample data. Poke around — nothing will break.</p>
-      <a class="cta-btn" href="https://oakstead.school/demo" target="_blank" rel="noopener">Open the Live Demo →</a>
+      <a class="cta-btn" href="https://demo.oakstead.school" target="_blank" rel="noopener">Open the Live Demo →</a>
     </div>
   </section>
 
