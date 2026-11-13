@@ -33,7 +33,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Implemented shared assignment/roster checks and filtered lists/fallback reads.
     Validation: npm test and Node 22.13 tests pass; browser allowed/denied views verified;
     screenshot pr2-authorized-assignment.png. PR: https://github.com/kirbw/oakstead/pull/27; merged 191fa9c7.
-- [ ] 3. Preserve marking-period links — codex/preserve-marking-period-links
+- [x] 3. Preserve marking-period links — codex/preserve-marking-period-links
   - Update existing IDs by year/period number; insert additions, reject removal of
     referenced periods, remove unused surplus periods, transact related updates.
   - Report dangling links without guessing repairs. Preserve explicit-ID precedence.
@@ -41,7 +41,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     roll back completely.
   - Implemented stable-ID upserts, transactional settings, referenced-period conflict
     checks and non-mutating dangling-link logs. npm test and Node 22.13 tests pass;
-    browser save verified; pr3-period-settings.png captured. PR/merge: pending.
+    browser save verified; pr3-period-settings.png captured. PR: https://github.com/kirbw/oakstead/pull/28; merged 5e3cf5d5.
   - Compatibility: no historical reassignment; reverting code cannot recover links
     already broken by older versions. Existing dangling links require explicit repair.
 - [ ] 4. Validate database restores — codex/validate-database-restores
@@ -50,7 +50,16 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Smoke-test staged copy, create pre-restore backup after validation, perform closed
     same-volume replacement, verify/reopen and recover original on failure.
   - Acceptance: valid current/older backups work; migration/swap/reopen failures leave
-    original usable. Test Windows locks/WAL. PR/validation/merge: pending.
+    original usable. Test Windows locks/WAL.
+  - Implemented shared schema/additive migration definitions, staged validation and
+    migration, closed-file replacement, smoke verification and original-file recovery.
+    npm test and Node 22.13 tests pass on Windows (10 tests), including injected
+    migration/lock/replacement/reopen/verification failures and real WAL restores.
+    Browser create/restore verified; pr4-restore-verified.png captured. PR/merge: pending.
+  - Compatibility: require all current application tables/base columns; only existing
+    additive-column migrations are supported. Uploaded sources remain unchanged.
+    A recovery failure retains the original in the logged staging directory; stop
+    the app and recover that original before retrying.
 - [ ] 5. Run recurring backups — codex/run-recurring-backups
   - Startup plus five-minute due checks; read current frequency, prevent overlap,
     unref/clean timer, retry failures without advancing success timestamp.

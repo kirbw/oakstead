@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { applyAdditiveMigrations, validateApplicationSchema, smokeCheck } = require('./schema');
 
 let DatabaseSync;
 try {
@@ -11,7 +12,7 @@ try {
   process.exit(1);
 }
 
-function createDb({ dbFile }) {
+function createDb({ dbFile, files = fs }) {
   let db = null;
 
   function open() {
@@ -104,15 +105,72 @@ function createDb({ dbFile }) {
     }
   }
 
+  function applySchemaMigrations() {
+    applyAdditiveMigrations(open());
+  }
+
+  function restoreDatabase(source, { beforeReplace = () => {}, verify = () => {} } = {}) {
+    const stagingDir = files.mkdtempSync(path.join(path.dirname(dbFile), '.oakstead-restore-'));
+    const candidateFile = path.join(stagingDir, 'candidate.db');
+    const originalFile = path.join(stagingDir, 'original.db');
+    let originalMoved = false;
+    let retainRecovery = false;
+    try {
+      files.copyFileSync(source, candidateFile);
+      let candidate;
+      try {
+        validateBackupDatabase(candidateFile);
+        candidate = new DatabaseSync(candidateFile);
+        validateApplicationSchema(candidate, { allowAdditive: true });
+        applyAdditiveMigrations(candidate);
+        smokeCheck(candidate);
+      } catch (error) {
+        throw Object.assign(new Error(`Cannot restore backup: ${error.message}`), { statusCode: 400 });
+      } finally { candidate?.close(); }
+      validateBackupDatabase(candidateFile);
+      beforeReplace();
+      if (checkpoint().busy) throw new Error('Database is busy. Close other database connections before restoring.');
+      close();
+      try {
+        files.renameSync(dbFile, originalFile);
+        originalMoved = true;
+        files.renameSync(candidateFile, dbFile);
+        smokeCheck(open());
+        verify();
+      } catch (error) {
+        close();
+        if (originalMoved) {
+          try {
+            files.rmSync(dbFile, { force: true });
+            files.rmSync(`${dbFile}-wal`, { force: true });
+            files.rmSync(`${dbFile}-shm`, { force: true });
+            files.renameSync(originalFile, dbFile);
+            originalMoved = false;
+          } catch (recoveryError) {
+            retainRecovery = true;
+            console.error(`Restore recovery requires attention. Original database retained at ${originalFile}`, recoveryError);
+            throw new Error('Restore failed and automatic recovery could not complete. The original database has been retained for recovery.');
+          }
+        }
+        open();
+        throw error;
+      }
+    } finally {
+      if (!retainRecovery) files.rmSync(stagingDir, { recursive: true, force: true });
+    }
+  }
+
   process.on('exit', close);
 
   return {
+    applySchemaMigrations,
     checkpoint,
     close,
     insertReturningId,
     querySql,
     runSql,
     runSqlTransaction,
+    restoreDatabase,
     transaction,
     validateBackupDatabase,
     withDatabaseClosed
