@@ -7,8 +7,9 @@ const { once } = require('node:events');
 
 const root = path.resolve(__dirname, '../..');
 
-async function startApp(t) {
+async function startApp(t, { prepare } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oakstead-test-'));
+  if (prepare) prepare(directory);
   const probe = net.createServer();
   probe.listen(0, '127.0.0.1');
   await once(probe, 'listening');
@@ -62,7 +63,7 @@ async function startApp(t) {
     const session = response.headers.getSetCookie().find((cookie) => cookie.startsWith('sessionToken=') && !cookie.startsWith('sessionToken=;'));
     return { token, cookie: `csrfToken=${token}; ${session.split(';')[0]}` };
   }
-  return { request, login, directory, dbFile: path.join(directory, 'school.db'), child };
+  return { request, login, directory, dbFile: path.join(directory, 'school.db'), child, logs: () => output };
 }
 
 module.exports = { startApp };

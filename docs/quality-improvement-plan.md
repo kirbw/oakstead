@@ -78,7 +78,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     npm test passes (15 tests); Node 22.13 boundary and HTTP tests pass. Browser
     expired-session redirect and fresh login verified; pr6-expired-session.png captured.
     Existing ISO timestamps and 12-hour sessions retained. PR: https://github.com/kirbw/oakstead/pull/31; merged 7e028b19.
-- [ ] 7. Fix ungraded-period averages — codex/fix-ungraded-period-averages
+- [x] 7. Fix ungraded-period averages — codex/fix-ungraded-period-averages
   - Shared averaging excludes null/undefined/blank/non-finite before conversion;
     update both graphs and audit callers; preserve zero and rounding.
   - Acceptance: [90,null,null,null,null,null] = 90, [90,0] = 45, all missing = no
@@ -86,7 +86,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Implemented shared missing-aware numeric conversion/average for calculations,
     graph points and report cards. npm test passes (17 tests); Node 22.13 averaging
     and real graph/report parity tests pass. Browser shows 90% with other periods
-    ungraded; pr7-ungraded-periods.png captured. PR/merge: pending.
+    ungraded; pr7-ungraded-periods.png captured. PR: https://github.com/kirbw/oakstead/pull/32; merged cf0fdba3.
 - [ ] 8. Enforce database relationships — codex/enforce-database-relationships
   - Enable foreign keys on every connection/reopen. Audit seed/init/mutations;
     replace unsafe REPLACE writes, transact related writes, honor cascades and
@@ -95,7 +95,19 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     startup logs and administrator-only diagnostics, including period/person-role
     references not covered by declared constraints.
   - Acceptance: reject new violations, cascade scores, preserve/report old orphans,
-    no partial restrictive writes; init/demo/reopen/restore work. PR/validation/merge: pending.
+    no partial restrictive writes; init/demo/reopen/restore work.
+  - Implemented foreign_keys=ON on every connection, nested atomic record operations
+    with responses delayed until commit, stable enrollment/demo upserts, and ordered
+    atomic demo reset. Added administrator-only /system/diagnostics and settings link;
+    startup/restore logs include row/relationship identifiers without student details.
+    Native constraints reject new declared-FK violations; routes also validate period
+    and polymorphic person targets. Historical orphans are retained, not repaired.
+  - npm test and all 21 tests on Node 22.13 pass on Windows, including repeated demo
+    resets, rollback/cascade/restrict behavior, legacy retention and restore/reopen
+    enforcement. Browser diagnostics verified; pr8-data-integrity.png. PR/merge: pending.
+  - Compatibility: no destructive migration. Existing invalid links may make related
+    edits fail until explicitly repaired. Reverting code disables new enforcement
+    but cannot undo already completed cascades; recover from backup if required.
 - [ ] 9. Optimize grade calculations — codex/optimize-grade-calculations
   - Separate loading/pure calculation; period-filter single-period requests; load
     authorized graph scores/weights once and group by subject/student/period/category.

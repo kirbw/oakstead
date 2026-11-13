@@ -140,3 +140,17 @@ Stop Oakstead and recover that original before restarting or retrying. Keep an
 external backup; reverting application code does not reverse a database restore.
 
 Automatic backup schedules are checked at startup and every five minutes while Oakstead is running. Failed scheduled backups are logged and retried on the next check. Daily, weekly, and monthly mean intervals of 1, 7, and 30 days since the last successful backup.
+
+### Relationship enforcement and historical data
+
+Oakstead enforces declared SQLite foreign keys on each connection. Related record
+changes commit together, and deletion follows the schema's cascade/restrict rules.
+For example, deleting an assignment removes its scores. A conflicting record change
+returns an explanation instead of leaving partial changes.
+
+Administrators can open **System Settings → Review data integrity** to inspect
+historical broken links. The report includes foreign keys, assignment-period links,
+and person-role links. Startup and restore also log affected table/row identifiers.
+Existing violations are retained; no automatic deletion or guessed reassignment is
+performed. Repair decisions require a separate review and backup. Reverting the
+application cannot undo cascades already completed by an authorized deletion.
