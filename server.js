@@ -3834,14 +3834,26 @@ CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignmen
 }
 
 function createMarkingPeriods(yearId, count, startDate = '', endDate = '') {
+  runSqlBatch(markingPeriodStatements(yearId, count, startDate, endDate));
+}
+
+function markingPeriodStatements(yearId, count, startDate = '', endDate = '') {
   const periods = Math.max(1, Math.min(12, asInt(count) || 6));
   const span = daysBetween(startDate, endDate);
-  for (let index = 0; index < periods; index += 1) {
+  return Array.from({ length: periods }, (_, index) => {
     const periodStart = span ? addDays(startDate, Math.floor((span * index) / periods)) : '';
     const periodEnd = span ? addDays(startDate, Math.floor((span * (index + 1)) / periods) - 1) : '';
-    runSql(`INSERT OR REPLACE INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
-      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)});`);
-  }
+    return `INSERT INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
+      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)})
+      ON CONFLICT(school_year_id, period_number) DO UPDATE SET start_date=excluded.start_date, end_date=excluded.end_date;`;
+  });
+}
+
+function reportDanglingMarkingPeriods() {
+  const rows = querySql(`SELECT a.id, a.school_year_id, a.marking_period_id FROM os_assignments a
+    LEFT JOIN os_marking_periods p ON p.id=a.marking_period_id AND p.school_year_id=a.school_year_id
+    WHERE a.marking_period_id IS NOT NULL AND p.id IS NULL;`);
+  for (const row of rows) console.warn(`Historical assignment-period link needs review: assignment ${row.id}, year ${row.school_year_id}, period ${row.marking_period_id}. No records were changed.`);
 }
 
 function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
@@ -7882,9 +7894,16 @@ async function handlePost(req, res, p, body, user, headers) {
     const periodCount = Math.max(1, Math.min(12, asInt(body.periodCount) || 6));
     const startDate = cleanDate(body.startDate);
     const endDate = cleanDate(body.endDate);
-    runSql(`UPDATE os_school_years SET school_days=${schoolDays}, start_date=${sqlValue(startDate)}, end_date=${sqlValue(endDate)} WHERE id=${schoolYearId};`);
-    runSql(`DELETE FROM os_marking_periods WHERE school_year_id=${schoolYearId};`);
-    createMarkingPeriods(schoolYearId, periodCount, startDate, endDate);
+    db.transaction(() => {
+      const referenced = querySql(`SELECT p.period_number FROM os_marking_periods p
+        JOIN os_assignments a ON a.marking_period_id=p.id
+        WHERE p.school_year_id=${schoolYearId} AND p.period_number>${periodCount} LIMIT 1;`)[0];
+      if (referenced) throw Object.assign(new Error(`Period ${referenced.period_number} has assignments. Move those assignments before reducing the period count.`), { statusCode: 409 });
+      runSql(`UPDATE os_school_years SET school_days=${schoolDays}, start_date=${sqlValue(startDate)}, end_date=${sqlValue(endDate)} WHERE id=${schoolYearId};`);
+      runSql(`DELETE FROM os_marking_periods WHERE school_year_id=${schoolYearId} AND period_number>${periodCount};`);
+      runSql(markingPeriodStatements(schoolYearId, periodCount, startDate, endDate).join('\n'));
+    });
+    reportDanglingMarkingPeriods();
     return redirect(res, '/setup?section=years', headers);
   }
 
@@ -8294,6 +8313,7 @@ if (process.argv[2] === '--network-status' || process.argv[2] === '--set-network
 ensureRuntimeDirs();
 ensureDb();
 ACTIVE_NETWORK = desiredNetworkConfig();
+reportDanglingMarkingPeriods();
 if (DEMO_MODE) {
   const loopbackHosts = new Set(['127.0.0.1', 'localhost']);
   if (!loopbackHosts.has(ACTIVE_NETWORK.host)) {

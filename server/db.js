@@ -67,6 +67,19 @@ function createDb({ dbFile }) {
     return open().prepare('PRAGMA wal_checkpoint(TRUNCATE);').get() || {};
   }
 
+  function transaction(fn) {
+    const connection = open();
+    connection.exec('BEGIN;');
+    try {
+      const result = fn();
+      connection.exec('COMMIT;');
+      return result;
+    } catch (error) {
+      try { connection.exec('ROLLBACK;'); } catch {}
+      throw error;
+    }
+  }
+
   function withDatabaseClosed(fn) {
     close();
     try {
@@ -100,6 +113,7 @@ function createDb({ dbFile }) {
     querySql,
     runSql,
     runSqlTransaction,
+    transaction,
     validateBackupDatabase,
     withDatabaseClosed
   };

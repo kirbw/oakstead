@@ -24,7 +24,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Implemented: tolerant decoding, protected initialization, reusable child-process
     integration harness, and aggregate npm test command. PR: https://github.com/kirbw/oakstead/pull/26.
   - Validation: npm test passed on Node 26.13; integration and refactor checks passed on Node 22.13. Browser sign-in/dashboard verified; screenshot retained as pr1-login-verified.png. Merged: 9e32c626.
-- [ ] 2. Enforce assignment access consistently — codex/fix-assignment-authorization
+- [x] 2. Enforce assignment access consistently — codex/fix-assignment-authorization
   - Shared actual-assignment authorization for reads, edits, deletion and every
     individual/bulk score path; validate all targets before writes. Remove permissive
     fallback reads. Preserve grade-based teacher access, not creator ownership.
@@ -32,13 +32,18 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     records; authorized roles retain access.
   - Implemented shared assignment/roster checks and filtered lists/fallback reads.
     Validation: npm test and Node 22.13 tests pass; browser allowed/denied views verified;
-    screenshot pr2-authorized-assignment.png. PR/merge: pending.
+    screenshot pr2-authorized-assignment.png. PR: https://github.com/kirbw/oakstead/pull/27; merged 191fa9c7.
 - [ ] 3. Preserve marking-period links — codex/preserve-marking-period-links
   - Update existing IDs by year/period number; insert additions, reject removal of
     referenced periods, remove unused surplus periods, transact related updates.
   - Report dangling links without guessing repairs. Preserve explicit-ID precedence.
   - Acceptance: unchanged/date/count edits preserve links; rejected and failed writes
-    roll back completely. PR/validation/merge: pending.
+    roll back completely.
+  - Implemented stable-ID upserts, transactional settings, referenced-period conflict
+    checks and non-mutating dangling-link logs. npm test and Node 22.13 tests pass;
+    browser save verified; pr3-period-settings.png captured. PR/merge: pending.
+  - Compatibility: no historical reassignment; reverting code cannot recover links
+    already broken by older versions. Existing dangling links require explicit repair.
 - [ ] 4. Validate database restores — codex/validate-database-restores
   - Separate integrity/application-schema checks; reject empty/corrupt/unrelated or
     incomplete files. Allow supported additive-column migrations on a staged copy.
