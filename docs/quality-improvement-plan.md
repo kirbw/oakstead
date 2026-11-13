@@ -60,7 +60,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     additive-column migrations are supported. Uploaded sources remain unchanged.
     A recovery failure retains the original in the logged staging directory; stop
     the app and recover that original before retrying.
-- [ ] 5. Run recurring backups — codex/run-recurring-backups
+- [x] 5. Run recurring backups — codex/run-recurring-backups
   - Startup plus five-minute due checks; read current frequency, prevent overlap,
     unref/clean timer, retry failures without advancing success timestamp.
   - Preserve daily/weekly/30-day semantics. Acceptance: controlled-clock coverage for
@@ -68,12 +68,16 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Implemented five-minute unreferenced scheduler with exit cleanup and live settings;
     backup success metadata now commits atomically after file creation/stat. npm test
     and all 13 tests on Node 22.13 pass, including controlled-clock/retry/overlap and
-    injected metadata rollback. No screen or form behavior changed. PR/merge: pending.
+    injected metadata rollback. No screen or form behavior changed. PR: https://github.com/kirbw/oakstead/pull/30; merged 7daaba3c.
 - [ ] 6. Fix session expiration — codex/fix-session-expiration
   - Normalize existing ISO expiry using SQLite date functions; share validity
     predicate with cleanup; invalid timestamps expire. Keep 12 hours and cookies.
   - Acceptance: same-day/midnight/exact-boundary/future/invalid timestamps and cleanup
-    agree without destructive migration. PR/validation/merge: pending.
+    agree without destructive migration.
+  - Implemented shared julianday/COALESCE validity predicate for auth and cleanup.
+    npm test passes (15 tests); Node 22.13 boundary and HTTP tests pass. Browser
+    expired-session redirect and fresh login verified; pr6-expired-session.png captured.
+    Existing ISO timestamps and 12-hour sessions retained. PR/merge: pending.
 - [ ] 7. Fix ungraded-period averages — codex/fix-ungraded-period-averages
   - Shared averaging excludes null/undefined/blank/non-finite before conversion;
     update both graphs and audit callers; preserve zero and rounding.
