@@ -24,3 +24,30 @@ the unique assignment/student score index; no additional index was added.
 
 These are synthetic calculation measurements, not production HTTP latency or a
 multi-user load test. Timings vary by host. No persistent grade cache is introduced.
+
+## Setup rendering (PR 10)
+
+Measured on Windows/Node 26.13 with `npm run benchmark:setup`. The frozen baseline
+is the Setup renderer from commit 0f088ec3. Both renderers use the same SQLite data
+and stable helper/IO fixtures; normalized HTML is compared before measurements.
+
+Fixture: 400 families and 1,200 students. Each median uses 15 measured runs after
+warmup. This measures rendering/data loading, excluding real disk/network delays
+and the outer HTTP page wrapper. The real HTTP/browser checks cover that integration.
+
+| Section | Before queries | After queries | Before rows | After rows | Before median | After median |
+|---|---:|---:|---:|---:|---:|---:|
+| Network Access | 20 | 2 | 1,613 | 1 | 2.46 ms | 0.03 ms |
+| System Settings | 20 | 2 | 1,613 | 1 | 2.39 ms | 0.02 ms |
+| Families | 20 | 11 | 1,613 | 404 | 2.36 ms | 0.99 ms |
+
+The navigation uses aggregate counts. The active section alone loads detail records
+and constructs its HTML. Families loads children only for the selected household.
+Instrumented tests verify backup-directory, update-status and network-interface
+helpers execute only in their corresponding sections. All 14 sections preserve
+navigation counts and normalized baseline HTML for administrator/principal fixtures;
+real HTTP tests also cover submissions, selected records and demo-mode exclusions.
+
+No persistent cache, UI redesign, external update installation or production load
+test is involved. Helper fixtures omit incidental settings/network lookups, so these
+query counts describe the isolated benchmark rather than complete HTTP requests.

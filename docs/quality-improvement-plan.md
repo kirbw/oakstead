@@ -108,7 +108,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Compatibility: no destructive migration. Existing invalid links may make related
     edits fail until explicitly repaired. Reverting code disables new enforcement
     but cannot undo already completed cascades; recover from backup if required.
-- [ ] 9. Optimize grade calculations — codex/optimize-grade-calculations
+- [x] 9. Optimize grade calculations — codex/optimize-grade-calculations
   - Separate loading/pure calculation; period-filter single-period requests; load
     authorized graph scores/weights once and group by subject/student/period/category.
   - Request-local reuse only; preserve weights/rounding/access/output/serialized saves
@@ -120,7 +120,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     results instead of repeated scans. Letter scales remain loaded once per view/save.
     No persistent cache or added index. npm test passes (23 tests); Node 22.13 parity,
     authorization and report tests pass. Browser autosave/graph verified;
-    pr9-grade-autosave.png captured. PR/merge: pending.
+    pr9-grade-autosave.png captured. PR: https://github.com/kirbw/oakstead/pull/34; merged 0f088ec3.
   - Benchmark: graph 108 to 3 queries, 307116 to 51166 loaded rows, median 725.60 to
     86.00 ms; single period 8531 to 1398 rows, 23.26 to 1.42 ms. See performance-results.md.
 - [ ] 10. Optimize Setup rendering — codex/optimize-setup-rendering
@@ -128,7 +128,19 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     related dropdowns and backup/network/update reads only where needed.
   - Preserve all forms/URLs/selections/counts/roles/demo exclusions; no persistent cache
     or redesign. Acceptance: all section flows/browser checks, loader isolation,
-    screenshots and before/after timing. PR/validation/merge: pending.
+    screenshots and before/after timing.
+  - Implemented explicit section data loaders and named renderers, aggregate navigation
+    counts, and selected-family child loading. Backup/network/update IO runs only for
+    its section. No redesign or persistent cache. npm test and all 27 tests on Node
+    22.13 pass, covering baseline HTML/count parity, role/demo restrictions, selected
+    records, loader/IO isolation and actual form submissions.
+  - Browser verified all 14 sections and an actual family save; screenshots
+    pr10-setup-families.png, pr10-setup-network.png, pr10-setup-settings.png and
+    pr10-family-save.png captured. No system update was installed during QA;
+    environment-managed network settings were verified as disabled. PR/merge: pending.
+  - Synthetic benchmark: Network Settings 20 to 2 queries, 1613 to 1 loaded rows,
+    median 2.46 to 0.03 ms; Families 1613 to 404 rows, 2.36 to 0.99 ms.
+    See performance-results.md for fixture scope and limitations.
 
 ## Exclusions
 

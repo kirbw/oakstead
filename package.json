@@ -20,6 +20,7 @@
     "start": "node server.js",
     "check": "node --check server.js",
     "benchmark:grades": "node scripts/benchmark-grades.js",
+    "benchmark:setup": "node scripts/benchmark-setup.js",
     "test:refactor": "node scripts/refactor-regression-check.js",
     "prepare:windows": "node scripts/prepare-windows-package.js"
   }
