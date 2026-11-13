@@ -8418,9 +8418,9 @@ function handleGet(req, res, url, pathname, user, csrfToken, headers) {
 
 const server = http.createServer(async (req, res) => {
   const headers = {};
-  const csrfToken = getOrCreateCsrfToken(req, headers);
 
   try {
+    const csrfToken = getOrCreateCsrfToken(req, headers);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
     const user = currentUser(req);

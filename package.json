@@ -16,6 +16,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "test": "npm run check && npm run test:refactor && node --test tests/*.test.js",
     "start": "node server.js",
     "check": "node --check server.js",
     "test:refactor": "node scripts/refactor-regression-check.js",
