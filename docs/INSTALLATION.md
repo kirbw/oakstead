@@ -124,3 +124,17 @@ npm run test:refactor
 
 - [Linux systemd deployment](../packaging/linux/README.md)
 - [Release notes](../RELEASE_NOTES.md)
+
+### Restore validation and recovery
+
+Restores require a complete Oakstead database with the application's tables and
+base columns. Backups missing columns covered by the existing additive migrations
+are upgraded on a staged copy; empty, unrelated, corrupt, or incomplete databases
+are rejected before replacing school records. The source backup is not modified.
+
+After validation, Oakstead creates a pre-restore backup, closes the active
+connection, replaces the database and verifies it. A replacement or verification
+failure restores the original automatically. If recovery itself fails, the server
+log identifies the retained original database in a `.oakstead-restore-*` directory.
+Stop Oakstead and recover that original before restarting or retrying. Keep an
+external backup; reverting application code does not reverse a database restore.

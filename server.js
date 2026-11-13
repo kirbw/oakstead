@@ -54,6 +54,7 @@ const {
   sqlValue
 } = require('./server/input');
 const { createDb } = require('./server/db');
+const { SCHEMA_SQL } = require('./server/schema');
 const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
@@ -3385,7 +3386,7 @@ function gridModeToggle(offUrl, onUrl, isGrid) {
 }
 
 const db = createDb({ dbFile: DB_FILE });
-const { runSql, querySql, insertReturningId, validateBackupDatabase } = db;
+const { runSql, querySql, insertReturningId } = db;
 
 function runSqlBatch(statements) {
   db.runSqlTransaction(buildTransaction(statements));
@@ -3452,11 +3453,6 @@ function refreshDemoData(reason = 'scheduled') {
   if (result.stderr) console.error(result.stderr.trim());
   if (result.status !== 0) console.error(`Demo data refresh failed during ${reason}.`);
   invalidateAppCaches();
-}
-
-function ensureColumn(table, column, definition) {
-  const columns = querySql(`PRAGMA table_info(${table});`).map((row) => row.name);
-  if (!columns.includes(column)) runSql(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
 }
 
 function addDays(dateText, days) {
@@ -3535,273 +3531,8 @@ function clearLoginFailures(req, username) {
 }
 
 function ensureDb() {
-  runSql(`
-CREATE TABLE IF NOT EXISTS os_school_years (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  start_date TEXT,
-  end_date TEXT,
-  is_active INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_school_districts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_congregations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_families (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_name TEXT NOT NULL,
-  school_district_id INTEGER,
-  congregation_id INTEGER,
-  father_name TEXT,
-  mother_name TEXT,
-  father_phone TEXT,
-  mother_phone TEXT,
-  phone TEXT,
-  email TEXT,
-  address TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_district_id) REFERENCES os_school_districts(id),
-  FOREIGN KEY (congregation_id) REFERENCES os_congregations(id)
-);
-CREATE TABLE IF NOT EXISTS os_students (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_id INTEGER NOT NULL,
-  first_name TEXT NOT NULL,
-  middle_name TEXT,
-  last_name TEXT NOT NULL,
-  birth_date TEXT,
-  gender TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (family_id) REFERENCES os_families(id)
-);
-CREATE TABLE IF NOT EXISTS os_emergency_contacts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  family_id INTEGER NOT NULL,
-  priority INTEGER NOT NULL DEFAULT 1,
-  name TEXT NOT NULL,
-  relationship TEXT,
-  phone TEXT,
-  notes TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (family_id) REFERENCES os_families(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_teachers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT,
-  phone TEXT,
-  mobile_phone TEXT,
-  address TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_role_groups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_role_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  UNIQUE (group_id, name),
-  FOREIGN KEY (group_id) REFERENCES os_role_groups(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_person_roles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  person_type TEXT NOT NULL,
-  person_id INTEGER NOT NULL,
-  group_id INTEGER NOT NULL,
-  role_type_id INTEGER NOT NULL,
-  is_assistant INTEGER NOT NULL DEFAULT 0,
-  term_start TEXT,
-  term_end TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (group_id) REFERENCES os_role_groups(id),
-  FOREIGN KEY (role_type_id) REFERENCES os_role_types(id)
-);
-CREATE TABLE IF NOT EXISTS os_classrooms (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  teacher_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
-);
-CREATE TABLE IF NOT EXISTS os_classroom_grades (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  classroom_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  UNIQUE (classroom_id, grade_level),
-  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_student_years (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  student_id INTEGER NOT NULL,
-  school_year_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  classroom_id INTEGER,
-  status TEXT NOT NULL DEFAULT 'enrolled',
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (student_id, school_year_id),
-  FOREIGN KEY (student_id) REFERENCES os_students(id),
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id)
-);
-CREATE TABLE IF NOT EXISTS os_subjects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_grade_subjects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  UNIQUE (school_year_id, grade_level, subject_id),
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
-);
-CREATE TABLE IF NOT EXISTS os_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  grade_level TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  classroom_id INTEGER,
-  title TEXT NOT NULL,
-  category TEXT NOT NULL,
-  assignment_date TEXT,
-  max_score REAL NOT NULL DEFAULT 100,
-  teacher_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id),
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id),
-  FOREIGN KEY (classroom_id) REFERENCES os_classrooms(id),
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id)
-);
-CREATE TABLE IF NOT EXISTS os_scores (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  assignment_id INTEGER NOT NULL,
-  student_id INTEGER NOT NULL,
-  score REAL,
-  note TEXT,
-  UNIQUE (assignment_id, student_id),
-  FOREIGN KEY (assignment_id) REFERENCES os_assignments(id) ON DELETE CASCADE,
-  FOREIGN KEY (student_id) REFERENCES os_students(id)
-);
-CREATE TABLE IF NOT EXISTS os_users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  username TEXT NOT NULL UNIQUE,
-  role TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  teacher_id INTEGER,
-  parent_family_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (teacher_id) REFERENCES os_teachers(id),
-  FOREIGN KEY (parent_family_id) REFERENCES os_families(id)
-);
-CREATE TABLE IF NOT EXISTS os_sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_token TEXT NOT NULL UNIQUE,
-  user_id INTEGER NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES os_users(id)
-);
-CREATE TABLE IF NOT EXISTS os_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS os_absences (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  student_id INTEGER NOT NULL,
-  absence_date TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  amount REAL NOT NULL DEFAULT 1,
-  unit TEXT NOT NULL DEFAULT 'days',
-  notes TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
-  FOREIGN KEY (student_id) REFERENCES os_students(id)
-);
-CREATE TABLE IF NOT EXISTS os_marking_periods (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  period_number INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  start_date TEXT,
-  end_date TEXT,
-  UNIQUE (school_year_id, period_number),
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_grade_weight_groups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  min_grade TEXT NOT NULL,
-  max_grade TEXT NOT NULL,
-  subject_id INTEGER,
-  rounding_mode TEXT NOT NULL DEFAULT 'nearest',
-  calculation_mode TEXT NOT NULL DEFAULT 'weighted',
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
-);
-CREATE TABLE IF NOT EXISTS os_grade_weight_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL,
-  category TEXT NOT NULL,
-  weight REAL NOT NULL,
-  UNIQUE (group_id, category),
-  FOREIGN KEY (group_id) REFERENCES os_grade_weight_groups(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS os_letter_grade_groups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  school_year_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  min_grade TEXT NOT NULL,
-  max_grade TEXT NOT NULL,
-  subject_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (school_year_id) REFERENCES os_school_years(id) ON DELETE CASCADE,
-  FOREIGN KEY (subject_id) REFERENCES os_subjects(id)
-);
-CREATE TABLE IF NOT EXISTS os_letter_grade_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  group_id INTEGER NOT NULL,
-  letter TEXT NOT NULL,
-  threshold REAL NOT NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (group_id, letter),
-  FOREIGN KEY (group_id) REFERENCES os_letter_grade_groups(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_os_sessions_token ON os_sessions(session_token);
-CREATE INDEX IF NOT EXISTS idx_os_student_years_year_grade ON os_student_years(school_year_id, grade_level);
-CREATE INDEX IF NOT EXISTS idx_os_assignments_year_grade_subject ON os_assignments(school_year_id, grade_level, subject_id);
-`);
-
-  ensureColumn('os_school_years', 'school_days', 'school_days INTEGER DEFAULT 180');
-  ensureColumn('os_assignments', 'marking_period_id', 'marking_period_id INTEGER');
-  ensureColumn('os_families', 'school_district_id', 'school_district_id INTEGER');
-  ensureColumn('os_families', 'congregation_id', 'congregation_id INTEGER');
-  ensureColumn('os_families', 'father_phone', 'father_phone TEXT');
-  ensureColumn('os_families', 'mother_phone', 'mother_phone TEXT');
-  ensureColumn('os_students', 'middle_name', 'middle_name TEXT');
-  ensureColumn('os_students', 'gender', 'gender TEXT');
-  ensureColumn('os_teachers', 'mobile_phone', 'mobile_phone TEXT');
-  ensureColumn('os_teachers', 'address', 'address TEXT');
-  ensureColumn('os_users', 'parent_family_id', 'parent_family_id INTEGER');
+  runSql(SCHEMA_SQL);
+  db.applySchemaMigrations();
 
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
   runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
@@ -8062,7 +7793,6 @@ async function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/backup/restore') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    createDatabaseBackup('pre-restore');
     const uploaded = body.backupFile?.data?.length ? body.backupFile : null;
     let source = '';
     if (uploaded) {
@@ -8074,11 +7804,12 @@ async function handlePost(req, res, p, body, user, headers) {
       source = backupPath(body.backupFileName);
     }
     if (!source || !fs.existsSync(source)) return sendText(res, 400, 'Backup file not found.');
-    validateBackupDatabase(source);
-    // Copying over an open WAL database corrupts it (stale page cache plus a
-    // leftover -wal replayed against the restored file), so swap it closed.
-    db.withDatabaseClosed(() => fs.copyFileSync(source, DB_FILE));
-    invalidateAppCaches();
+    try {
+      db.restoreDatabase(source, { beforeReplace: () => createDatabaseBackup('pre-restore') });
+    } finally {
+      // Both successful replacement and recovery may reopen a different file.
+      invalidateAppCaches();
+    }
     setSetting('backup_last_restore_at', new Date().toISOString());
     return redirect(res, '/setup?section=backups', headers);
   }
