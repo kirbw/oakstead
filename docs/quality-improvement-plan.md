@@ -87,7 +87,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     graph points and report cards. npm test passes (17 tests); Node 22.13 averaging
     and real graph/report parity tests pass. Browser shows 90% with other periods
     ungraded; pr7-ungraded-periods.png captured. PR: https://github.com/kirbw/oakstead/pull/32; merged cf0fdba3.
-- [ ] 8. Enforce database relationships — codex/enforce-database-relationships
+- [x] 8. Enforce database relationships — codex/enforce-database-relationships
   - Enable foreign keys on every connection/reopen. Audit seed/init/mutations;
     replace unsafe REPLACE writes, transact related writes, honor cascades and
     explain restrictive-delete conflicts.
@@ -104,7 +104,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     and polymorphic person targets. Historical orphans are retained, not repaired.
   - npm test and all 21 tests on Node 22.13 pass on Windows, including repeated demo
     resets, rollback/cascade/restrict behavior, legacy retention and restore/reopen
-    enforcement. Browser diagnostics verified; pr8-data-integrity.png. PR/merge: pending.
+    enforcement. Browser diagnostics verified; pr8-data-integrity.png. PR: https://github.com/kirbw/oakstead/pull/33; merged f7ceef41.
   - Compatibility: no destructive migration. Existing invalid links may make related
     edits fail until explicitly repaired. Reverting code disables new enforcement
     but cannot undo already completed cascades; recover from backup if required.
@@ -114,7 +114,15 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Request-local reuse only; preserve weights/rounding/access/output/serialized saves
     and mean-of-graded-student class averages. Add indexes only with query-plan evidence.
   - Acceptance: parity fixtures; bounded graph query counts, no other-period loading;
-    demonstrate before/after rows/query counts/median timings. PR/validation/merge: pending.
+    demonstrate before/after rows/query counts/median timings.
+  - Implemented pure grouped accumulators and period-filtered loading; graphs load
+    scores/weights once, parent views reuse weights, and report cards reuse grouped
+    results instead of repeated scans. Letter scales remain loaded once per view/save.
+    No persistent cache or added index. npm test passes (23 tests); Node 22.13 parity,
+    authorization and report tests pass. Browser autosave/graph verified;
+    pr9-grade-autosave.png captured. PR/merge: pending.
+  - Benchmark: graph 108 to 3 queries, 307116 to 51166 loaded rows, median 725.60 to
+    86.00 ms; single period 8531 to 1398 rows, 23.26 to 1.42 ms. See performance-results.md.
 - [ ] 10. Optimize Setup rendering — codex/optimize-setup-rendering
   - Shared lightweight count navigation and selected-section loaders/renderers;
     related dropdowns and backup/network/update reads only where needed.
@@ -128,3 +136,10 @@ Broad restructuring, dependency changes, asynchronous hashing/compression and Gi
 update performance changes are outside these PRs. Code rollback does not undo data
 changes; document compatibility/recovery especially for PRs 3, 4 and 8.
 
+
+## Additional follow-up observed during verification
+
+- Existing compactPercent formatting strips significant trailing zeroes when decimals=0
+  (for example, 90 displays as 9 in gradebook summaries). Stored grades and graph values
+  are correct. This predates these changes and is outside the ten planned PRs; address
+  separately with formatting regression cases for 0, 10, 90, 100 and decimals.

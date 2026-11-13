@@ -58,6 +58,7 @@ const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
 const { numericValue, numericValues, average } = require('./server/averages');
 const { collectDataIntegrityIssues } = require('./server/integrity');
+const { gradeRank, assignmentPeriodClause, summarizeGradeRows, loadGradeWeights, loadGradeAverages } = require('./server/grades');
 const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
@@ -4375,14 +4376,6 @@ function saveUploadedImage(file, basename) {
   return `uploads/${fileName}`;
 }
 
-function gradeRank(grade) {
-  const text = String(grade);
-  if (/^pre-?k$/i.test(text)) return -2;
-  if (/^k(indergarten)?$/i.test(text)) return -1;
-  const number = Number(text);
-  return Number.isFinite(number) ? number : 100 + text.toLowerCase().charCodeAt(0);
-}
-
 function sortGrades(grades) {
   return [...new Set(grades.filter(Boolean))].sort((a, b) => gradeRank(a) - gradeRank(b) || String(a).localeCompare(String(b)));
 }
@@ -6730,13 +6723,14 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
     WHERE a.school_year_id=${yearId} AND a.grade_level=${sqlValue(selectedGrade)}
     ORDER BY s.name;`) : [];
   const graphPeriods = periods.length ? periods : [{ id: 0, name: 'Current', start_date: '', end_date: '' }];
+  const averages = loadGradeAverages(querySql, { yearId, grade: selectedGrade, subjectIds: subjects.map((subject) => subject.id), studentIds: graphStudentIds, periods: graphPeriods });
   const series = subjects.map((subject, index) => ({
     id: subject.id,
     name: subject.name,
     color: graphColor(index),
     values: graphPeriods.map((period) => {
       if (!graphStudentIds.length) return null;
-      const result = periodAverageRows(yearId, selectedGrade, asInt(subject.id), graphStudentIds, period);
+      const result = averages.get(subject.id, period);
       if (scope === 'student') return result.studentAverages.get(asInt(selectedStudent?.id)) ?? null;
       return result.classAverage;
     })
@@ -6770,7 +6764,7 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
   </div>`;
 }
 
-function studentGradeGraphPanel(student, yearId, selectedYear) {
+function studentGradeGraphPanel(student, yearId, selectedYear, gradeSettings) {
   if (!student) return emptyState('No child is linked to this parent account for the selected school year.');
   const selectedGrade = cleanGrade(student.grade_level);
   const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
@@ -6780,12 +6774,13 @@ function studentGradeGraphPanel(student, yearId, selectedYear) {
     JOIN os_subjects s ON s.id = a.subject_id
     WHERE a.school_year_id=${yearId} AND a.grade_level=${sqlValue(selectedGrade)}
     ORDER BY s.name;`) : [];
+  const averages = loadGradeAverages(querySql, { yearId, grade: selectedGrade, subjectIds: subjects.map((subject) => subject.id), studentIds: [asInt(student.id)], periods: graphPeriods, settings: gradeSettings });
   const series = subjects.map((subject, index) => ({
     id: subject.id,
     name: subject.name,
     color: graphColor(index),
     values: graphPeriods.map((period) => {
-      const result = periodAverageRows(yearId, selectedGrade, asInt(subject.id), [asInt(student.id)], period);
+      const result = averages.get(subject.id, period);
       return result.studentAverages.get(asInt(student.id)) ?? null;
     })
   }));
@@ -6819,9 +6814,11 @@ function parentPage(url, user, selectedYear) {
     ORDER BY st.birth_date, st.last_name, st.first_name;`);
   const selectedStudentId = asInt(url.searchParams.get('studentId')) || asInt(children[0]?.id);
   const selectedStudent = children.find((student) => asInt(student.id) === selectedStudentId) || children[0] || null;
-  const graph = studentGradeGraphPanel(selectedStudent, yearId, selectedYear);
+  const gradeSettings = loadGradeWeights(querySql, yearId);
+  const graph = studentGradeGraphPanel(selectedStudent, yearId, selectedYear, gradeSettings);
   const reportCards = reportCardsPage(url, selectedYear, user, {
     formAction: '/parent',
+    gradeSettings,
     title: 'Report Card',
     description: 'View printable report cards for your children.',
     childPicker: true
@@ -6864,36 +6861,6 @@ function reportLetter(value) {
   if (score >= 70) return 'D';
   if (score >= 63) return 'E';
   return 'F';
-}
-
-function matchingWeightGroup(groups, grade, subjectId) {
-  const rank = gradeRank(grade);
-  return groups.find((group) => group.subject_id === subjectId && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
-    || groups.find((group) => !group.subject_id && rank >= gradeRank(group.min_grade) && rank <= gradeRank(group.max_grade))
-    || null;
-}
-
-function calculateWeightedAverage(scores, group, allItems) {
-  const percentages = numericValues(scores.map((row) => row.percent));
-  if (!percentages.length) return { average: null, breakdown: [] };
-  const straight = average(percentages);
-  if (!group || group.calculation_mode === 'straight') return { average: Math.round(straight), breakdown: [] };
-  const items = allItems.filter((item) => item.group_id === group.id);
-  let weightedTotal = 0;
-  let usedWeight = 0;
-  const breakdown = [];
-  items.forEach((item) => {
-    const categoryScores = numericValues(scores.filter((row) => normalizeCategory(row.category) === normalizeCategory(item.category)).map((row) => row.percent));
-    if (!categoryScores.length) return;
-    const categoryAverage = average(categoryScores);
-    const weight = Number(item.weight) || 0;
-    weightedTotal += categoryAverage * weight;
-    usedWeight += weight;
-    breakdown.push(`${normalizeCategory(item.category)} ${Math.round(categoryAverage)}% x ${weight}%`);
-  });
-  if (!usedWeight) return { average: Math.round(straight), breakdown: [] };
-  const raw = weightedTotal / usedWeight;
-  return { average: group.rounding_mode === 'round-up' ? Math.floor(raw + 0.5) : Math.round(raw), breakdown };
 }
 
 function absenceUnitsToDays(row) {
@@ -6943,22 +6910,6 @@ function reportCardBooksSvg() {
   </svg>`;
 }
 
-function rowInPeriod(row, period) {
-  if (!period) return true;
-  if (asInt(row.marking_period_id) === asInt(period.id)) return true;
-  if (!row.marking_period_id && period.start_date && period.end_date && row.assignment_date) {
-    return row.assignment_date >= period.start_date && row.assignment_date <= period.end_date;
-  }
-  return false;
-}
-
-function assignmentPeriodClause(period) {
-  if (!period) return '';
-  const idClause = `a.marking_period_id=${asInt(period.id)}`;
-  if (!period.start_date || !period.end_date) return `AND ${idClause}`;
-  return `AND (${idClause} OR (a.marking_period_id IS NULL AND a.assignment_date >= ${sqlValue(period.start_date)} AND a.assignment_date <= ${sqlValue(period.end_date)}))`;
-}
-
 function selectedPeriodFromRequest(req, url, periods) {
   const requestedId = asInt(url.searchParams.get('markingPeriodId'));
   const cookieId = asInt(parseCookies(req).gradebookPeriodId);
@@ -6970,28 +6921,7 @@ function selectedPeriodFromRequest(req, url, periods) {
 
 function periodAverageRows(yearId, grade, subjectId, studentIds, period) {
   if (!grade || !subjectId || !studentIds.length || !period) return { classAverage: null, studentAverages: new Map() };
-  const scoreRows = querySql(`SELECT sc.student_id, a.category, a.assignment_date, a.marking_period_id,
-      ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
-    FROM os_scores sc
-    JOIN os_assignments a ON a.id = sc.assignment_id
-    WHERE a.school_year_id=${yearId}
-      AND a.grade_level=${sqlValue(grade)}
-      AND a.subject_id=${subjectId}
-      AND sc.student_id IN (${studentIds.map(asInt).join(',')});`);
-  const weightGroups = querySql(`SELECT * FROM os_grade_weight_groups WHERE school_year_id=${yearId};`);
-  const weightItems = querySql(`SELECT wi.* FROM os_grade_weight_items wi
-    JOIN os_grade_weight_groups wg ON wg.id = wi.group_id
-    WHERE wg.school_year_id=${yearId};`);
-  const group = matchingWeightGroup(weightGroups, grade, subjectId);
-  const studentAverages = new Map();
-  studentIds.forEach((studentId) => {
-    const rows = scoreRows.filter((row) => asInt(row.student_id) === asInt(studentId) && rowInPeriod(row, period));
-    studentAverages.set(asInt(studentId), calculateWeightedAverage(rows, group, weightItems).average);
-  });
-  return {
-    classAverage: average([...studentAverages.values()]),
-    studentAverages
-  };
+  return loadGradeAverages(querySql, { yearId, grade, subjectIds: [subjectId], studentIds, periods: [period] }).get(subjectId, period);
 }
 
 function reportCardsPage(url, selectedYear, user, options = {}) {
@@ -7022,11 +6952,8 @@ function reportCardsPage(url, selectedYear, user, options = {}) {
     JOIN os_subjects s ON s.id = gs.subject_id
     WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)}
     ORDER BY s.name;`) : [];
-  const weightGroups = querySql(`SELECT * FROM os_grade_weight_groups WHERE school_year_id=${yearId};`);
-  const weightItems = querySql(`SELECT wi.* FROM os_grade_weight_items wi
-    JOIN os_grade_weight_groups wg ON wg.id = wi.group_id
-    WHERE wg.school_year_id=${yearId};`);
-  const scoreRows = selectedStudent ? querySql(`SELECT a.subject_id, s.name AS subject_name, a.category, a.assignment_date, a.marking_period_id,
+  const { weightGroups, weightItems } = options.gradeSettings || loadGradeWeights(querySql, yearId);
+  const scoreRows = selectedStudent ? querySql(`SELECT sc.student_id, a.subject_id, s.name AS subject_name, a.category, a.assignment_date, a.marking_period_id,
       ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
     FROM os_scores sc
     JOIN os_assignments a ON a.id = sc.assignment_id
@@ -7039,25 +6966,11 @@ function reportCardsPage(url, selectedYear, user, options = {}) {
       AND student_id=${selectedStudent.id}
       AND kind='absence'
     ORDER BY absence_date;`) : [];
-  const subjectRows = subjects.map((subject) => {
-    const rows = scoreRows.filter((row) => row.subject_id === subject.id && rowInPeriod(row, selectedPeriod));
-    const group = matchingWeightGroup(weightGroups, selectedGrade, subject.id);
-    const result = calculateWeightedAverage(rows, group, weightItems);
-    return {
-      subject,
-      average: result.average,
-      breakdown: result.breakdown,
-      groupName: group?.name || 'Straight average'
-    };
-  });
-  const subjectPeriodRows = subjects.map((subject) => {
-    const group = matchingWeightGroup(weightGroups, selectedGrade, subject.id);
-    const periodScores = periods.map((period) => {
-      const rows = scoreRows.filter((row) => row.subject_id === subject.id && rowInPeriod(row, period));
-      return calculateWeightedAverage(rows, group, weightItems).average;
-    });
-    return { subject, periodScores };
-  });
+  const reportAverages = summarizeGradeRows(scoreRows, { grade: selectedGrade, subjectIds: subjects.map((subject) => subject.id), studentIds: selectedStudent ? [effectiveSelectedStudentId] : [], periods, weightGroups, weightItems });
+  const subjectPeriodRows = subjects.map((subject) => ({
+    subject,
+    periodScores: periods.map((period) => reportAverages.get(subject.id, period).studentAverages.get(effectiveSelectedStudentId) ?? null)
+  }));
   const gradeSelect = `<select name="grade" data-auto-submit required><option value="">Grade</option>${grades.map((grade) => `<option value="${esc(grade)}" ${grade === selectedGrade ? 'selected' : ''}>${esc(grade)}</option>`).join('')}</select>`;
   const studentSelect = `<select name="studentId" required data-auto-submit><option value="">Student</option>${students.map((student) => `<option value="${student.id}" ${asInt(student.id) === effectiveSelectedStudentId ? 'selected' : ''}>${esc(student.last_name)}, ${esc(student.first_name)}</option>`).join('')}</select>`;
   const periodSelect = `<select name="markingPeriodId" required data-auto-submit><option value="">Marking Period</option>${periods.map((period) => `<option value="${period.id}" ${asInt(period.id) === effectiveSelectedPeriodId ? 'selected' : ''}>${esc(period.name)}</option>`).join('')}</select>`;
