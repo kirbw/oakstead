@@ -57,6 +57,7 @@ const { createDb } = require('./server/db');
 const { SCHEMA_SQL } = require('./server/schema');
 const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
+const { numericValue, numericValues, average } = require('./server/averages');
 const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
@@ -4383,12 +4384,6 @@ function promoteGrade(grade) {
   return text;
 }
 
-function average(values) {
-  const numeric = values.map(Number).filter(Number.isFinite);
-  if (!numeric.length) return null;
-  return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
-}
-
 function formatPercent(value) {
   return value === null || value === undefined ? '&mdash;' : `${Number(value).toFixed(1)}%`;
 }
@@ -6675,7 +6670,7 @@ function miniSubjectChartSvg(item, periods) {
     const bounded = Math.max(minY, Math.min(maxY, Number(value)));
     return padT + chartH - ((bounded - minY) / (maxY - minY)) * chartH;
   };
-  const values = item.values.map((value) => Number.isFinite(Number(value)) ? Number(value) : null);
+  const values = item.values.map(numericValue);
   const points = values.map((value, index) => ({ value, index })).filter((point) => point.value !== null);
   const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${toX(point.index).toFixed(1)} ${toY(point.value).toFixed(1)}`).join(' ');
   const dots = points.map((point) => `<circle cx="${toX(point.index).toFixed(1)}" cy="${toY(point.value).toFixed(1)}" r="3.4" fill="${item.color}" stroke="#fff" stroke-width="1.5" />`).join('');
@@ -6751,7 +6746,7 @@ function gradeGraphReport(url, yearId, selectedYear, user) {
       </div>
       <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
         ${series.map((item) => {
-          const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
+          const finalAverage = average(item.values);
           return `<section class="mini-subject-chart" style="--subject-color:${item.color}">
             <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
             ${miniSubjectChartSvg(item, graphPeriods)}
@@ -6787,7 +6782,7 @@ function studentGradeGraphPanel(student, yearId, selectedYear) {
     </div>
     <div class="grade-graph-print-grid ${series.length === 1 ? 'single' : ''}">
       ${series.map((item) => {
-        const finalAverage = average(item.values.filter((value) => Number.isFinite(Number(value))));
+        const finalAverage = average(item.values);
         return `<section class="mini-subject-chart" style="--subject-color:${item.color}">
           <header><h3>${esc(item.name)}</h3><span>Final Average ${formatPercent(finalAverage)}</span></header>
           ${miniSubjectChartSvg(item, graphPeriods)}
@@ -6866,7 +6861,7 @@ function matchingWeightGroup(groups, grade, subjectId) {
 }
 
 function calculateWeightedAverage(scores, group, allItems) {
-  const percentages = scores.map((row) => Number(row.percent)).filter(Number.isFinite);
+  const percentages = numericValues(scores.map((row) => row.percent));
   if (!percentages.length) return { average: null, breakdown: [] };
   const straight = average(percentages);
   if (!group || group.calculation_mode === 'straight') return { average: Math.round(straight), breakdown: [] };
@@ -6875,7 +6870,7 @@ function calculateWeightedAverage(scores, group, allItems) {
   let usedWeight = 0;
   const breakdown = [];
   items.forEach((item) => {
-    const categoryScores = scores.filter((row) => normalizeCategory(row.category) === normalizeCategory(item.category)).map((row) => Number(row.percent)).filter(Number.isFinite);
+    const categoryScores = numericValues(scores.filter((row) => normalizeCategory(row.category) === normalizeCategory(item.category)).map((row) => row.percent));
     if (!categoryScores.length) return;
     const categoryAverage = average(categoryScores);
     const weight = Number(item.weight) || 0;
@@ -6981,7 +6976,7 @@ function periodAverageRows(yearId, grade, subjectId, studentIds, period) {
     studentAverages.set(asInt(studentId), calculateWeightedAverage(rows, group, weightItems).average);
   });
   return {
-    classAverage: average([...studentAverages.values()].filter((value) => value !== null && value !== undefined)),
+    classAverage: average([...studentAverages.values()]),
     studentAverages
   };
 }
@@ -7058,10 +7053,7 @@ function reportCardsPage(url, selectedYear, user, options = {}) {
   const conductSectionStarts = new Set([0, 5, 11, 19, 22]);
   const conductRows = Array.from({ length: 28 }, (_, index) => `<tr class="${conductSectionStarts.has(index) ? 'conduct-section-row' : ''}">${periods.map(() => '<td></td>').join('')}</tr>`).join('');
   const subjectTableRows = subjectPeriodRows.map((row) => {
-    const scores = row.periodScores
-      .filter((score) => score !== null && score !== undefined && score !== '')
-      .map((score) => Number(score))
-      .filter(Number.isFinite);
+    const scores = numericValues(row.periodScores);
     const avg = scores.length ? Math.round(average(scores)) : null;
     return `<tr>${row.periodScores.map((score) => `<td>${score === null || score === undefined ? '' : Math.round(Number(score))}</td>`).join('')}<td class="average-col">${avg === null ? '' : avg}</td></tr>`;
   }).join('');

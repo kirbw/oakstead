@@ -69,7 +69,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     backup success metadata now commits atomically after file creation/stat. npm test
     and all 13 tests on Node 22.13 pass, including controlled-clock/retry/overlap and
     injected metadata rollback. No screen or form behavior changed. PR: https://github.com/kirbw/oakstead/pull/30; merged 7daaba3c.
-- [ ] 6. Fix session expiration — codex/fix-session-expiration
+- [x] 6. Fix session expiration — codex/fix-session-expiration
   - Normalize existing ISO expiry using SQLite date functions; share validity
     predicate with cleanup; invalid timestamps expire. Keep 12 hours and cookies.
   - Acceptance: same-day/midnight/exact-boundary/future/invalid timestamps and cleanup
@@ -77,12 +77,16 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Implemented shared julianday/COALESCE validity predicate for auth and cleanup.
     npm test passes (15 tests); Node 22.13 boundary and HTTP tests pass. Browser
     expired-session redirect and fresh login verified; pr6-expired-session.png captured.
-    Existing ISO timestamps and 12-hour sessions retained. PR/merge: pending.
+    Existing ISO timestamps and 12-hour sessions retained. PR: https://github.com/kirbw/oakstead/pull/31; merged 7e028b19.
 - [ ] 7. Fix ungraded-period averages — codex/fix-ungraded-period-averages
   - Shared averaging excludes null/undefined/blank/non-finite before conversion;
     update both graphs and audit callers; preserve zero and rounding.
   - Acceptance: [90,null,null,null,null,null] = 90, [90,0] = 45, all missing = no
-    average; parent/staff/report results agree. PR/validation/merge: pending.
+    average; parent/staff/report results agree.
+  - Implemented shared missing-aware numeric conversion/average for calculations,
+    graph points and report cards. npm test passes (17 tests); Node 22.13 averaging
+    and real graph/report parity tests pass. Browser shows 90% with other periods
+    ungraded; pr7-ungraded-periods.png captured. PR/merge: pending.
 - [ ] 8. Enforce database relationships — codex/enforce-database-relationships
   - Enable foreign keys on every connection/reopen. Audit seed/init/mutations;
     replace unsafe REPLACE writes, transact related writes, honor cascades and
