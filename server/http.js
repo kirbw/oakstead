@@ -19,7 +19,10 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
   function parseCookies(req) {
     return String(req.headers.cookie || '').split(';').reduce((cookies, part) => {
       const [key, ...rest] = part.trim().split('=');
-      if (key) cookies[key] = decodeURIComponent(rest.join('='));
+      if (key) {
+        try { cookies[key] = decodeURIComponent(rest.join('=')); }
+        catch { /* Ignore this cookie; other cookies may still be valid. */ }
+      }
       return cookies;
     }, {});
   }
