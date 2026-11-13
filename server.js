@@ -4777,6 +4777,37 @@ function letterGradeScale(yearId, grade, subjectId) {
   return items.length ? items : DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
 }
 
+function assignmentAccessClause(user, yearId) {
+  return isTeacher(user) ? `AND (a.classroom_id IS NULL OR a.classroom_id IN
+    (SELECT id FROM os_classrooms WHERE school_year_id=${asInt(yearId)} AND teacher_id=${asInt(user.teacher_id)}))` : '';
+}
+
+function authorizedAssignments(user, yearId, grade, subjectId, assignmentIds) {
+  const ids = [...new Set(assignmentIds.map((id) => asInt(id)))];
+  if (!ids.length) return new Map();
+  const rows = querySql(`SELECT a.* FROM os_assignments a
+    WHERE a.id IN (${ids.join(',')}) AND a.school_year_id=${asInt(yearId)}
+      AND a.grade_level=${sqlValue(grade)} AND a.subject_id=${asInt(subjectId)}
+      ${assignmentAccessClause(user, yearId)};`);
+  if (!teacherAllowedForSelection(user, yearId, grade) || rows.length !== ids.length) {
+    throw Object.assign(new Error('Assignment is not accessible for this selection.'), { statusCode: 403 });
+  }
+  return new Map(rows.map((row) => [asInt(row.id), row]));
+}
+
+function requireScoreStudents(user, yearId, grade, studentIds) {
+  const ids = [...new Set(studentIds.map((id) => asInt(id)))];
+  if (!ids.length) return;
+  const rows = querySql(`SELECT st.id FROM os_students st
+    JOIN os_student_years sy ON sy.student_id=st.id
+    WHERE sy.school_year_id=${asInt(yearId)} AND sy.grade_level=${sqlValue(grade)}
+      AND sy.status='enrolled' AND st.id IN (${ids.join(',')})
+      ${studentAccessClause(user, yearId)};`);
+  if (rows.length !== ids.length) {
+    throw Object.assign(new Error('Student is not accessible for this selection.'), { statusCode: 403 });
+  }
+}
+
 function teacherAllowedForSelection(user, yearId, grade, classroomId = 0) {
   if (!user) return false;
   if (isAdmin(user) || isPrincipal(user)) return true;
@@ -6290,12 +6321,13 @@ function gradebookPage(req, url, user, selectedYear, csrfToken) {
     WHERE a.school_year_id=${yearId}
       AND a.grade_level=${sqlValue(selectedGrade)}
       AND a.subject_id=${selectedSubjectId}
+      ${assignmentAccessClause(user, yearId)}
       ${assignmentPeriodClause(selectedPeriod)}
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC;`) : [];
   const selectedAssignmentId = showNewAssignment ? 0 : (requestedAssignmentId || asInt(assignments[0]?.id));
   const selectedAssignment = selectedAssignmentId
-    ? (assignments.find((a) => a.id === selectedAssignmentId) || querySql(`SELECT id, title, category, assignment_date, max_score FROM os_assignments WHERE id=${selectedAssignmentId} AND school_year_id=${yearId} LIMIT 1;`)[0])
+    ? authorizedAssignments(user, yearId, selectedGrade, selectedSubjectId, [selectedAssignmentId]).get(selectedAssignmentId)
     : null;
   const existingScores = selectedAssignment ? Object.fromEntries(
     querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=${selectedAssignment.id};`).map((r) => [r.student_id, r.score])
@@ -6457,11 +6489,12 @@ function assignmentsPage(req, url, user, selectedYear, csrfToken) {
     WHERE a.school_year_id=${yearId}
       AND a.grade_level=${sqlValue(selectedGrade)}
       AND a.subject_id=${selectedSubjectId}
+      ${assignmentAccessClause(user, yearId)}
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC;`) : [];
 
   const selectedAssignment = selectedAssignmentId && !showAdd
-    ? (assignments.find((a) => a.id === selectedAssignmentId) || querySql(`SELECT id, title, category, assignment_date, max_score FROM os_assignments WHERE id=${selectedAssignmentId} AND school_year_id=${yearId} LIMIT 1;`)[0])
+    ? authorizedAssignments(user, yearId, selectedGrade, selectedSubjectId, [selectedAssignmentId]).get(selectedAssignmentId)
     : null;
 
   const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
@@ -8072,14 +8105,8 @@ async function handlePost(req, res, p, body, user, headers) {
     if (body.action === 'grid-score') {
       const assignmentId = asInt(body.assignmentId);
       const studentId = asInt(body.studentId);
-      if (!canModifyStudentAcademicRecord(user, studentId, schoolYearId)) return sendJson(res, 403, { ok: false, error: 'Forbidden' }, headers);
-      const assignment = querySql(`SELECT id, max_score FROM os_assignments
-        WHERE id=${assignmentId}
-          AND school_year_id=${schoolYearId}
-          AND grade_level=${sqlValue(gradeLevel)}
-          AND subject_id=${subjectId}
-        LIMIT 1;`)[0];
-      if (!assignment || !studentId) return sendJson(res, 400, { ok: false, error: 'Invalid score cell' }, headers);
+      const assignment = authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [assignmentId]).get(assignmentId);
+      requireScoreStudents(user, schoolYearId, gradeLevel, [studentId]);
       const rawValue = String(body.scoreValue ?? '').trim();
       let percent = null;
       if (!rawValue) {
@@ -8121,13 +8148,7 @@ async function handlePost(req, res, p, body, user, headers) {
     }
     if (body.action === 'update-assignment') {
       const assignmentId = asInt(body.assignmentId);
-      const assignment = querySql(`SELECT id FROM os_assignments
-        WHERE id=${assignmentId}
-          AND school_year_id=${schoolYearId}
-          AND grade_level=${sqlValue(gradeLevel)}
-          AND subject_id=${subjectId}
-        LIMIT 1;`)[0];
-      if (!assignment) return sendText(res, 404, 'Assignment not found');
+      authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [assignmentId]);
       if (body.deleteAssignment) {
         runSql(`DELETE FROM os_assignments WHERE id=${assignmentId};`);
         return redirect(res, gridRedirectTo, headers);
@@ -8152,13 +8173,9 @@ async function handlePost(req, res, p, body, user, headers) {
       const scoreEntries = gridScoreEntries(body);
       const assignmentIds = new Set(scoreEntries.map((entry) => asInt(entry.assignmentId)));
       const submittedStudentIds = scoreEntries.map((entry) => asInt(entry.studentId)).filter(Boolean);
-      const gridAllowedStudents = modifiableStudentIdSet(user, schoolYearId);
-      if (submittedStudentIds.some((studentId) => !setAllowsStudent(gridAllowedStudents, studentId))) return sendText(res, 403, 'Forbidden');
-      const allowedAssignments = assignmentIds.size ? new Map(querySql(`SELECT id, max_score FROM os_assignments
-        WHERE school_year_id=${schoolYearId}
-          AND grade_level=${sqlValue(gradeLevel)}
-          AND subject_id=${subjectId}
-          AND id IN (${[...assignmentIds].map(asInt).join(',')});`).map((row) => [asInt(row.id), asPoints(row.max_score)])) : new Map();
+      requireScoreStudents(user, schoolYearId, gradeLevel, submittedStudentIds);
+      const allowedAssignments = new Map([...authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [...assignmentIds])]
+        .map(([id, row]) => [id, asPoints(row.max_score)]));
       const statements = [];
       scoreEntries.forEach(({ key, assignmentId, studentId }) => {
         const maxScore = allowedAssignments.get(assignmentId);
@@ -8173,15 +8190,13 @@ async function handlePost(req, res, p, body, user, headers) {
     }
     const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
     const maxScore = existingAssignmentId
-      ? asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${existingAssignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score)
+      ? asPoints(authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [existingAssignmentId]).get(existingAssignmentId).max_score)
       : asPoints(body.maxScore);
     if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    const scoreEntries = scoreFieldEntries(body);
+    requireScoreStudents(user, schoolYearId, gradeLevel, scoreEntries.map((entry) => entry.studentId));
     const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
       VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
-    const scoreEntries = scoreFieldEntries(body);
-    const scoreStudentIds = scoreEntries.map((entry) => entry.studentId);
-    const allowedStudents = modifiableStudentIdSet(user, schoolYearId);
-    if (scoreStudentIds.some((studentId) => !setAllowsStudent(allowedStudents, studentId))) return sendText(res, 403, 'Forbidden');
     const statements = [];
     scoreEntries.forEach(({ key, studentId }) => {
       const score = scoreInputToPoints(body[key], scoreMode, maxScore);
@@ -8220,6 +8235,7 @@ async function handlePost(req, res, p, body, user, headers) {
 
     if (action === 'update') {
       const assignmentId = asInt(body.assignmentId);
+      authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [assignmentId]);
       const maxScore = asPoints(body.maxScore);
       runSql(`UPDATE os_assignments SET title=${sqlValue(cleanText(body.title, 140))}, category=${sqlValue(normalizeCategory(body.category))}, assignment_date=${sqlValue(cleanDate(body.assignmentDate))}, max_score=${maxScore} WHERE id=${assignmentId} AND school_year_id=${schoolYearId};`);
       return redirect(res, `${baseRedirect}&assignmentId=${assignmentId}`, headers);
@@ -8228,11 +8244,9 @@ async function handlePost(req, res, p, body, user, headers) {
     if (action === 'scores') {
       const assignmentId = asInt(body.assignmentId);
       const scoreMode = cleanScoreMode(body.scoreMode);
-      const maxScore = asPoints(querySql(`SELECT max_score FROM os_assignments WHERE id=${assignmentId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0]?.max_score);
+      const maxScore = asPoints(authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [assignmentId]).get(assignmentId).max_score);
       const scoreEntries = scoreFieldEntries(body);
-      const scoreStudentIds = scoreEntries.map((entry) => entry.studentId);
-      const allowedStudents = modifiableStudentIdSet(user, schoolYearId);
-      if (scoreStudentIds.some((studentId) => !setAllowsStudent(allowedStudents, studentId))) return sendText(res, 403, 'Forbidden');
+      requireScoreStudents(user, schoolYearId, gradeLevel, scoreEntries.map((entry) => entry.studentId));
       const statements = [];
       scoreEntries.forEach(({ key, studentId }) => {
         const score = scoreInputToPoints(body[key], scoreMode, maxScore);
