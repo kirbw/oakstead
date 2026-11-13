@@ -44,7 +44,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     browser save verified; pr3-period-settings.png captured. PR: https://github.com/kirbw/oakstead/pull/28; merged 5e3cf5d5.
   - Compatibility: no historical reassignment; reverting code cannot recover links
     already broken by older versions. Existing dangling links require explicit repair.
-- [ ] 4. Validate database restores — codex/validate-database-restores
+- [x] 4. Validate database restores — codex/validate-database-restores
   - Separate integrity/application-schema checks; reject empty/corrupt/unrelated or
     incomplete files. Allow supported additive-column migrations on a staged copy.
   - Smoke-test staged copy, create pre-restore backup after validation, perform closed
@@ -55,7 +55,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     migration, closed-file replacement, smoke verification and original-file recovery.
     npm test and Node 22.13 tests pass on Windows (10 tests), including injected
     migration/lock/replacement/reopen/verification failures and real WAL restores.
-    Browser create/restore verified; pr4-restore-verified.png captured. PR/merge: pending.
+    Browser create/restore verified; pr4-restore-verified.png captured. PR: https://github.com/kirbw/oakstead/pull/29; merged 0c085f4a.
   - Compatibility: require all current application tables/base columns; only existing
     additive-column migrations are supported. Uploaded sources remain unchanged.
     A recovery failure retains the original in the logged staging directory; stop
@@ -64,7 +64,11 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Startup plus five-minute due checks; read current frequency, prevent overlap,
     unref/clean timer, retry failures without advancing success timestamp.
   - Preserve daily/weekly/30-day semantics. Acceptance: controlled-clock coverage for
-    due/not-due/manual/settings changes/failure/overlap. PR/validation/merge: pending.
+    due/not-due/manual/settings changes/failure/overlap.
+  - Implemented five-minute unreferenced scheduler with exit cleanup and live settings;
+    backup success metadata now commits atomically after file creation/stat. npm test
+    and all 13 tests on Node 22.13 pass, including controlled-clock/retry/overlap and
+    injected metadata rollback. No screen or form behavior changed. PR/merge: pending.
 - [ ] 6. Fix session expiration — codex/fix-session-expiration
   - Normalize existing ISO expiry using SQLite date functions; share validity
     predicate with cleanup; invalid timestamps expire. Keep 12 hours and cookies.
