@@ -55,6 +55,7 @@ const {
 } = require('./server/input');
 const { createDb } = require('./server/db');
 const { SCHEMA_SQL } = require('./server/schema');
+const { backupDue, createBackupScheduler } = require('./server/backups');
 const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
@@ -3419,9 +3420,12 @@ function createDatabaseBackup(reason = 'manual') {
   } else {
     db.withDatabaseClosed(() => fs.copyFileSync(DB_FILE, target));
   }
-  setSetting('backup_last_at', new Date().toISOString());
-  setSetting('backup_last_file', fileName);
-  return { fileName, path: target, size: fs.statSync(target).size };
+  const size = fs.statSync(target).size;
+  db.transaction(() => {
+    setSetting('backup_last_file', fileName);
+    setSetting('backup_last_at', new Date().toISOString());
+  });
+  return { fileName, path: target, size };
 }
 
 function listDatabaseBackups() {
@@ -3954,24 +3958,8 @@ function backupFrequencyLabel(value) {
 
 function scheduledBackupDue(now = new Date()) {
   const frequency = backupFrequency(getSetting('backup_frequency', 'manual'));
-  if (frequency === 'manual') return false;
   const lastAt = getSetting('backup_last_at', '');
-  if (!lastAt) return true;
-  const last = new Date(lastAt);
-  if (Number.isNaN(last.getTime())) return true;
-  const ageMs = now - last;
-  const dayMs = 24 * 60 * 60 * 1000;
-  if (frequency === 'daily') return ageMs >= dayMs;
-  if (frequency === 'weekly') return ageMs >= dayMs * 7;
-  return ageMs >= dayMs * 30;
-}
-
-function runScheduledBackupIfDue() {
-  try {
-    if (fs.existsSync(DB_FILE) && scheduledBackupDue()) createDatabaseBackup('scheduled');
-  } catch (error) {
-    console.error('Scheduled backup failed:', error.message || error);
-  }
+  return backupDue(frequency, lastAt, now);
 }
 
 function defaultUpdateStatus() {
@@ -8058,7 +8046,13 @@ if (DEMO_MODE) {
   refreshDemoData('startup');
   setInterval(() => refreshDemoData('scheduled'), DEMO_REFRESH_HOURS * 60 * 60 * 1000).unref();
 }
-runScheduledBackupIfDue();
+const backupScheduler = createBackupScheduler({
+  isDue: () => fs.existsSync(DB_FILE) && scheduledBackupDue(),
+  createBackup: () => createDatabaseBackup('scheduled'),
+  onError: (error) => console.error('Scheduled backup failed:', error.message || error)
+});
+void backupScheduler.check();
+process.once('exit', backupScheduler.stop);
 
 function sendAssetFile(res, filePath, missingMessage) {
   if (!fs.existsSync(filePath)) return sendText(res, 404, missingMessage);

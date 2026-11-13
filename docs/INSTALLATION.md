@@ -138,3 +138,5 @@ failure restores the original automatically. If recovery itself fails, the serve
 log identifies the retained original database in a `.oakstead-restore-*` directory.
 Stop Oakstead and recover that original before restarting or retrying. Keep an
 external backup; reverting application code does not reverse a database restore.
+
+Automatic backup schedules are checked at startup and every five minutes while Oakstead is running. Failed scheduled backups are logged and retried on the next check. Daily, weekly, and monthly mean intervals of 1, 7, and 30 days since the last successful backup.
