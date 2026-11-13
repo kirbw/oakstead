@@ -1,5 +1,11 @@
 # Oakstead quality improvement checklist
 
+Completed November 13, 2026. All ten PRs were merged in order before the next
+branch was started. Final validation: syntax/refactor checks and all 27 tests passed
+on Windows with Node 22.13 and 26.13. All 14 Setup sections were browser-verified.
+Performance measurements and reproducible commands are in performance-results.md.
+No deployment or production-data changes were performed.
+
 Work in this order. Merge each PR before creating the next branch from updated main.
 Check off only after merge; record completion in the next PR, and use a final
 tracking commit after PR 10. PR creation and merge do not imply deployment.
@@ -123,7 +129,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
     pr9-grade-autosave.png captured. PR: https://github.com/kirbw/oakstead/pull/34; merged 0f088ec3.
   - Benchmark: graph 108 to 3 queries, 307116 to 51166 loaded rows, median 725.60 to
     86.00 ms; single period 8531 to 1398 rows, 23.26 to 1.42 ms. See performance-results.md.
-- [ ] 10. Optimize Setup rendering — codex/optimize-setup-rendering
+- [x] 10. Optimize Setup rendering — codex/optimize-setup-rendering
   - Shared lightweight count navigation and selected-section loaders/renderers;
     related dropdowns and backup/network/update reads only where needed.
   - Preserve all forms/URLs/selections/counts/roles/demo exclusions; no persistent cache
@@ -137,7 +143,7 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
   - Browser verified all 14 sections and an actual family save; screenshots
     pr10-setup-families.png, pr10-setup-network.png, pr10-setup-settings.png and
     pr10-family-save.png captured. No system update was installed during QA;
-    environment-managed network settings were verified as disabled. PR/merge: pending.
+    environment-managed network settings were verified as disabled. PR: https://github.com/kirbw/oakstead/pull/35; merged 8151fc56.
   - Synthetic benchmark: Network Settings 20 to 2 queries, 1613 to 1 loaded rows,
     median 2.46 to 0.03 ms; Families 1613 to 404 rows, 2.36 to 0.99 ms.
     See performance-results.md for fixture scope and limitations.
