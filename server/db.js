@@ -22,10 +22,7 @@ function createDb({ dbFile, files = fs }) {
     db.exec('PRAGMA journal_mode = WAL;');
     db.exec('PRAGMA busy_timeout = 5000;');
     db.exec('PRAGMA synchronous = NORMAL;');
-    // Parity with the old sqlite3-CLI backend: each CLI spawn ran with foreign
-    // keys OFF, so enforcement has never applied at runtime. Enabling it on a
-    // persistent connection would make previously-working deletes throw.
-    db.exec('PRAGMA foreign_keys = OFF;');
+    db.exec('PRAGMA foreign_keys = ON;');
     return db;
   }
 
@@ -68,15 +65,18 @@ function createDb({ dbFile, files = fs }) {
     return open().prepare('PRAGMA wal_checkpoint(TRUNCATE);').get() || {};
   }
 
+  let transactionId = 0;
   function transaction(fn) {
     const connection = open();
-    connection.exec('BEGIN;');
+    const savepoint = `oakstead_tx_${++transactionId}`;
+    connection.exec(`SAVEPOINT ${savepoint};`);
     try {
       const result = fn();
-      connection.exec('COMMIT;');
+      if (result && typeof result.then === 'function') throw new Error('Database transactions require synchronous callbacks.');
+      connection.exec(`RELEASE ${savepoint};`);
       return result;
     } catch (error) {
-      try { connection.exec('ROLLBACK;'); } catch {}
+      try { connection.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`); } catch {}
       throw error;
     }
   }

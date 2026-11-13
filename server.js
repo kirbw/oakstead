@@ -40,7 +40,6 @@ const {
   asInt,
   asPoints,
   asScore,
-  buildTransaction,
   cleanDate,
   cleanGrade,
   cleanScoreMode,
@@ -58,6 +57,7 @@ const { SCHEMA_SQL } = require('./server/schema');
 const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
 const { numericValue, numericValues, average } = require('./server/averages');
+const { collectDataIntegrityIssues } = require('./server/integrity');
 const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
@@ -3392,7 +3392,7 @@ const db = createDb({ dbFile: DB_FILE });
 const { runSql, querySql, insertReturningId } = db;
 
 function runSqlBatch(statements) {
-  db.runSqlTransaction(buildTransaction(statements));
+  if (statements.length) db.transaction(() => runSql(statements.filter(Boolean).join(';\n')));
 }
 
 function timestampForFile(date = new Date()) {
@@ -3459,6 +3459,7 @@ function refreshDemoData(reason = 'scheduled') {
   if (result.stderr) console.error(result.stderr.trim());
   if (result.status !== 0) console.error(`Demo data refresh failed during ${reason}.`);
   invalidateAppCaches();
+  if (result.status === 0) reportDataIntegrity();
 }
 
 function addDays(dateText, days) {
@@ -3537,37 +3538,40 @@ function clearLoginFailures(req, username) {
 }
 
 function ensureDb() {
-  runSql(SCHEMA_SQL);
-  db.applySchemaMigrations();
+  db.transaction(() => {
+    runSql(SCHEMA_SQL);
+    db.applySchemaMigrations();
 
-  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
-  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
-  runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
-  createDefaultRoleGroups();
-  migrateLessonHomeworkWeights();
+    runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
+    runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
+    runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
+    createDefaultRoleGroups();
+    migrateLessonHomeworkWeights();
 
-  const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
-  if (!yearCount) {
-    runSql(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
-      VALUES ('2025-2026', '2025-08-15', '2026-05-31', 1);`);
-  }
+    const yearCount = querySql('SELECT COUNT(*) AS count FROM os_school_years')[0]?.count || 0;
+    if (!yearCount) {
+      runSql(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
+        VALUES ('2025-2026', '2025-08-15', '2026-05-31', 1);`);
+    }
 
-  const userCount = querySql('SELECT COUNT(*) AS count FROM os_users')[0]?.count || 0;
-  if (!userCount) {
-    runSql(`INSERT INTO os_users (name, username, role, password_hash)
-      VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
-  }
+    const userCount = querySql('SELECT COUNT(*) AS count FROM os_users')[0]?.count || 0;
+    if (!userCount) {
+      runSql(`INSERT INTO os_users (name, username, role, password_hash)
+        VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
+    }
 
-  querySql('SELECT id, name, start_date, end_date FROM os_school_years;').forEach((year) => {
-    const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
-    if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
-    const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
-    if (!weightCount) createDefaultWeightGroups(asInt(year.id));
-    const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
-    if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
+    querySql('SELECT id, name, start_date, end_date FROM os_school_years;').forEach((year) => {
+      const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+      if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
+      const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+      if (!weightCount) createDefaultWeightGroups(asInt(year.id));
+      const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+      if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
+    });
+
+    runSql(`DELETE FROM os_sessions WHERE NOT (${SESSION_VALID_SQL});`);
   });
-
-  runSql(`DELETE FROM os_sessions WHERE NOT (${SESSION_VALID_SQL});`);
+  reportDataIntegrity();
 }
 
 function createMarkingPeriods(yearId, count, startDate = '', endDate = '') {
@@ -3586,11 +3590,19 @@ function markingPeriodStatements(yearId, count, startDate = '', endDate = '') {
   });
 }
 
-function reportDanglingMarkingPeriods() {
-  const rows = querySql(`SELECT a.id, a.school_year_id, a.marking_period_id FROM os_assignments a
-    LEFT JOIN os_marking_periods p ON p.id=a.marking_period_id AND p.school_year_id=a.school_year_id
-    WHERE a.marking_period_id IS NOT NULL AND p.id IS NULL;`);
-  for (const row of rows) console.warn(`Historical assignment-period link needs review: assignment ${row.id}, year ${row.school_year_id}, period ${row.marking_period_id}. No records were changed.`);
+function reportDataIntegrity() {
+  const issues = collectDataIntegrityIssues(querySql);
+  for (const issue of issues) console.warn(`Historical relationship needs review: ${issue.table}, row ${issue.rowId}, ${issue.relationship}. Record retained.`);
+}
+
+function dataIntegrityPage() {
+  const issues = collectDataIntegrityIssues(querySql);
+  return `<div class="workspace"><section class="panel">
+    <h2>Data Integrity</h2><p>${issues.length} broken relationships found. Existing records have been preserved. Review these links before making repairs; no records are changed by this report.</p>
+    ${issues.length ? `<div class="table-wrap"><table><tr><th>Table</th><th>Row ID</th><th>Related table</th><th>Relationship</th></tr>
+      ${issues.map((issue) => `<tr><td>${esc(issue.table)}</td><td>${esc(issue.rowId)}</td><td>${esc(issue.relatedTable)}</td><td>${esc(issue.relationship)}</td></tr>`).join('')}</table></div>` : emptyState('No broken relationships were found.')}
+    <a href="/setup?section=settings">Back to System Settings</a>
+  </section></div>`;
 }
 
 function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
@@ -3631,7 +3643,7 @@ function createDefaultRoleGroups() {
 }
 
 function migrateLessonHomeworkWeights() {
-  querySql('SELECT DISTINCT group_id FROM os_grade_weight_items;').forEach((row) => {
+  querySql('SELECT DISTINCT wi.group_id FROM os_grade_weight_items wi JOIN os_grade_weight_groups wg ON wg.id=wi.group_id;').forEach((row) => {
     const groupId = asInt(row.group_id);
     const legacyItems = querySql(`SELECT category, weight FROM os_grade_weight_items
       WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
@@ -5616,6 +5628,7 @@ function setupPage(selectedYear, csrfToken, url, user) {
       <span class="family-count">${esc(settings.schoolName)}</span>
     </div>
     <div class="family-detail-body">
+      ${isAdmin(user) ? '<p><a href="/system/diagnostics">Review data integrity</a></p>' : ''}
       <div class="asset-preview-grid">
         <div class="asset-preview">
           <img src="${settings.logoUrl}" alt="${esc(settings.schoolName)} logo" />
@@ -7357,9 +7370,11 @@ async function handlePost(req, res, p, body, user, headers) {
       recordLoginFailure(req, username);
       return redirect(res, '/login?error=1', headers);
     }
-    clearSession(req, headers);
     clearLoginFailures(req, username);
-    createSession(row.id, headers);
+    db.transaction(() => {
+      clearSession(req, headers);
+      createSession(row.id, headers);
+    });
     return redirect(res, '/', headers);
   }
 
@@ -7384,6 +7399,127 @@ async function handlePost(req, res, p, body, user, headers) {
     return redirect(res, safeInternalPath(req.headers.referer), headers);
   }
 
+  if (ATOMIC_RECORD_PATHS.has(p)) return atomicRecordResponse(req, res, p, body, user, headers);
+
+  if (p === '/system-settings') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    const schoolName = cleanText(body.schoolName, 120) || DEFAULT_SCHOOL_NAME;
+    setSetting('school_name', schoolName);
+    const logoPath = saveUploadedImage(body.logo, 'logo');
+    if (logoPath) setSetting('logo_path', logoPath);
+    const faviconPath = saveUploadedImage(body.favicon, 'favicon');
+    if (faviconPath) setSetting('favicon_path', faviconPath);
+    return redirect(res, '/setup?section=settings', headers);
+  }
+
+  if (p === '/network-settings') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    if (process.env.HOST || process.env.PORT) return sendText(res, 400, 'Network settings are managed by HOST or PORT environment variables.');
+    const bindHost = networkAccessHostForMode(body.accessMode) || '127.0.0.1';
+    const port = parsePort(body.port, DEFAULT_PORT);
+    db.transaction(() => {
+      setSetting('network_bind_host', bindHost);
+      setSetting('network_port', String(port));
+      setSetting('network_restart_required_at', new Date().toISOString());
+    });
+    return redirect(res, '/setup?section=network', headers);
+  }
+
+  if (p === '/backup-settings') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    setSetting('backup_frequency', backupFrequency(body.frequency));
+    return redirect(res, '/setup?section=backups', headers);
+  }
+
+  if (p === '/backup/create') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    createDatabaseBackup('manual');
+    return redirect(res, '/setup?section=backups', headers);
+  }
+
+  if (p === '/backup/restore') {
+    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    const uploaded = body.backupFile?.data?.length ? body.backupFile : null;
+    let source = '';
+    if (uploaded) {
+      if (!String(uploaded.filename || '').toLowerCase().endsWith('.db')) return sendText(res, 400, 'Upload a .db backup file.');
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+      source = path.join(BACKUP_DIR, `oakstead-backup-${timestampForFile()}-uploaded.db`);
+      fs.writeFileSync(source, uploaded.data);
+    } else {
+      source = backupPath(body.backupFileName);
+    }
+    if (!source || !fs.existsSync(source)) return sendText(res, 400, 'Backup file not found.');
+    try {
+      db.restoreDatabase(source, { beforeReplace: () => createDatabaseBackup('pre-restore') });
+    } finally {
+      // Both successful replacement and recovery may reopen a different file.
+      invalidateAppCaches();
+    }
+    setSetting('backup_last_restore_at', new Date().toISOString());
+    reportDataIntegrity();
+    return redirect(res, '/setup?section=backups', headers);
+  }
+
+  if (p === '/system-update/check') {
+    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
+    try {
+      return sendJson(res, 200, await checkLatestRelease(cleanText(body.channel, 20)), headers);
+    } catch (error) {
+      const status = writeUpdateStatus({ running: false, phase: 'check failed', percent: 0, message: error.message || 'Update check failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
+      return sendJson(res, 500, status, headers);
+    }
+  }
+
+  if (p === '/system-update') {
+    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
+    try {
+      const status = await startSystemUpdate(cleanText(body.channel, 20));
+      return sendJson(res, 202, status, headers);
+    } catch (error) {
+      const status = writeUpdateStatus({ running: false, phase: 'update failed', percent: 100, message: error.message || 'Update failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
+      return sendJson(res, 500, status, headers);
+    }
+  }
+
+
+  return sendText(res, 404, 'Not Found');
+}
+
+const ATOMIC_RECORD_PATHS = new Set([
+  '/families',
+  '/school-districts',
+  '/congregations',
+  '/students',
+  '/emergency-contacts',
+  '/enrollments',
+  '/absences',
+  '/teachers',
+  '/person-roles',
+  '/classrooms',
+  '/subjects',
+  '/grade-subjects',
+  '/school-years',
+  '/marking-periods',
+  '/promote-year',
+  '/users',
+  '/grade-weights',
+  '/letter-grades',
+  '/gradebook',
+  '/assignments'
+]);
+
+function atomicRecordResponse(req, res, p, body, user, headers) {
+  const pending = [];
+  const buffered = {
+    writeHead: (...args) => pending.push(() => res.writeHead(...args)),
+    end: (...args) => pending.push(() => res.end(...args))
+  };
+  db.transaction(() => handleRecordPost(req, buffered, p, body, user, headers));
+  for (const respond of pending) respond();
+}
+
+function handleRecordPost(req, res, p, body, user, headers) {
   if (p === '/families') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
     const familyId = asInt(body.familyId);
@@ -7475,8 +7611,9 @@ async function handlePost(req, res, p, body, user, headers) {
 
   if (p === '/enrollments') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    runSql(`INSERT OR REPLACE INTO os_student_years (student_id, school_year_id, grade_level, classroom_id, status)
-      VALUES (${asInt(body.studentId)}, ${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'}, 'enrolled');`);
+    runSql(`INSERT INTO os_student_years (student_id, school_year_id, grade_level, classroom_id, status)
+      VALUES (${asInt(body.studentId)}, ${asInt(body.schoolYearId)}, ${sqlValue(cleanGrade(body.gradeLevel))}, ${asInt(body.classroomId) || 'NULL'}, 'enrolled')
+      ON CONFLICT(student_id, school_year_id) DO UPDATE SET grade_level=excluded.grade_level, classroom_id=excluded.classroom_id, status=excluded.status;`);
     const family = querySql(`SELECT family_id FROM os_students WHERE id=${asInt(body.studentId)} LIMIT 1;`)[0];
     return redirect(res, `/setup?section=families&familyId=${asInt(family?.family_id)}`, headers);
   }
@@ -7523,6 +7660,8 @@ async function handlePost(req, res, p, body, user, headers) {
     const roleTypeId = asInt(body.roleTypeId);
     const roleType = querySql(`SELECT id, group_id FROM os_role_types WHERE id=${roleTypeId} LIMIT 1;`)[0];
     if (!personType || !personId || !roleType) return sendText(res, 400, 'Bad Request');
+    const personTable = personType === 'teacher' ? 'os_teachers' : 'os_families';
+    if (!querySql(`SELECT id FROM ${personTable} WHERE id=${personId};`).length) return sendText(res, 400, 'The linked person no longer exists.');
     runSql(`INSERT INTO os_person_roles (person_type, person_id, group_id, role_type_id, is_assistant, term_start, term_end)
       VALUES (${sqlValue(personType)}, ${personId}, ${asInt(roleType.group_id)}, ${roleTypeId}, ${body.isAssistant ? 1 : 0}, ${sqlValue(cleanDate(body.termStart))}, ${sqlValue(cleanDate(body.termEnd))});`);
     return redirect(res, redirectTo, headers);
@@ -7615,7 +7754,7 @@ async function handlePost(req, res, p, body, user, headers) {
       runSql(`DELETE FROM os_marking_periods WHERE school_year_id=${schoolYearId} AND period_number>${periodCount};`);
       runSql(markingPeriodStatements(schoolYearId, periodCount, startDate, endDate).join('\n'));
     });
-    reportDanglingMarkingPeriods();
+    reportDataIntegrity();
     return redirect(res, '/setup?section=years', headers);
   }
 
@@ -7738,88 +7877,11 @@ async function handlePost(req, res, p, body, user, headers) {
     return redirect(res, '/setup?section=letter-grades', headers);
   }
 
-  if (p === '/system-settings') {
-    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    const schoolName = cleanText(body.schoolName, 120) || DEFAULT_SCHOOL_NAME;
-    setSetting('school_name', schoolName);
-    const logoPath = saveUploadedImage(body.logo, 'logo');
-    if (logoPath) setSetting('logo_path', logoPath);
-    const faviconPath = saveUploadedImage(body.favicon, 'favicon');
-    if (faviconPath) setSetting('favicon_path', faviconPath);
-    return redirect(res, '/setup?section=settings', headers);
-  }
-
-  if (p === '/network-settings') {
-    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    if (process.env.HOST || process.env.PORT) return sendText(res, 400, 'Network settings are managed by HOST or PORT environment variables.');
-    const bindHost = networkAccessHostForMode(body.accessMode) || '127.0.0.1';
-    const port = parsePort(body.port, DEFAULT_PORT);
-    setSetting('network_bind_host', bindHost);
-    setSetting('network_port', String(port));
-    setSetting('network_restart_required_at', new Date().toISOString());
-    return redirect(res, '/setup?section=network', headers);
-  }
-
-  if (p === '/backup-settings') {
-    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    setSetting('backup_frequency', backupFrequency(body.frequency));
-    return redirect(res, '/setup?section=backups', headers);
-  }
-
-  if (p === '/backup/create') {
-    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    createDatabaseBackup('manual');
-    return redirect(res, '/setup?section=backups', headers);
-  }
-
-  if (p === '/backup/restore') {
-    if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
-    const uploaded = body.backupFile?.data?.length ? body.backupFile : null;
-    let source = '';
-    if (uploaded) {
-      if (!String(uploaded.filename || '').toLowerCase().endsWith('.db')) return sendText(res, 400, 'Upload a .db backup file.');
-      fs.mkdirSync(BACKUP_DIR, { recursive: true });
-      source = path.join(BACKUP_DIR, `oakstead-backup-${timestampForFile()}-uploaded.db`);
-      fs.writeFileSync(source, uploaded.data);
-    } else {
-      source = backupPath(body.backupFileName);
-    }
-    if (!source || !fs.existsSync(source)) return sendText(res, 400, 'Backup file not found.');
-    try {
-      db.restoreDatabase(source, { beforeReplace: () => createDatabaseBackup('pre-restore') });
-    } finally {
-      // Both successful replacement and recovery may reopen a different file.
-      invalidateAppCaches();
-    }
-    setSetting('backup_last_restore_at', new Date().toISOString());
-    return redirect(res, '/setup?section=backups', headers);
-  }
-
-  if (p === '/system-update/check') {
-    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
-    try {
-      return sendJson(res, 200, await checkLatestRelease(cleanText(body.channel, 20)), headers);
-    } catch (error) {
-      const status = writeUpdateStatus({ running: false, phase: 'check failed', percent: 0, message: error.message || 'Update check failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
-      return sendJson(res, 500, status, headers);
-    }
-  }
-
-  if (p === '/system-update') {
-    if (!canManageSchoolSetup(user)) return sendJson(res, 403, { error: 'Forbidden' });
-    try {
-      const status = await startSystemUpdate(cleanText(body.channel, 20));
-      return sendJson(res, 202, status, headers);
-    } catch (error) {
-      const status = writeUpdateStatus({ running: false, phase: 'update failed', percent: 100, message: error.message || 'Update failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
-      return sendJson(res, 500, status, headers);
-    }
-  }
-
   if (p === '/gradebook') {
     if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
     const schoolYearId = asInt(body.schoolYearId);
     const markingPeriodId = asInt(body.markingPeriodId);
+    if (markingPeriodId && !querySql(`SELECT id FROM os_marking_periods WHERE id=${markingPeriodId} AND school_year_id=${schoolYearId};`).length) return sendText(res, 400, 'The marking period does not belong to this school year.');
     const gradeLevel = cleanGrade(body.gradeLevel);
     const subjectId = asInt(body.subjectId);
     const existingAssignmentId = asInt(body.assignmentId);
@@ -8025,7 +8087,6 @@ if (process.argv[2] === '--network-status' || process.argv[2] === '--set-network
 ensureRuntimeDirs();
 ensureDb();
 ACTIVE_NETWORK = desiredNetworkConfig();
-reportDanglingMarkingPeriods();
 if (DEMO_MODE) {
   const loopbackHosts = new Set(['127.0.0.1', 'localhost']);
   if (!loopbackHosts.has(ACTIVE_NETWORK.host)) {
@@ -8120,6 +8181,11 @@ function handleGet(req, res, url, pathname, user, csrfToken, headers) {
   if (!context) return sendText(res, 500, 'No school year configured');
   const { selected, pageArgs } = context;
 
+  if (pathname === '/system/diagnostics') {
+    if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+    return sendAppPage(req, res, headers, pageArgs, 'Data Integrity', dataIntegrityPage());
+  }
+
   if (pathname === '/') {
     if (isParent(user)) return redirect(res, '/parent', headers);
     return sendAppPage(req, res, headers, pageArgs, 'Dashboard', dashboardPage(selected));
@@ -8193,6 +8259,9 @@ const server = http.createServer(async (req, res) => {
 
     return handleGet(req, res, url, pathname, user, csrfToken, headers);
   } catch (error) {
+    if (error.errcode === 787 || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || /FOREIGN KEY constraint failed/i.test(error.message)) {
+      return sendText(res, 409, 'This change conflicts with a linked record. Check the selected records; remove or update dependent records before deleting their parent.');
+    }
     if (error.message === 'Payload too large') return sendText(res, 413, 'Payload too large');
     if (error.statusCode) return sendText(res, error.statusCode, error.message || 'Bad Request');
     console.error(error);
