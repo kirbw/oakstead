@@ -19,6 +19,7 @@
     "test": "npm run check && npm run test:refactor && node --test tests/*.test.js",
     "start": "node server.js",
     "check": "node --check server.js",
+    "benchmark:grades": "node scripts/benchmark-grades.js",
     "test:refactor": "node scripts/refactor-regression-check.js",
     "prepare:windows": "node scripts/prepare-windows-package.js"
   }
