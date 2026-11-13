@@ -63,6 +63,14 @@ function compactNumber(value) {
   return parsed.toFixed(2).replace(/\.?0+$/, '');
 }
 
+function compactPercent(value, decimals = 0) {
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  const fixed = number.toFixed(decimals);
+  return fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed;
+}
+
 function formatFileSize(bytes) {
   const size = Number(bytes) || 0;
   if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
@@ -110,6 +118,7 @@ module.exports = {
   cleanScoreMode,
   cleanText,
   compactNumber,
+  compactPercent,
   esc,
   formatFileSize,
   normalizeCategory,

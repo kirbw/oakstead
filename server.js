@@ -45,6 +45,7 @@ const {
   cleanScoreMode,
   cleanText,
   compactNumber,
+  compactPercent,
   esc,
   formatFileSize,
   normalizeCategory,
@@ -4472,13 +4473,6 @@ function gradebookLetter(value, scale = DEFAULT_LETTER_GRADES.map(([letter, thre
     .filter((row) => row.letter && Number.isFinite(row.threshold))
     .sort((a, b) => b.threshold - a.threshold);
   return rows.find((row) => score >= row.threshold)?.letter || rows.at(-1)?.letter || '';
-}
-
-function compactPercent(value, decimals = 0) {
-  if (value === null || value === undefined || value === '') return '';
-  const number = Number(value);
-  if (!Number.isFinite(number)) return '';
-  return number.toFixed(decimals).replace(/\.?0+$/, '');
 }
 
 function gradebookDisplayScore(value, scale) {

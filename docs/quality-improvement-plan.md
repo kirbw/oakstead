@@ -157,7 +157,8 @@ changes; document compatibility/recovery especially for PRs 3, 4 and 8.
 
 ## Additional follow-up observed during verification
 
-- Existing compactPercent formatting strips significant trailing zeroes when decimals=0
-  (for example, 90 displays as 9 in gradebook summaries). Stored grades and graph values
-  are correct. This predates these changes and is outside the ten planned PRs; address
-  separately with formatting regression cases for 0, 10, 90, 100 and decimals.
+- Resolved in a focused follow-up: compactPercent now trims padding only when the
+  formatted value contains a decimal point, preserving integer zeroes (90 stays 90).
+  Regression tests cover 0, 10, 90, 100, rounding, decimals, missing grades, initial
+  gradebook rendering and autosave summaries. Browser verified 90 and 100 after save.
+  All 29 tests pass on Node 22.13 and 26.13; no stored grades or calculations changed.
