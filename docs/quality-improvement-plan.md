@@ -16,20 +16,23 @@ tracking commit after PR 10. PR creation and merge do not imply deployment.
 
 ## Sequence
 
-- [ ] 1. Handle malformed cookies without crashing — codex/fix-malformed-cookies
+- [x] 1. Handle malformed cookies without crashing — codex/fix-malformed-cookies
   - Ignore individual undecodable cookies and retain valid neighbours. Put request
     initialization inside the error boundary. Add real-server temporary-data harness.
   - Acceptance: malformed escapes/session cookies cannot terminate the server;
     subsequent requests, login, and valid/invalid CSRF checks behave correctly.
   - Implemented: tolerant decoding, protected initialization, reusable child-process
-    integration harness, and aggregate npm test command. PR: pending.
-  - Validation: npm test passed on Node 26.13; integration and refactor checks passed on Node 22.13. Browser sign-in/dashboard verified; screenshot retained as pr1-login-verified.png. Merge: pending.
+    integration harness, and aggregate npm test command. PR: https://github.com/kirbw/oakstead/pull/26.
+  - Validation: npm test passed on Node 26.13; integration and refactor checks passed on Node 22.13. Browser sign-in/dashboard verified; screenshot retained as pr1-login-verified.png. Merged: 9e32c626.
 - [ ] 2. Enforce assignment access consistently — codex/fix-assignment-authorization
   - Shared actual-assignment authorization for reads, edits, deletion and every
     individual/bulk score path; validate all targets before writes. Remove permissive
     fallback reads. Preserve grade-based teacher access, not creator ownership.
   - Acceptance: cross-grade/year and mixed unauthorized requests cannot read/change
-    records; authorized roles retain access. PR/validation/merge: pending.
+    records; authorized roles retain access.
+  - Implemented shared assignment/roster checks and filtered lists/fallback reads.
+    Validation: npm test and Node 22.13 tests pass; browser allowed/denied views verified;
+    screenshot pr2-authorized-assignment.png. PR/merge: pending.
 - [ ] 3. Preserve marking-period links — codex/preserve-marking-period-links
   - Update existing IDs by year/period number; insert additions, reject removal of
     referenced periods, remove unused surplus periods, transact related updates.
