@@ -56,6 +56,7 @@ const {
 const { createDb } = require('./server/db');
 const { SCHEMA_SQL } = require('./server/schema');
 const { backupDue, createBackupScheduler } = require('./server/backups');
+const { SESSION_VALID_SQL } = require('./server/sessions');
 const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/http');
 const {
   gradebookRedirectUrl,
@@ -3565,7 +3566,7 @@ function ensureDb() {
     if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
   });
 
-  runSql("DELETE FROM os_sessions WHERE expires_at <= datetime('now');");
+  runSql(`DELETE FROM os_sessions WHERE NOT (${SESSION_VALID_SQL});`);
 }
 
 function createMarkingPeriods(yearId, count, startDate = '', endDate = '') {
@@ -3662,7 +3663,7 @@ function currentUser(req) {
   const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id
     FROM os_sessions s
     JOIN os_users u ON u.id = s.user_id
-    WHERE s.session_token=${sqlValue(token)} AND s.expires_at > datetime('now')
+    WHERE s.session_token=${sqlValue(token)} AND (${SESSION_VALID_SQL})
     LIMIT 1;`);
   return rows[0] || null;
 }
