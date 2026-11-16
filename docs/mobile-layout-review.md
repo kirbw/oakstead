@@ -44,7 +44,8 @@ Additional checks:
   entry of 90 and 91 saved successfully, Tab moved to the next student, and input
   bounding boxes were 44 x 44px. The grid scrolls horizontally within its panel.
 - While the gradebook was scrolled, a hit test over the mobile navigation reached
-  the navigation rather than the assignment heading overlay. Rechecked at 430px.
+  the navigation rather than the assignment heading overlay. Gradebook sizing was
+  also rechecked at 430px.
 - Populated Hannah Brubaker / Period 1 report card: the 338px preview container
   scrolls internally; page content and scroll widths both measured 360px at a
   375px viewport (Windows reserves 15px for the vertical scrollbar).
@@ -83,4 +84,4 @@ demo startup refreshes the sample data.
 - [Report selection at 375px](screenshots/mobile-review/report-card-375x667.jpg)
 - [Setup at 430px](screenshots/mobile-review/setup-430x932.jpg)
 
-PR: Pending.
+PR: https://github.com/kirbw/oakstead/pull/51 (open for review).
