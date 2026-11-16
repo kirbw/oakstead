@@ -79,7 +79,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/39. Merge commit: f9685995d2c21b1cf9e391539f6013973f7a5ff0 (2026-11-16).
 
 - [ ] **3. Make score clearing consistent**
-  - Branch: `codex/consistent-score-clearing`. Status: validated, awaiting PR.
+  - Branch: `codex/consistent-score-clearing`. Status: submitted, awaiting merge.
   - Plan: shared parser distinguishes omitted (unchanged), blank (delete), invalid
     (reject), and valid score. Apply across individual/conventional/bulk paths.
     Validate every target before writes; no partial submissions. Ungraded letter
@@ -97,7 +97,7 @@ production rollout. Leave unrelated local files untouched.
     unique test window. Manual: save 90, clear, Tab away, reload; confirm no F and
     ungraded averages, then repeat with the conventional assignment form.
   - Compatibility: same bounds/conversions/rounding; no schema changes or repairs.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/40. Merge commit: Pending.
 
 - [ ] **4. Preserve Unicode in multipart forms**
   - Branch: `codex/fix-multipart-unicode`. Status: planned.
