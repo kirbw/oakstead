@@ -1,6 +1,9 @@
 # Oakstead improvement plan: twelve sequential PRs
 
-Approved implementation plan. Preserve the completed first-round checklist.
+Completed 2026-11-16: all twelve implementation PRs merged in order (#38-#49).
+Completed implementation branches deleted locally and remotely. Production rollout
+and historical repairs remain separate; no production data was changed.
+The first-round checklist is preserved.
 Implement the six fixes first, followed by the first six Nexus-inspired patterns.
 Merge each PR before starting the next branch from updated main.
 
@@ -290,8 +293,8 @@ production rollout. Leave unrelated local files untouched.
     individual migration statements. Closed DB never reopened by health.
   - PR: https://github.com/kirbw/oakstead/pull/48. Merge commit: 1950122360fcb684d1775d84f1d8cc83eb1ba805 (2026-11-16).
 
-- [ ] **12. Standardize visual controls and UI states**
-  - Branch: `codex/consistent-ui-states`. Status: submitted, awaiting merge.
+- [x] **12. Standardize visual controls and UI states**
+  - Branch: `codex/consistent-ui-states`. Status: merged.
   - Plan: document/consolidate semantic colors, spacing/type/focus/controls while
     preserving green identity/layouts. Shared fields/buttons/notices/empty/loading/
     save/error patterns distinguish failure from empty and offer safe retry. Keyboard
@@ -328,4 +331,16 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: no schema/dependency, route, grading or authorization changes.
     Theme preferences retain their existing storage; no browser grade persistence.
     Screenshots/edits use disposable fixture data; production untouched.
-  - PR: https://github.com/kirbw/oakstead/pull/49. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/49. Merge commit: 022c214fbdc30290db0c34bb34b11f37f32d56e0 (2026-11-16).
+
+## Final completion record
+
+This documentation-only PR records the confirmed merge of item 12. All twelve
+entries are checked only after merge, and each records its implementation PR,
+validation, compatibility notes and merge commit. The final implementation gate
+passed 74 tests on Node 26.13.1 and Node 22.13 on Windows, including existing syntax
+and refactor checks. Representative browser screenshots are linked above.
+Reduced-motion OS preference testing remains a documented manual check because
+the browser tooling cannot emulate that preference. No deployment was performed.
+
+Final tracking PR: Pending.
