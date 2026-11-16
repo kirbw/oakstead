@@ -343,4 +343,4 @@ and refactor checks. Representative browser screenshots are linked above.
 Reduced-motion OS preference testing remains a documented manual check because
 the browser tooling cannot emulate that preference. No deployment was performed.
 
-Final tracking PR: Pending.
+Final tracking PR: https://github.com/kirbw/oakstead/pull/50.
