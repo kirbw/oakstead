@@ -59,8 +59,8 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility/recovery: no schema or permission changes. Sudden process/tab
     termination cannot guarantee completion; unload warning is best effort.
 
-- [ ] **2. Restrict the teacher dashboard consistently**
-  - Branch: `codex/scope-teacher-dashboard`. Status: submitted, awaiting merge.
+- [x] **2. Restrict the teacher dashboard consistently**
+  - Branch: `codex/scope-teacher-dashboard`. Status: merged.
   - Plan: pass authenticated user into dashboard loading. Scope counts, recent
     assignments, charts, and averages through existing grade/classroom access rules.
     Admin/principal remain schoolwide; parent redirect unchanged; no creator rule.
@@ -76,17 +76,28 @@ production rollout. Leave unrelated local files untouched.
   - Screenshots: capture attempted; Edge CDP timed out again. Manual check: compare
     teacher and admin Dashboard, change school year, confirm scoped counts/entries.
   - Compatibility: no schema change; existing grade/classroom rules reused.
-  - PR: https://github.com/kirbw/oakstead/pull/39. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/39. Merge commit: f9685995d2c21b1cf9e391539f6013973f7a5ff0 (2026-11-16).
 
 - [ ] **3. Make score clearing consistent**
-  - Branch: `codex/consistent-score-clearing`. Status: planned.
+  - Branch: `codex/consistent-score-clearing`. Status: submitted, awaiting merge.
   - Plan: shared parser distinguishes omitted (unchanged), blank (delete), invalid
     (reject), and valid score. Apply across individual/conventional/bulk paths.
     Validate every target before writes; no partial submissions. Ungraded letter
     is empty, not F. Preserve zero, conversions, bounds, rounding, and report rules.
   - Acceptance: set/replace/clear/omit behave consistently; invalid mixed submissions
     change nothing; cleared cells, averages and reports display ungraded values.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: shared parser and prepared change lists for every score route;
+    deletes for explicit blanks, skipped omissions, invalid submissions rejected
+    before inserts/writes; numeric missing-value handling fixes cleared letters.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (39 tests).
+    Regression coverage includes all entry paths, conversion/bounds, zero, omitted
+    fields, invalid mixed writes and no accidental new assignment. Edge verified
+    saving 90 then clearing, Saved status, empty letter and ungraded averages.
+  - Screenshots: Edge CDP capture timed out; native fallback could not identify a
+    unique test window. Manual: save 90, clear, Tab away, reload; confirm no F and
+    ungraded averages, then repeat with the conventional assignment form.
+  - Compatibility: same bounds/conversions/rounding; no schema changes or repairs.
+  - PR: https://github.com/kirbw/oakstead/pull/40. Merge commit: Pending.
 
 - [ ] **4. Preserve Unicode in multipart forms**
   - Branch: `codex/fix-multipart-unicode`. Status: planned.
