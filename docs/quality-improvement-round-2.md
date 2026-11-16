@@ -263,7 +263,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/47. Merge commit: 20f2403d26f962deffd6ad9b5381b4ea0aadc6c0 (2026-11-16).
 
 - [ ] **11. Add operational health and query visibility**
-  - Branch: `codex/operational-health`. Status: validated, awaiting PR.
+  - Branch: `codex/operational-health`. Status: submitted, awaiting merge.
   - Plan: structured request ID/normalized route/status/duration logs; DB counts and
     timings, operation-label warnings over 100ms; never raw SQL parameters or records.
     Bounded process-local aggregates. Admin view: uptime/version/readiness, request/
@@ -288,7 +288,7 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: no schema/dependency changes; new public readiness/admin-only
     diagnostics routes. Metrics process-local; counts represent calls/batches, not
     individual migration statements. Closed DB never reopened by health.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/48. Merge commit: Pending.
 
 - [ ] **12. Standardize visual controls and UI states**
   - Branch: `codex/consistent-ui-states`. Status: planned.
