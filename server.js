@@ -58,7 +58,7 @@ const operations = createOperationalMonitor();
 const ui = require('./server/ui');
 const { createLifecycle, stopHttpServer, installShutdownSignals, restartAfterDrain } = require('./server/lifecycle');
 let application;
-const { addDays, daysBetween, schoolDateRange } = require('./server/dates');
+const { addDays, daysBetween, schoolDateRange, recentSchoolDays } = require('./server/dates');
 const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
 const { numericValue, numericValues, average } = require('./server/averages');
@@ -1446,23 +1446,6 @@ function weeklyAverageChart(weekData, schoolDays = recentSchoolDays(7)) {
       ${emptyMsg}
     </svg>`
   };
-}
-
-function recentSchoolDays(count) {
-  const date = new Date();
-  date.setUTCHours(0, 0, 0, 0);
-  const days = [];
-  while (days.length < count) {
-    const weekday = date.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) {
-      days.push({
-        key: date.toISOString().slice(0, 10),
-        label: date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
-      });
-    }
-    date.setUTCDate(date.getUTCDate() - 1);
-  }
-  return days.reverse();
 }
 
 function dashboardPage(...args) { return administrationViews.dashboardPage(...args); }

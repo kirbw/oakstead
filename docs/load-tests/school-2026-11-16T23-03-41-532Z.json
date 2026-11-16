@@ -1,0 +1,551 @@
+{
+  "date": "2026-11-16T23:03:41.532Z",
+  "runtime": "v26.13.1",
+  "platform": "win32",
+  "hardware": {
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor            ",
+    "logicalProcessors": 32,
+    "memoryGiB": 61.612022399902344
+  },
+  "stages": [
+    {
+      "concurrency": 1,
+      "targetSeconds": 5,
+      "elapsedMs": 5007.5473999999995,
+      "operationsPerSecond": 258.6096339297757,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 1,
+      "timings": {
+        "login": {
+          "count": 1,
+          "p50Ms": 64.09360000000004,
+          "p95Ms": 64.09360000000004,
+          "maxMs": 64.09360000000004
+        },
+        "dashboard": {
+          "count": 415,
+          "p50Ms": 5.354899999999816,
+          "p95Ms": 7.238000000000284,
+          "maxMs": 29.264599999999973
+        },
+        "gradebook": {
+          "count": 415,
+          "p50Ms": 4.26260000000002,
+          "p95Ms": 5.590699999999742,
+          "maxMs": 14.372600000000148
+        },
+        "save": {
+          "count": 415,
+          "p50Ms": 1.8049000000000888,
+          "p95Ms": 2.694600000000264,
+          "maxMs": 37.543800000000374
+        },
+        "health": {
+          "count": 49,
+          "p50Ms": 0.7157999999999447,
+          "p95Ms": 6.434400000000096,
+          "maxMs": 20.535699999999906
+        }
+      }
+    },
+    {
+      "concurrency": 50,
+      "targetSeconds": 5,
+      "elapsedMs": 5259.5126,
+      "operationsPerSecond": 277.97252543895416,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 50,
+      "timings": {
+        "login": {
+          "count": 50,
+          "p50Ms": 564.3312000000005,
+          "p95Ms": 1625.4107999999997,
+          "maxMs": 1625.7757999999994
+        },
+        "dashboard": {
+          "count": 462,
+          "p50Ms": 175.08349999999973,
+          "p95Ms": 213.47879999999896,
+          "maxMs": 233.25840000000062
+        },
+        "gradebook": {
+          "count": 462,
+          "p50Ms": 165.10559999999896,
+          "p95Ms": 197.3212999999996,
+          "maxMs": 219.01100000000042
+        },
+        "save": {
+          "count": 462,
+          "p50Ms": 178.2982000000011,
+          "p95Ms": 215.3714999999993,
+          "maxMs": 230.34940000000097
+        },
+        "health": {
+          "count": 26,
+          "p50Ms": 171.3148000000001,
+          "p95Ms": 205.52390000000014,
+          "maxMs": 215.04339999999866
+        }
+      }
+    }
+  ],
+  "fixture": {
+    "teacherAccounts": 50,
+    "teacherRecords": 50,
+    "classrooms": 50,
+    "students": 500,
+    "subjects": 5,
+    "periods": 6,
+    "assignments": 30000,
+    "scores": 300000
+  },
+  "workload": {
+    "levels": [
+      1,
+      50
+    ],
+    "reauthEvery": 0
+  },
+  "integrity": "ok",
+  "foreignKeyViolations": 0,
+  "finalHealth": {
+    "status": "ready"
+  },
+  "profile": {
+    "event": "load.profile",
+    "queries": [
+      {
+        "sql": "SELECT a.title, a.category, a.grade_level, s.name AS subject_name, COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, ?)) * ? END), ?) AS avg_score FROM os_assignments a JOIN os_subjects s ON s.id = a.subject_id LEFT JOIN os_scores sc ON sc.assignment_id = a.id AND sc.student_id IN (SELECT st.id FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id WHERE sy.school_year_id=? AND sy.status=? AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?)) WHERE a.school_year_id=? AND a.grade_level IN (SELECT cg.grade_level FROM os_classroom_grades cg JOIN os_classrooms c ON c.id=cg.classroom_id WHERE c.school_year_id=? AND c.teacher_id=?) AND (a.classroom_id IS NULL OR a.classroom_id IN (SELECT id FROM os_classrooms WHERE school_year_id=? AND teacher_id=?)) GROUP BY a.id ORDER BY a.assignment_date DESC, a.id DESC LIMIT ?;",
+        "count": 827,
+        "totalMs": 2264.4205000000084,
+        "rows": 6616,
+        "plan": [
+          "SEARCH a USING INDEX idx_os_assignments_year_grade_subject (school_year_id=? AND grade_level=?)",
+          "LIST SUBQUERY 3",
+          "SCAN cg",
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+          "LIST SUBQUERY 4",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)",
+          "SEARCH sc USING INDEX sqlite_autoindex_os_scores_1 (assignment_id=? AND student_id=?) LEFT-JOIN",
+          "LIST SUBQUERY 2",
+          "SEARCH sy USING INDEX idx_os_student_years_year_grade (school_year_id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)",
+          "USE TEMP B-TREE FOR GROUP BY",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      },
+      {
+        "sql": "SELECT DATE(a.assignment_date) AS day, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, ?)) * ? END), ?) AS avg_score FROM os_assignments a JOIN os_scores sc ON sc.assignment_id = a.id AND sc.student_id IN (SELECT st.id FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id WHERE sy.school_year_id=? AND sy.status=? AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?)) WHERE a.school_year_id=? AND a.grade_level IN (SELECT cg.grade_level FROM os_classroom_grades cg JOIN os_classrooms c ON c.id=cg.classroom_id WHERE c.school_year_id=? AND c.teacher_id=?) AND (a.classroom_id IS NULL OR a.classroom_id IN (SELECT id FROM os_classrooms WHERE school_year_id=? AND teacher_id=?)) AND DATE(a.assignment_date) IN (?, ?, ?, ?, ?, ?, ?) GROUP BY DATE(a.assignment_date) ORDER BY day ASC;",
+        "count": 827,
+        "totalMs": 662.5832000000163,
+        "rows": 827,
+        "plan": [
+          "SEARCH a USING INDEX idx_os_assignments_year_grade_subject (school_year_id=? AND grade_level=?)",
+          "LIST SUBQUERY 3",
+          "SCAN cg",
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+          "LIST SUBQUERY 4",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH sc USING INDEX sqlite_autoindex_os_scores_1 (assignment_id=? AND student_id=?)",
+          "LIST SUBQUERY 2",
+          "SEARCH sy USING INDEX idx_os_student_years_year_grade (school_year_id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)",
+          "USE TEMP B-TREE FOR GROUP BY"
+        ]
+      },
+      {
+        "sql": "SELECT sc.student_id, a.subject_id, a.category, a.assignment_date, a.marking_period_id, ROUND((sc.score / NULLIF(a.max_score, ?)) * ?, ?) AS percent FROM os_assignments a JOIN os_scores sc ON sc.assignment_id=a.id WHERE a.school_year_id=? AND a.grade_level=? AND a.subject_id IN (?) AND sc.student_id IN (?,?,?,?,?,?,?,?,?,?) AND (a.marking_period_id=? OR (a.marking_period_id IS NULL AND a.assignment_date >= ? AND a.assignment_date <= ?));",
+        "count": 1605,
+        "totalMs": 572.138499999992,
+        "rows": 321000,
+        "plan": [
+          "SEARCH a USING INDEX idx_os_assignments_year_grade_subject (school_year_id=? AND grade_level=? AND subject_id=?)",
+          "SEARCH sc USING INDEX sqlite_autoindex_os_scores_1 (assignment_id=? AND student_id=?)"
+        ]
+      },
+      {
+        "sql": "SELECT COUNT(*) AS c FROM os_assignments a WHERE a.school_year_id=? AND a.grade_level IN (SELECT cg.grade_level FROM os_classroom_grades cg JOIN os_classrooms c ON c.id=cg.classroom_id WHERE c.school_year_id=? AND c.teacher_id=?) AND (a.classroom_id IS NULL OR a.classroom_id IN (SELECT id FROM os_classrooms WHERE school_year_id=? AND teacher_id=?));",
+        "count": 827,
+        "totalMs": 317.80500000000427,
+        "rows": 827,
+        "plan": [
+          "SEARCH a USING INDEX idx_os_assignments_year_grade_subject (school_year_id=? AND grade_level=?)",
+          "LIST SUBQUERY 1",
+          "SCAN cg",
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+          "LIST SUBQUERY 2",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER"
+        ]
+      },
+      {
+        "sql": "SELECT a.id, a.title, a.category, a.assignment_date, a.max_score, COUNT(sc.id) AS score_count, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, ?)) * ? END), ?) AS avg_score FROM os_assignments a LEFT JOIN os_scores sc ON sc.assignment_id = a.id WHERE a.school_year_id=? AND a.grade_level=? AND a.subject_id=? AND a.grade_level IN (SELECT cg.grade_level FROM os_classroom_grades cg JOIN os_classrooms c ON c.id=cg.classroom_id WHERE c.school_year_id=? AND c.teacher_id=?) AND (a.classroom_id IS NULL OR a.classroom_id IN (SELECT id FROM os_classrooms WHERE school_year_id=? AND teacher_id=?)) AND (a.marking_period_id=? OR (a.marking_period_id IS NULL AND a.assignment_date >= ? AND a.assignment_date <= ?)) GROUP BY a.id ORDER BY a.assignment_date DESC, a.id DESC;",
+        "count": 808,
+        "totalMs": 208.46439999998552,
+        "rows": 16160,
+        "plan": [
+          "SEARCH a USING INDEX idx_os_assignments_year_grade_subject (school_year_id=? AND grade_level=? AND subject_id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN cg",
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+          "CREATE BLOOM FILTER",
+          "LIST SUBQUERY 2",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH sc USING INDEX sqlite_autoindex_os_scores_1 (assignment_id=?) LEFT-JOIN",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      },
+      {
+        "sql": "SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id FROM os_sessions s JOIN os_users u ON u.id = s.user_id WHERE s.session_token=? AND (COALESCE(julianday(expires_at) > julianday(?), ?)) LIMIT ?;",
+        "count": 2432,
+        "totalMs": 184.4281000000101,
+        "rows": 2432,
+        "plan": [
+          "SEARCH s USING INDEX sqlite_autoindex_os_sessions_1 (session_token=?)",
+          "SEARCH u USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT sc.assignment_id, sc.student_id, sc.score, ROUND((sc.score / NULLIF(a.max_score, ?)) * ?, ?) AS percent FROM os_scores sc JOIN os_assignments a ON a.id = sc.assignment_id WHERE sc.assignment_id IN (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) AND sc.student_id IN (?,?,?,?,?,?,?,?,?,?);",
+        "count": 808,
+        "totalMs": 147.0392999999916,
+        "rows": 161600,
+        "plan": [
+          "SEARCH sc USING INDEX sqlite_autoindex_os_scores_1 (assignment_id=? AND student_id=?)",
+          "SEARCH a USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT a.* FROM os_assignments a WHERE a.id IN (?) AND a.school_year_id=? AND a.grade_level=? AND a.subject_id=? AND a.grade_level IN (SELECT cg.grade_level FROM os_classroom_grades cg JOIN os_classrooms c ON c.id=cg.classroom_id WHERE c.school_year_id=? AND c.teacher_id=?) AND (a.classroom_id IS NULL OR a.classroom_id IN (SELECT id FROM os_classrooms WHERE school_year_id=? AND teacher_id=?));",
+        "count": 1605,
+        "totalMs": 131.05039999996882,
+        "rows": 1605,
+        "plan": [
+          "SEARCH a USING INTEGER PRIMARY KEY (rowid=?)",
+          "LIST SUBQUERY 1",
+          "SCAN cg",
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
+          "CREATE BLOOM FILTER",
+          "LIST SUBQUERY 2",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER"
+        ]
+      },
+      {
+        "sql": "SELECT COUNT(DISTINCT st.family_id) AS c FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id WHERE sy.school_year_id=? AND sy.status=? AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?);",
+        "count": 827,
+        "totalMs": 93.11579999999844,
+        "rows": 827,
+        "plan": [
+          "USE TEMP B-TREE FOR count(DISTINCT)",
+          "SEARCH sy USING INDEX idx_os_student_years_year_grade (school_year_id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT grade_level FROM os_student_years WHERE school_year_id=?;",
+        "count": 808,
+        "totalMs": 89.18799999998078,
+        "rows": 404000,
+        "plan": [
+          "SEARCH os_student_years USING COVERING INDEX idx_os_student_years_year_grade (school_year_id=?)"
+        ]
+      },
+      {
+        "sql": "SELECT c.id FROM os_classrooms c JOIN os_classroom_grades cg ON cg.classroom_id = c.id WHERE c.school_year_id=? AND c.teacher_id=? AND cg.grade_level=? LIMIT ?;",
+        "count": 3210,
+        "totalMs": 70.46709999997461,
+        "rows": 3210,
+        "plan": [
+          "SCAN cg",
+          "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT COUNT(*) AS c FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id WHERE sy.school_year_id=? AND sy.status=? AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?);",
+        "count": 827,
+        "totalMs": 62.01619999999889,
+        "rows": 827,
+        "plan": [
+          "SEARCH sy USING INDEX idx_os_student_years_year_grade (school_year_id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT st.id, st.first_name, st.last_name FROM os_student_years sy JOIN os_students st ON st.id = sy.student_id WHERE sy.school_year_id=? AND sy.grade_level=? AND sy.status=? AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?) ORDER BY st.last_name, st.first_name;",
+        "count": 808,
+        "totalMs": 58.77790000000971,
+        "rows": 8080,
+        "plan": [
+          "SEARCH sy USING INDEX idx_os_student_years_year_grade (school_year_id=? AND grade_level=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      },
+      {
+        "sql": "SELECT letter, threshold FROM os_letter_grade_items WHERE group_id=? ORDER BY threshold DESC, sort_order, letter;",
+        "count": 1605,
+        "totalMs": 42.05790000002901,
+        "rows": 19260,
+        "plan": [
+          "SEARCH os_letter_grade_items USING INDEX sqlite_autoindex_os_letter_grade_items_1 (group_id=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM os_grade_weight_groups WHERE school_year_id=?;",
+        "count": 1605,
+        "totalMs": 41.91020000000674,
+        "rows": 3210,
+        "plan": [
+          "SCAN os_grade_weight_groups"
+        ]
+      },
+      {
+        "sql": "SELECT st.id FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id WHERE sy.school_year_id=? AND sy.grade_level=? AND sy.status=? AND st.id IN (?) AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?);",
+        "count": 797,
+        "totalMs": 37.77360000000567,
+        "rows": 797,
+        "plan": [
+          "SEARCH sy USING INDEX sqlite_autoindex_os_student_years_1 (student_id=? AND school_year_id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT wi.* FROM os_grade_weight_items wi JOIN os_grade_weight_groups wg ON wg.id=wi.group_id WHERE wg.school_year_id=?;",
+        "count": 1605,
+        "totalMs": 36.6881999999772,
+        "rows": 9630,
+        "plan": [
+          "SCAN wi",
+          "SEARCH wg USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT student_id FROM os_student_years JOIN os_students st ON st.id = os_student_years.student_id WHERE school_year_id=? AND grade_level=? AND status=? AND os_student_years.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?);",
+        "count": 797,
+        "totalMs": 35.810800000015206,
+        "rows": 7970,
+        "plan": [
+          "SEARCH os_student_years USING INDEX idx_os_student_years_year_grade (school_year_id=? AND grade_level=?)",
+          "LIST SUBQUERY 1",
+          "SCAN os_classrooms",
+          "CREATE BLOOM FILTER",
+          "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM os_letter_grade_groups WHERE school_year_id=?;",
+        "count": 1605,
+        "totalMs": 32.40639999999894,
+        "rows": 1605,
+        "plan": [
+          "SCAN os_letter_grade_groups"
+        ]
+      },
+      {
+        "sql": "SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=? AND gs.grade_level=? ORDER BY s.name;",
+        "count": 808,
+        "totalMs": 29.057900000009,
+        "rows": 4040,
+        "plan": [
+          "SEARCH gs USING COVERING INDEX sqlite_autoindex_os_grade_subjects_1 (school_year_id=? AND grade_level=?)",
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM os_marking_periods WHERE school_year_id=? ORDER BY period_number;",
+        "count": 808,
+        "totalMs": 27.439000000010537,
+        "rows": 4848,
+        "plan": [
+          "SEARCH os_marking_periods USING INDEX sqlite_autoindex_os_marking_periods_1 (school_year_id=?)"
+        ]
+      },
+      {
+        "sql": "SELECT ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, ?)) * ? END), ?) AS avg_score FROM os_assignments a LEFT JOIN os_scores sc ON sc.assignment_id = a.id WHERE a.id=?;",
+        "count": 797,
+        "totalMs": 24.831899999996722,
+        "rows": 797,
+        "plan": [
+          "SEARCH a USING INTEGER PRIMARY KEY (rowid=?)",
+          "SEARCH sc USING INDEX sqlite_autoindex_os_scores_1 (assignment_id=?) LEFT-JOIN"
+        ]
+      },
+      {
+        "sql": "SELECT grade_level FROM os_grade_subjects WHERE school_year_id=?;",
+        "count": 808,
+        "totalMs": 22.03319999999451,
+        "rows": 40400,
+        "plan": [
+          "SEARCH os_grade_subjects USING COVERING INDEX sqlite_autoindex_os_grade_subjects_1 (school_year_id=?)"
+        ]
+      },
+      {
+        "sql": "SELECT * FROM os_school_years ORDER BY start_date DESC, id DESC;",
+        "count": 528,
+        "totalMs": 17.102300000007176,
+        "rows": 528,
+        "plan": [
+          "SCAN os_school_years",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      },
+      {
+        "sql": "SELECT id FROM os_marking_periods WHERE id=? AND school_year_id=?;",
+        "count": 797,
+        "totalMs": 16.77710000002196,
+        "rows": 797,
+        "plan": [
+          "SEARCH os_marking_periods USING INTEGER PRIMARY KEY (rowid=?)"
+        ]
+      }
+    ],
+    "cpu": [
+      [
+        "all :0",
+        2699
+      ],
+      [
+        "(idle) :0",
+        1016
+      ],
+      [
+        "prepare :0",
+        567
+      ],
+      [
+        "writeSync :0",
+        374
+      ],
+      [
+        "recentSchoolDays server.js:1451",
+        261
+      ],
+      [
+        "(garbage collector) :0",
+        107
+      ],
+      [
+        "writev :0",
+        101
+      ],
+      [
+        "summarizeGradeRows grades.js:74",
+        94
+      ],
+      [
+        "cleanText input.js:32",
+        80
+      ],
+      [
+        "db.querySql profile-school-entry.js:10",
+        78
+      ],
+      [
+        "(program) :0",
+        77
+      ],
+      [
+        "(anonymous) db.js:55",
+        72
+      ],
+      [
+        "exec :0",
+        59
+      ],
+      [
+        "gradebookGridView academics-views.js:71",
+        59
+      ],
+      [
+        "(anonymous) academics-views.js:133",
+        55
+      ],
+      [
+        "(anonymous) :0",
+        48
+      ],
+      [
+        "loadGradeAverages grades.js:124",
+        46
+      ],
+      [
+        "gradebookLetter server.js:1189",
+        46
+      ],
+      [
+        "(anonymous) academics-views.js:131",
+        45
+      ],
+      [
+        "consoleCall :0",
+        36
+      ]
+    ]
+  },
+  "serverRequestTimings": {
+    "GET /login": {
+      "count": 51,
+      "p50Ms": 0.09,
+      "p95Ms": 0.21,
+      "maxMs": 3.28
+    },
+    "POST /login": {
+      "count": 51,
+      "p50Ms": 543.67,
+      "p95Ms": 1602.91,
+      "maxMs": 1603.39
+    },
+    "GET /": {
+      "count": 877,
+      "p50Ms": 5.06,
+      "p95Ms": 6.98,
+      "maxMs": 16.35
+    },
+    "GET /gradebook": {
+      "count": 877,
+      "p50Ms": 3.39,
+      "p95Ms": 4.68,
+      "maxMs": 11.12
+    },
+    "POST /gradebook": {
+      "count": 877,
+      "p50Ms": 1.35,
+      "p95Ms": 2.14,
+      "maxMs": 7.44
+    },
+    "GET /health": {
+      "count": 75,
+      "p50Ms": 0.13,
+      "p95Ms": 0.3,
+      "maxMs": 0.55
+    }
+  },
+  "slowDatabaseOperations": []
+}

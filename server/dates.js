@@ -36,4 +36,19 @@ function schoolDateRange(startValue, endValue) {
   return { startDate, endDate };
 }
 
-module.exports = { addDays, cleanDate, daysBetween, schoolDateRange };
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function recentSchoolDays(count, now = new Date()) {
+  const date = new Date(now);
+  date.setUTCHours(0, 0, 0, 0);
+  const days = [];
+  while (days.length < count) {
+    const weekday = date.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) {
+      days.push({ key: date.toISOString().slice(0, 10), label: WEEKDAY_LABELS[weekday] });
+    }
+    date.setUTCDate(date.getUTCDate() - 1);
+  }
+  return days.reverse();
+}
+
+module.exports = { addDays, cleanDate, daysBetween, schoolDateRange, recentSchoolDays };

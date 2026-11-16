@@ -1,0 +1,407 @@
+{
+  "date": "2026-11-16T22:59:02.213Z",
+  "runtime": "v26.13.1",
+  "platform": "win32",
+  "hardware": {
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor            ",
+    "logicalProcessors": 32,
+    "memoryGiB": 61.612022399902344
+  },
+  "stages": [
+    {
+      "concurrency": 1,
+      "targetSeconds": 8,
+      "elapsedMs": 8007.664900000001,
+      "operationsPerSecond": 307.45542311591987,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 1,
+      "timings": {
+        "login": {
+          "count": 1,
+          "p50Ms": 55.28159999999991,
+          "p95Ms": 55.28159999999991,
+          "maxMs": 55.28159999999991
+        },
+        "dashboard": {
+          "count": 794,
+          "p50Ms": 4.691100000000006,
+          "p95Ms": 5.8091999999996915,
+          "maxMs": 17.275800000000004
+        },
+        "gradebook": {
+          "count": 794,
+          "p50Ms": 3.568199999999706,
+          "p95Ms": 4.638900000000149,
+          "maxMs": 9.343900000000076
+        },
+        "save": {
+          "count": 794,
+          "p50Ms": 1.491899999999987,
+          "p95Ms": 2.2875999999996566,
+          "maxMs": 5.195300000000316
+        },
+        "health": {
+          "count": 79,
+          "p50Ms": 0.5738999999994121,
+          "p95Ms": 4.92239999999947,
+          "maxMs": 5.623400000000402
+        }
+      }
+    },
+    {
+      "concurrency": 5,
+      "targetSeconds": 8,
+      "elapsedMs": 8012.5056,
+      "operationsPerSecond": 385.6471563651699,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 5,
+      "timings": {
+        "login": {
+          "count": 5,
+          "p50Ms": 32.76720000000023,
+          "p95Ms": 63.11319999999978,
+          "maxMs": 63.11319999999978
+        },
+        "dashboard": {
+          "count": 1002,
+          "p50Ms": 15.39089999999851,
+          "p95Ms": 19.428200000000288,
+          "maxMs": 25.689700000000812
+        },
+        "gradebook": {
+          "count": 1002,
+          "p50Ms": 13.269099999999526,
+          "p95Ms": 18.13470000000052,
+          "maxMs": 25.033800000001065
+        },
+        "save": {
+          "count": 1002,
+          "p50Ms": 11.91150000000016,
+          "p95Ms": 16.030899999999747,
+          "maxMs": 19.799399999999878
+        },
+        "health": {
+          "count": 79,
+          "p50Ms": 11.21939999999995,
+          "p95Ms": 15.968999999999141,
+          "maxMs": 24.196100000001024
+        }
+      }
+    },
+    {
+      "concurrency": 10,
+      "targetSeconds": 8,
+      "elapsedMs": 8048.8289,
+      "operationsPerSecond": 375.9553144433223,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 10,
+      "timings": {
+        "login": {
+          "count": 10,
+          "p50Ms": 67.13310000000274,
+          "p95Ms": 116.44789999999921,
+          "maxMs": 116.44789999999921
+        },
+        "dashboard": {
+          "count": 979,
+          "p50Ms": 27.54949999999735,
+          "p95Ms": 40.31010000000242,
+          "maxMs": 49.010699999998906
+        },
+        "gradebook": {
+          "count": 979,
+          "p50Ms": 29.25340000000142,
+          "p95Ms": 39.967499999998836,
+          "maxMs": 46.28549999999814
+        },
+        "save": {
+          "count": 979,
+          "p50Ms": 20.46389999999883,
+          "p95Ms": 33.74339999999938,
+          "maxMs": 39.981400000000576
+        },
+        "health": {
+          "count": 79,
+          "p50Ms": 23.802999999999884,
+          "p95Ms": 37.365099999999074,
+          "maxMs": 39.675499999997555
+        }
+      }
+    },
+    {
+      "concurrency": 20,
+      "targetSeconds": 8,
+      "elapsedMs": 8064.702500000003,
+      "operationsPerSecond": 387.9870336196529,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 20,
+      "timings": {
+        "login": {
+          "count": 20,
+          "p50Ms": 121.82670000000144,
+          "p95Ms": 243.08779999999751,
+          "maxMs": 243.23500000000058
+        },
+        "dashboard": {
+          "count": 1010,
+          "p50Ms": 53.37069999999949,
+          "p95Ms": 70.91900000000169,
+          "maxMs": 88.33320000000094
+        },
+        "gradebook": {
+          "count": 1010,
+          "p50Ms": 44.58050000000003,
+          "p95Ms": 61.71359999999913,
+          "maxMs": 79.81420000000071
+        },
+        "save": {
+          "count": 1010,
+          "p50Ms": 56.62540000000081,
+          "p95Ms": 69.83070000000225,
+          "maxMs": 86.19499999999971
+        },
+        "health": {
+          "count": 79,
+          "p50Ms": 47.66270000000077,
+          "p95Ms": 69.3119000000006,
+          "maxMs": 74.07620000000315
+        }
+      }
+    },
+    {
+      "concurrency": 35,
+      "targetSeconds": 8,
+      "elapsedMs": 8176.311300000001,
+      "operationsPerSecond": 382.93551763372795,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 35,
+      "timings": {
+        "login": {
+          "count": 35,
+          "p50Ms": 242.9470999999976,
+          "p95Ms": 666.2203000000009,
+          "maxMs": 666.3689000000013
+        },
+        "dashboard": {
+          "count": 1012,
+          "p50Ms": 91.86439999999857,
+          "p95Ms": 117.37969999999768,
+          "maxMs": 130.48600000000442
+        },
+        "gradebook": {
+          "count": 1012,
+          "p50Ms": 83.34799999999814,
+          "p95Ms": 108.79789999999775,
+          "maxMs": 125.3463999999949
+        },
+        "save": {
+          "count": 1012,
+          "p50Ms": 100.41570000000502,
+          "p95Ms": 117.92089999999735,
+          "maxMs": 128.8425999999963
+        },
+        "health": {
+          "count": 60,
+          "p50Ms": 90.8695000000007,
+          "p95Ms": 113.60689999999886,
+          "maxMs": 119.35169999999925
+        }
+      }
+    },
+    {
+      "concurrency": 50,
+      "targetSeconds": 8,
+      "elapsedMs": 8257.905399999996,
+      "operationsPerSecond": 392.2302137295011,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 50,
+      "timings": {
+        "login": {
+          "count": 50,
+          "p50Ms": 437.8249999999971,
+          "p95Ms": 1129.404899999994,
+          "maxMs": 1312.109000000004
+        },
+        "dashboard": {
+          "count": 1048,
+          "p50Ms": 124.67230000000563,
+          "p95Ms": 165.65619999999763,
+          "maxMs": 198.9507999999987
+        },
+        "gradebook": {
+          "count": 1048,
+          "p50Ms": 111.10089999999764,
+          "p95Ms": 143.81699999999546,
+          "maxMs": 174.97520000000077
+        },
+        "save": {
+          "count": 1048,
+          "p50Ms": 140.6183000000019,
+          "p95Ms": 167.73189999999886,
+          "maxMs": 178.92339999999967
+        },
+        "health": {
+          "count": 45,
+          "p50Ms": 116.46959999999672,
+          "p95Ms": 146.30849999999919,
+          "maxMs": 151.35160000000178
+        }
+      }
+    },
+    {
+      "concurrency": 50,
+      "targetSeconds": 8,
+      "elapsedMs": 8163.138500000001,
+      "operationsPerSecond": 395.9261502178359,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 50,
+      "timings": {
+        "login": {
+          "count": 50,
+          "p50Ms": 443.1713000000018,
+          "p95Ms": 1125.8843000000052,
+          "maxMs": 1299.7482000000018
+        },
+        "dashboard": {
+          "count": 1046,
+          "p50Ms": 124.55479999999807,
+          "p95Ms": 158.2001999999993,
+          "maxMs": 189.09010000000126
+        },
+        "gradebook": {
+          "count": 1046,
+          "p50Ms": 108.87879999999859,
+          "p95Ms": 138.75729999999749,
+          "maxMs": 171.64259999999922
+        },
+        "save": {
+          "count": 1046,
+          "p50Ms": 139.16509999999835,
+          "p95Ms": 158.65400000000227,
+          "maxMs": 183.17559999999503
+        },
+        "health": {
+          "count": 44,
+          "p50Ms": 116.59599999999773,
+          "p95Ms": 148.70040000000154,
+          "maxMs": 150.81609999999637
+        }
+      }
+    },
+    {
+      "concurrency": 1,
+      "targetSeconds": 8,
+      "elapsedMs": 8013.110700000005,
+      "operationsPerSecond": 284.4089000292981,
+      "failures": 0,
+      "errors": [],
+      "verifiedFinalScores": 1,
+      "timings": {
+        "login": {
+          "count": 1,
+          "p50Ms": 26.651499999999942,
+          "p95Ms": 26.651499999999942,
+          "maxMs": 26.651499999999942
+        },
+        "dashboard": {
+          "count": 733,
+          "p50Ms": 5.113100000002305,
+          "p95Ms": 7.301699999996345,
+          "maxMs": 11.634500000000116
+        },
+        "gradebook": {
+          "count": 733,
+          "p50Ms": 3.8629999999975553,
+          "p95Ms": 5.443299999998999,
+          "maxMs": 8.549300000006042
+        },
+        "save": {
+          "count": 733,
+          "p50Ms": 1.5129999999990105,
+          "p95Ms": 2.2683000000033644,
+          "maxMs": 8.077900000003865
+        },
+        "health": {
+          "count": 79,
+          "p50Ms": 1.0392999999967287,
+          "p95Ms": 6.279999999998836,
+          "maxMs": 7.697299999999814
+        }
+      }
+    }
+  ],
+  "fixture": {
+    "teacherAccounts": 50,
+    "teacherRecords": 50,
+    "classrooms": 50,
+    "students": 500,
+    "subjects": 5,
+    "periods": 6,
+    "assignments": 30000,
+    "scores": 300000
+  },
+  "workload": {
+    "levels": [
+      1,
+      5,
+      10,
+      20,
+      35,
+      50,
+      50,
+      1
+    ],
+    "reauthEvery": 0
+  },
+  "integrity": "ok",
+  "foreignKeyViolations": 0,
+  "finalHealth": {
+    "status": "ready"
+  },
+  "serverRequestTimings": {
+    "GET /login": {
+      "count": 172,
+      "p50Ms": 0.05,
+      "p95Ms": 0.19,
+      "maxMs": 2.33
+    },
+    "POST /login": {
+      "count": 172,
+      "p50Ms": 235.94,
+      "p95Ms": 1116.73,
+      "maxMs": 1301.23
+    },
+    "GET /": {
+      "count": 7624,
+      "p50Ms": 4.13,
+      "p95Ms": 5.23,
+      "maxMs": 14.97
+    },
+    "GET /gradebook": {
+      "count": 7624,
+      "p50Ms": 2.53,
+      "p95Ms": 3.63,
+      "maxMs": 7.36
+    },
+    "POST /gradebook": {
+      "count": 7624,
+      "p50Ms": 0.92,
+      "p95Ms": 1.42,
+      "maxMs": 8.59
+    },
+    "GET /health": {
+      "count": 544,
+      "p50Ms": 0.07,
+      "p95Ms": 0.16,
+      "maxMs": 0.36
+    }
+  },
+  "slowDatabaseOperations": []
+}

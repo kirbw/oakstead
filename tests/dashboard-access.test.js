@@ -7,6 +7,28 @@ function kpis(html) {
     .map((match) => [match[1], Number(match[2])]);
 }
 
+test('recent dashboard limits authorized assignments before scores without changing ordering or averages', async t => {
+  const app = await schoolFixture(t);
+  app.withDb(db => {
+    for(let i=0;i<20;i++) {
+      db.prepare(`INSERT INTO os_assignments(id,school_year_id,grade_level,subject_id,title,category,assignment_date,max_score) VALUES(?,1,'1',101,?,'Test',?,?)`).run(201+i,`Recent ${i}`,i<10?'2026-01-01':'2026-01-02',i===18?0:100);
+      if(i!==19)db.prepare('INSERT INTO os_scores(assignment_id,student_id,score) VALUES(?,101,?)').run(201+i,i===17?null:i===16?0:80+i);
+      db.prepare('INSERT INTO os_scores(assignment_id,student_id,score) VALUES(?,103,10)').run(201+i);
+    }
+    db.exec("UPDATE os_assignments SET assignment_date='2099-01-01' WHERE id IN (102,103,104);");
+  });
+  for(const role of ['teacher','admin','principal']) {
+    const expected=app.withDb(db=>db.prepare(`SELECT a.title,ROUND(AVG(sc.score/NULLIF(a.max_score,0)*100),1) average FROM os_assignments a JOIN os_subjects s ON s.id=a.subject_id LEFT JOIN os_scores sc ON sc.assignment_id=a.id ${role==='teacher'?'AND sc.student_id=101':''} WHERE a.school_year_id=1 ${role==='teacher'?"AND a.grade_level='1' AND (a.classroom_id IS NULL OR a.classroom_id=101)":''} GROUP BY a.id ORDER BY a.assignment_date DESC,a.id DESC LIMIT 8`).all());
+    const response=await app.request('/',{headers:{Cookie:app.cookie(role)}});
+    assert.equal(response.status,200);
+    const html=await response.text();
+    const region=html.split('aria-label="Recent gradebook entries"')[1].split('</table>')[0];
+    const rows=[...region.matchAll(/<tr>\s*<td>([^<]+)<\/td>[\s\S]*?<span class="badge [^"]*">([^<]+)<\/span>[\s\S]*?<\/tr>/g)];
+    assert.deepEqual(rows.map(row=>row[1]),expected.map(row=>row.title),role);
+    assert.deepEqual(rows.map(row=>row[2]),expected.map(row=>row.average===null?'&mdash;':row.average.toFixed(1)+'%'),role);
+  }
+});
+
 test('dashboard scopes every count, assignment and score to teacher access', async (t) => {
   const app = await schoolFixture(t);
   app.withDb((db) => db.exec(`
