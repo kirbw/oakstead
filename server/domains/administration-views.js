@@ -35,12 +35,17 @@ function createViews({
       classrooms: querySql(`SELECT COUNT(*) AS c FROM os_classrooms ${roomScope};`)[0]?.c || 0,
       assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments a WHERE a.school_year_id=${yearId} ${assignmentScope};`)[0]?.c || 0
     };
-    const recent = querySql(`SELECT a.title, a.category, a.grade_level, s.name AS subject_name,
+    // Limit the authorized assignments before touching their scores. Aggregating
+    // every historical assignment just to display eight rows blocks other requests.
+    const recent = querySql(`WITH recent_assignments AS MATERIALIZED (
+        SELECT a.*, s.name AS subject_name
+        FROM os_assignments a JOIN os_subjects s ON s.id=a.subject_id
+        WHERE a.school_year_id=${yearId} ${assignmentScope}
+        ORDER BY a.assignment_date DESC, a.id DESC LIMIT 8
+      ) SELECT a.title, a.category, a.grade_level, a.subject_name,
         COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
-      FROM os_assignments a
-      JOIN os_subjects s ON s.id = a.subject_id
+      FROM recent_assignments a
       LEFT JOIN os_scores sc ON sc.assignment_id = a.id ${scoreScope}
-      WHERE a.school_year_id=${yearId} ${assignmentScope}
       GROUP BY a.id
       ORDER BY a.assignment_date DESC, a.id DESC
       LIMIT 8;`);

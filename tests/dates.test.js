@@ -3,6 +3,20 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { cleanDate, addDays, daysBetween, schoolDateRange } = require('../server/dates');
 const { schoolFixture } = require('./helpers/school');
+const { recentSchoolDays } = require('../server/dates');
+
+test('dashboard school-day labels retain UTC ordering across weekends and year boundaries', () => {
+  for (const now of ['2026-01-01T00:30:00Z','2026-11-15T23:30:00Z','2026-03-09T01:30:00Z']) {
+    const days = recentSchoolDays(7, new Date(now));
+    assert.equal(days.length, 7);
+    assert.deepEqual(days.map(d=>d.key), days.map(d=>d.key).sort());
+    for (const day of days) {
+      const date = new Date(day.key+'T00:00:00Z');
+      assert.notEqual(date.getUTCDay(), 0);assert.notEqual(date.getUTCDay(), 6);
+      assert.equal(day.label, date.toLocaleDateString('en-US',{weekday:'short',timeZone:'UTC'}));
+    }
+  }
+});
 
 test('date-only validation and inclusive arithmetic handle leap/year/DST boundaries', () => {
   for(const value of ['2026-02-29','2026-02-30','2026-13-01','2026-00-01','0000-01-01','2026-01-01x','bad']) assert.equal(cleanDate(value),'',value);

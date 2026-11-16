@@ -1,5 +1,8 @@
 # Concurrent teacher load test
 
+For the larger 50-teacher/500-student fixture see [school-results.md](school-results.md)
+and the [profile-driven optimization comparison](school-optimization.md).
+
 Run `node scripts/load-test.js`. It starts the real app against temporary synthetic
 data with demo mode OFF, uses 20 distinct teacher accounts with real salted password
 verification, and cleans up its process/database. No dependencies or application
