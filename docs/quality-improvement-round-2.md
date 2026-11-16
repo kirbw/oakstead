@@ -60,7 +60,7 @@ production rollout. Leave unrelated local files untouched.
     termination cannot guarantee completion; unload warning is best effort.
 
 - [ ] **2. Restrict the teacher dashboard consistently**
-  - Branch: `codex/scope-teacher-dashboard`. Status: validated, awaiting PR.
+  - Branch: `codex/scope-teacher-dashboard`. Status: submitted, awaiting merge.
   - Plan: pass authenticated user into dashboard loading. Scope counts, recent
     assignments, charts, and averages through existing grade/classroom access rules.
     Admin/principal remain schoolwide; parent redirect unchanged; no creator rule.
@@ -76,7 +76,7 @@ production rollout. Leave unrelated local files untouched.
   - Screenshots: capture attempted; Edge CDP timed out again. Manual check: compare
     teacher and admin Dashboard, change school year, confirm scoped counts/entries.
   - Compatibility: no schema change; existing grade/classroom rules reused.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/39. Merge commit: Pending.
 
 - [ ] **3. Make score clearing consistent**
   - Branch: `codex/consistent-score-clearing`. Status: planned.
