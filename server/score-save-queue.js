@@ -46,10 +46,12 @@ function createScoreSaveQueue({ send, onChange = () => {}, debounceMs = 550, tim
           entry.saved = value;
           entry.sending = false;
           entry.error = false;
+          entry.failure = undefined;
           notify(entry, result);
-        } catch {
+        } catch (error) {
           entry.sending = false;
           entry.error = true;
+          entry.failure = { message: error.message, requestId: error.requestId };
           halted = true;
           notify(entry);
         } finally {
@@ -72,6 +74,7 @@ function createScoreSaveQueue({ send, onChange = () => {}, debounceMs = 550, tim
     for (const entry of entries.values()) {
       entry.value = entry.saved;
       entry.error = false;
+      entry.failure = undefined;
       notify(entry);
     }
   }

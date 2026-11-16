@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const { DEMO_MODE } = require('./config');
 const { createScoreSaveQueue } = require('./score-save-queue');
+const { createBrowserRequest } = require('./browser-request');
 const APP_STYLESHEET = `:root {
   color-scheme: light;
   --bg: #fbfcfb;
@@ -2718,7 +2719,9 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
 (function(){
   const root = document.documentElement;
   const saved = localStorage.getItem('oakstead-theme');
+  const appRequest = (${createBrowserRequest.toString()})({ fetch: window.fetch.bind(window), onAuthLoss: function(error) { showRequestNotice(error); } });
   const scoreQueue = (${createScoreSaveQueue.toString()})({ send: sendGridScore, onChange: renderGridSave });
+  const submittingForms = new WeakSet();
   const resumedForms = new WeakSet();
   let activeScoreInput = null;
   let navAbort = null;
@@ -2786,7 +2789,8 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     if (navAbort) navAbort.abort();
     navAbort = new AbortController();
     currentMain.classList.add('app-loading');
-    return fetch(nextUrl.toString(), {
+    return appRequest(nextUrl.toString(), {
+      responseType: 'text',
       signal: navAbort.signal,
       headers: { Accept: 'text/html', 'X-Requested-With': 'Oakstead-App-Shell' }
     }).then(function(response) {
@@ -2811,7 +2815,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
       });
     }).catch(function(error) {
       if (error.name === 'AbortError') return false;
-      window.location.href = nextUrl.toString();
+      showRequestNotice(error);
       return false;
     }).finally(function() {
       const liveMain = mainEl();
@@ -2939,6 +2943,54 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     navigateApp(url);
   });
 
+  function showRequestNotice(error, form) {
+    const host = form || mainEl() || document.body;
+    host.querySelector('[data-request-error]')?.remove();
+    const panel = document.createElement('div');
+    panel.dataset.requestError = '';
+    panel.className = 'notice danger';
+    panel.setAttribute('role', 'alert');
+    panel.tabIndex = -1;
+    panel.id = 'request-error';
+    panel.textContent = (error.message || 'The request failed. Please try again.') + (error.requestId ? ' Request ID: ' + error.requestId : '');
+    if (error.status === 401) {
+      const link = document.createElement('a');
+      link.href = '/login';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = ' Sign in in a new tab, then retry here.';
+      panel.appendChild(link);
+    }
+    host.prepend(panel);
+    Object.keys(error.fields || {}).forEach(function(name) {
+      const input = form?.elements?.namedItem(name);
+      if (input && input.setAttribute) {
+        input.setAttribute('aria-invalid', 'true');
+        input.setAttribute('aria-describedby', panel.id);
+      }
+    });
+    panel.focus();
+  }
+
+  async function submitPostForm(form, submitter) {
+    if (submittingForms.has(form)) return;
+    submittingForms.add(form);
+    const body = new FormData(form);
+    if (submitter?.name) body.append(submitter.name, submitter.value);
+    if (submitter) submitter.disabled = true;
+    form.querySelectorAll('[aria-invalid="true"]').forEach(function(input) { input.removeAttribute('aria-invalid'); });
+    try {
+      const response = await appRequest(form.action || window.location.href, { method: 'POST', body: body,
+        responseType: 'text', allowLoginRedirect: new URL(form.action, window.location.href).pathname === '/logout', headers: { Accept: 'application/json' } });
+      if (response.redirected && new URL(response.url).pathname === '/login') window.location.href = response.url;
+      else await navigateApp(response.url || window.location.href);
+    } catch (error) { showRequestNotice(error, form); }
+    finally {
+      submittingForms.delete(form);
+      if (submitter) submitter.disabled = false;
+    }
+  }
+
   function awaitGridForm(form) {
     if (!scoreQueue.isDirty()) return true;
     scoreQueue.flush().then(function(saved) { if (saved) form.requestSubmit(); });
@@ -2967,8 +3019,13 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
 
   document.addEventListener('submit', function(event) {
     const form = event.target;
-    if (!(form instanceof HTMLFormElement)) return;
+    if (!(form instanceof HTMLFormElement) || event.defaultPrevented) return;
     const method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (method === 'post' && form.dataset.noAppNav === undefined) {
+      event.preventDefault();
+      void submitPostForm(form, event.submitter);
+      return;
+    }
     if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) return;
     event.preventDefault();
     navigateApp(formToUrl(form));
@@ -3145,7 +3202,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     Object.keys(context).forEach(function(name) { if (name !== 'actionUrl') formData.set(name, context[name]); });
     formData.set('action', 'grid-score');
     formData.set('scoreValue', value);
-    const response = await fetch(context.actionUrl, { method: 'POST', body: formData, signal: signal, headers: { Accept: 'application/json' } });
+    const response = await appRequest(context.actionUrl, { method: 'POST', body: formData, signal: signal, headers: { Accept: 'application/json' } });
     if (!response.ok) throw new Error('Save failed');
     const result = await response.json();
     if (!result || result.ok !== true) throw new Error('Save failed');
@@ -3168,7 +3225,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     }
     if (result) updateGridAverages(result, container);
     const status = container.querySelector('[data-grid-autosave-status]');
-    if (status) status.textContent = state.halted ? 'Could not save. Retry or discard unsaved edits before leaving.' : state.dirty ? 'Saving...' : 'Saved';
+    if (status) status.textContent = state.halted ? 'Could not save. Retry or discard unsaved edits before leaving.' + (entry.failure?.requestId ? ' Request ID: ' + entry.failure.requestId : '') : state.dirty ? 'Saving...' : 'Saved';
     container.querySelectorAll('[data-grid-retry], [data-grid-discard]').forEach(function(button) { button.hidden = !state.halted; });
   }
 
@@ -3228,13 +3285,13 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     }
     function pollUpdateStatus() {
       if (!panel.isConnected) return;
-      fetch('/system-update/status', { headers: { Accept: 'application/json' } })
+      appRequest('/system-update/status', { headers: { Accept: 'application/json' } })
         .then(function(response) { return response.ok ? response.json() : null; })
         .then(function(status) {
           renderUpdateStatus(status);
           if (status && status.running) setTimeout(pollUpdateStatus, 1400);
         })
-        .catch(function() {});
+        .catch(function(error) { showRequestNotice(error, updateCheckForm || updateForm); });
     }
     if (updateForm && !updateForm.dataset.bound) {
       updateForm.dataset.bound = '1';
@@ -3242,7 +3299,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
         event.preventDefault();
         const button = updateForm.querySelector('button[type="submit"]');
         if (button) button.disabled = true;
-        fetch('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
+        appRequest('/system-update', { method: 'POST', body: new FormData(updateForm), headers: { Accept: 'application/json' } })
           .then(function(response) { return response.json(); })
           .then(function(status) {
             renderUpdateStatus(status);
@@ -3251,7 +3308,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
             }
             setTimeout(pollUpdateStatus, 800);
           })
-          .catch(function() { if (button) button.disabled = false; });
+          .catch(function(error) { showRequestNotice(error, updateForm); if (button) button.disabled = false; });
       });
       pollUpdateStatus();
     }
@@ -3261,7 +3318,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
         event.preventDefault();
         const button = updateCheckForm.querySelector('button[type="submit"]');
         if (button) button.disabled = true;
-        fetch('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
+        appRequest('/system-update/check', { method: 'POST', body: new FormData(updateCheckForm), headers: { Accept: 'application/json' } })
           .then(function(response) { return response.json(); })
           .then(function(status) { renderUpdateStatus(status); })
           .catch(function() {})

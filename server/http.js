@@ -115,15 +115,27 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
       const contentType = String(req.headers['content-type'] || '');
       const chunks = [];
       let size = 0;
+      let failed = false;
+      const limit = /^multipart\/form-data(?:;|$)/i.test(contentType) ? maxBodySize : Math.min(maxBodySize, 1024 * 1024);
+      const tooLarge = () => Object.assign(new Error('Payload too large'), { statusCode: 413 });
+      if (Number(req.headers['content-length']) > limit) {
+        req.resume();
+        reject(tooLarge());
+        return;
+      }
       req.on('data', (chunk) => {
-        chunks.push(chunk);
+        if (failed) return;
         size += chunk.length;
-        if (size > maxBodySize) {
-          reject(new Error('Payload too large'));
-          req.destroy();
+        if (size > limit) {
+          failed = true;
+          chunks.length = 0;
+          reject(tooLarge());
+          return;
         }
+        chunks.push(chunk);
       });
       req.on('end', () => {
+        if (failed) return;
         const buffer = Buffer.concat(chunks);
         try {
           if (/^multipart\/form-data(?:;|$)/i.test(contentType)) return resolve(parseMultipart(buffer, contentType));
@@ -131,6 +143,7 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
         } catch (error) { reject(error); }
       });
       req.on('error', reject);
+      req.on('aborted', () => reject(Object.assign(new Error('The request was interrupted.'), { statusCode: 400 })));
     });
   }
 
@@ -157,16 +170,36 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
   }
 
   function sendText(res, status, text, headers = {}) {
+    if (status >= 400) return sendProblem(res, status, text, headers);
     res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(text);
   }
 
   function sendJson(res, status, data, headers = {}) {
+    if (status >= 400) return sendProblem(res, status, data?.error || data?.message, headers, data?.fields);
     res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(data));
   }
 
+  function sendProblem(res, status, message, headers = {}, fields = {}) {
+    const titles = { 400: 'Check the submitted values', 401: 'Sign in required', 403: 'Access denied',
+      404: 'Not found', 409: 'Conflicting records', 413: 'Request too large', 429: 'Please wait' };
+    const requestId = res.getHeader?.('X-Request-ID') || '';
+    const safeMessage = status >= 500 ? 'An unexpected error occurred. Please try again or give the request ID to your administrator.' : String(message || titles[status] || 'Request failed');
+    const problem = { status, title: titles[status] || 'Request failed', requestId, fields };
+    const wantsJson = /application\/json/i.test(res.req?.headers?.accept || '');
+    if (wantsJson) {
+      res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: false, error: safeMessage, requestId, problem }));
+    }
+    res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(problem.title)}</title><link rel="stylesheet" href="/assets/app.css?v=${require('./assets').APP_STYLESHEET_VERSION}"><main class="main"><section class="chart-panel" role="alert"><h1>${escapeHtml(problem.title)}</h1><p>${escapeHtml(safeMessage)}</p><p>Request ID: ${escapeHtml(requestId)}</p><p>Use your browser's Back button to return to the form and review your entries.</p><a href="/">Dashboard</a></section></main></html>`);
+  }
+
   function redirect(res, location, headers = {}) {
+    if (location === '/login' && /application\/json/i.test(res.req?.headers?.accept || '') && !res.req?.allowLoginRedirect) {
+      return sendProblem(res, 401, 'Your session ended. Sign in again.', headers);
+    }
     res.writeHead(302, { ...securityHeaders(), ...headers, Location: location });
     res.end();
   }
@@ -183,6 +216,7 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
     securityHeaders,
     sendHtml,
     sendJson,
+    sendProblem,
     sendText
   };
 }

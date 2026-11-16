@@ -162,8 +162,8 @@ production rollout. Leave unrelated local files untouched.
 
 ## Part B — First six Nexus patterns
 
-- [ ] **7. Establish domain routes, services, and validation boundaries**
-  - Branch: `codex/domain-boundaries`. Status: submitted, awaiting merge.
+- [x] **7. Establish domain routes, services, and validation boundaries**
+  - Branch: `codex/domain-boundaries`. Status: merged.
   - Plan: separate dispatch, dependency-free input validation, business operations,
     database access and rendering. Group authentication/people/academics/admin;
     entry point composes/starts app. Shared services own authorization/transactions.
@@ -187,10 +187,10 @@ production rollout. Leave unrelated local files untouched.
     pure grade calculation and section loading code unchanged; timing noise observed.
   - Screenshot: screenshots/round-2/pr7-domain-gradebook.jpg. Compatibility: no
     schema/URL/field/permission/stack changes; dependencies explicit, no new packages.
-  - PR: https://github.com/kirbw/oakstead/pull/44. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/44. Merge commit: d70dfa82fdc1ff9206f9f6a6acedba20a10ed832 (2026-11-16).
 
 - [ ] **8. Standardize request handling and errors**
-  - Branch: `codex/shared-request-errors`. Status: planned.
+  - Branch: `codex/shared-request-errors`. Status: validated, awaiting PR.
   - Plan: shared browser timeout/auth-loss/error/request-ID handling; consistent
     validation/forbidden/conflict/oversize/unexpected errors, established success
     fields retained. Safe form errors retain appropriate submitted values; hide
@@ -199,7 +199,21 @@ production rollout. Leave unrelated local files untouched.
     no generic mutation/restore/update retry.
   - Acceptance: timeout/auth loss/malformed response/validation/denial/oversize/500
     give useful safe feedback and request IDs without sensitive internals.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: shared 30-second browser helper covers response bodies, auth
+    loss, malformed/error responses and request IDs; forms retain DOM values and
+    accessible field alerts; no automatic mutation retries. Shared JSON/HTML errors
+    sanitize 500s. Normal forms limited to 1MiB; multipart keeps 50,000,000 bytes.
+    Personalized no-store and generated request IDs; versioned assets unchanged.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (56 tests).
+    Timeout/header/body, malformed response, auth loss, fields, 403/409/413/500,
+    redaction, actual/declared byte limits and unchanged successful zero-grade JSON.
+    Browser retained reversed date with aria-invalid and focused request-ID alert;
+    correction/resubmission succeeded without errors.
+  - Screenshot: screenshots/round-2/pr8-retained-form-error.jpg.
+  - Compatibility: successful fields preserved; JSON session failures now 401,
+    duplicate records 409; ordinary large forms capped at 1MiB. Upload limits and
+    explicit autosave retry preserved. No schema/dependency changes.
+  - PR: Pending. Merge commit: Pending.
 
 - [ ] **9. Introduce versioned database migrations**
   - Branch: `codex/versioned-database-migrations`. Status: planned.

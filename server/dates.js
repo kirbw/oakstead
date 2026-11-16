@@ -24,10 +24,14 @@ function daysBetween(startValue, endValue) {
 function schoolDateRange(startValue, endValue) {
   const startDate = cleanDate(startValue), endDate = cleanDate(endValue);
   if ((String(startValue ?? '').trim() && !startDate) || (String(endValue ?? '').trim() && !endDate)) {
-    throw Object.assign(new Error('Enter valid school-year dates in YYYY-MM-DD format.'), { statusCode: 400 });
+    throw Object.assign(new Error('Enter valid school-year dates in YYYY-MM-DD format.'), {
+      statusCode: 400, fields: { ...(!startDate && startValue ? { startDate: 'Enter a valid date.' } : {}), ...(!endDate && endValue ? { endDate: 'Enter a valid date.' } : {}) }
+    });
   }
   if (startDate && endDate && startDate > endDate) {
-    throw Object.assign(new Error('The school-year end date must be on or after its start date.'), { statusCode: 400 });
+    throw Object.assign(new Error('The school-year end date must be on or after its start date.'), {
+      statusCode: 400, fields: { endDate: 'The end date must be on or after the start date.' }
+    });
   }
   return { startDate, endDate };
 }
