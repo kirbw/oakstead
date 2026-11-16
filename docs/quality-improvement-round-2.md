@@ -135,7 +135,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/42. Merge commit: 27da081e7c5c8ffe4b16de9e5033ff6b30a7e36e (2026-11-16).
 
 - [ ] **6. Validate database constraints before restore**
-  - Branch: `codex/validate-backup-constraints`. Status: validated, awaiting PR.
+  - Branch: `codex/validate-backup-constraints`. Status: submitted, awaiting merge.
   - Plan: validate required PK/UNIQUE/FK constraints, compatible column declarations,
     and application upsert targets through semantic SQLite metadata, not generated
     index names. Reject unsupported staged schemas before replacement; preserve
@@ -158,7 +158,7 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility/recovery: no table rebuilds or guessed repairs; source backups
     unchanged, active DB usable on rejection, existing staged rollback retained.
     Historical orphan diagnostics remain admin-only; no contents exposed in errors.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/43. Merge commit: Pending.
 
 ## Part B — First six Nexus patterns
 
