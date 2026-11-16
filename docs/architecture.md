@@ -32,3 +32,20 @@ are compatibility boundaries.
 Add regression tests through `npm test`. Services can be tested without HTTP; the
 temporary-data harness still exercises the real listener, session/CSRF boundaries,
 role restrictions, database transactions and restore recovery.
+
+All responses include a generated `X-Request-ID`. Personalized responses use
+`Cache-Control: no-store`; versioned static assets retain immutable caching. JSON
+errors preserve `error` and add `ok: false`, `requestId` and a `problem` object
+containing status/title/field errors. Successful response fields remain unchanged.
+Unexpected failures never expose internal exception messages. Duplicate records
+and relationship conflicts return 409; invalid fields return 400; missing sessions
+return 401 for JSON callers. Normal form bodies are limited to 1 MiB; multipart
+uploads retain the existing 50,000,000-byte limit, enforced by actual bytes as well
+as declared length.
+
+The shared browser request helper has a 30-second deadline covering headers and
+body consumption, detects authentication loss and malformed responses, and never
+automatically retries mutations. Form errors preserve the current DOM values and
+associate field errors with the focused alert. Autosave retains its serial queue,
+explicit retry/discard behavior, and independent pending values. Authentication
+loss offers sign-in in another tab so unsaved work is retained.

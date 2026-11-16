@@ -4,7 +4,9 @@ function parseScoreChanges(body, entries, mode, maxScoreFor) {
   return entries.map((entry) => {
     const change = parseScoreInput(body[entry.key], mode, maxScoreFor(entry));
     if (change.kind === 'invalid') {
-      throw Object.assign(new Error('Invalid score. Enter a number or leave the field blank to clear it.'), { statusCode: 400 });
+      throw Object.assign(new Error('Invalid score. Enter a number or leave the field blank to clear it.'), {
+        statusCode: 400, fields: { [entry.key]: 'Enter a number, or leave blank to clear the score.' }
+      });
     }
     return { ...entry, ...change };
   });

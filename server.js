@@ -2139,11 +2139,14 @@ function sendAppPage(req, res, headers, pageArgs, title, content) {
 
 const server = http.createServer(async (req, res) => {
   const headers = {};
+  res.setHeader('X-Request-ID', crypto.randomUUID());
+  res.setHeader('Cache-Control', 'no-store');
 
   try {
     const csrfToken = getOrCreateCsrfToken(req, headers);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
+    req.allowLoginRedirect = req.method === 'POST' && pathname === '/logout';
     const user = currentUser(req);
 
     const bundledAsset = req.method === 'GET' ? STATIC_ASSETS.get(pathname) : undefined;
@@ -2166,8 +2169,12 @@ const server = http.createServer(async (req, res) => {
       return sendText(res, 409, 'This change conflicts with a linked record. Check the selected records; remove or update dependent records before deleting their parent.');
     }
     if (error.message === 'Payload too large') return sendText(res, 413, 'Payload too large');
-    if (error.statusCode) return sendText(res, error.statusCode, error.message || 'Bad Request');
-    console.error(error);
+    if (/UNIQUE constraint failed/i.test(error.message)) return sendText(res, 409, 'A record with these details already exists. Review the submitted values.');
+    if (error.statusCode) {
+      if (/application\/json/i.test(req.headers.accept || '')) return sendJson(res, error.statusCode, { error: error.message || 'Bad Request', fields: error.fields || {} }, headers);
+      return sendText(res, error.statusCode, error.message || 'Bad Request', headers);
+    }
+    console.error(JSON.stringify({ event: 'request.failed', requestId: res.getHeader('X-Request-ID') }));
     return sendText(res, 500, 'Internal Server Error');
   }
 });

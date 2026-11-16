@@ -68,7 +68,7 @@ test('record routes cascade assignments and roll back multi-step failures before
   assert.equal(invalid.status,409);assert.match(await invalid.text(),/linked record/);
   assert.deepEqual(app.withDb(db=>db.prepare('SELECT * FROM os_students WHERE id=101').get()),old);
   const active=app.withDb(db=>db.prepare('SELECT is_active FROM os_school_years WHERE id=1').get().is_active);
-  assert.equal((await app.post('/school-years',{name:'Other year',makeActive:'1'},'admin')).status,500);
+  assert.equal((await app.post('/school-years',{name:'Other year',makeActive:'1'},'admin')).status,409);
   assert.equal(app.withDb(db=>db.prepare('SELECT is_active FROM os_school_years WHERE id=1').get().is_active),active);
   assert.equal((await app.post('/person-roles',{personType:'teacher',personId:999,roleTypeId:1},'admin')).status,400);
   assert.equal((await app.post('/gradebook',{action:'add-assignment',markingPeriodId:999,title:'Invalid'},'admin')).status,400);
