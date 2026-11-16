@@ -36,7 +36,7 @@ production rollout. Leave unrelated local files untouched.
 ## Part A — Six bug fixes
 
 - [ ] **1. Make grade autosave reliable**
-  - Branch: `codex/reliable-grade-autosave`. Status: validated, awaiting PR and merge.
+  - Branch: `codex/reliable-grade-autosave`. Status: PR submitted, awaiting merge.
   - Plan: DOM-independent pending edits keyed by year/assignment/student; reachable
     debounce, serialized saves, coalesced latest values, correct in-flight reverts.
     Add a 30-second timeout, saving/saved/failed states, retained errors and explicit
@@ -52,7 +52,7 @@ production rollout. Leave unrelated local files untouched.
     26.13; all 35 tests also pass on Node 22.13. Final npm test passes; minimum-runtime syntax/refactor/tests pass. Browser verified
     two edits (90/75), Tab entry, navigation away and back, persisted averages, and
     no console errors. Screenshot capture attempted through Edge but timed out.
-  - PR: Pending. Screenshots: unavailable (Edge Page.captureScreenshot timeout).
+  - PR: https://github.com/kirbw/oakstead/pull/38. Screenshots: unavailable (Edge Page.captureScreenshot timeout).
     Manual check: enter two grades, Tab to the next student, immediately navigate
     to Dashboard, return, and confirm both grades. Simulate a failed save, verify
     leaving is blocked, then retry or explicitly discard. Merge commit: Pending.
