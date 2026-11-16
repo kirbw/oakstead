@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { applyAdditiveMigrations, validateApplicationSchema, smokeCheck } = require('./schema');
+const { smokeCheck } = require('./schema');
+const { migrateDatabase } = require('./migrations');
 
 let DatabaseSync;
 try {
@@ -106,7 +107,7 @@ function createDb({ dbFile, files = fs }) {
   }
 
   function applySchemaMigrations() {
-    applyAdditiveMigrations(open());
+    migrateDatabase(open());
   }
 
   function restoreDatabase(source, { beforeReplace = () => {}, verify = () => {} } = {}) {
@@ -121,8 +122,7 @@ function createDb({ dbFile, files = fs }) {
       try {
         validateBackupDatabase(candidateFile);
         candidate = new DatabaseSync(candidateFile);
-        validateApplicationSchema(candidate, { allowAdditive: true });
-        applyAdditiveMigrations(candidate);
+        migrateDatabase(candidate, { allowEmpty: false });
         smokeCheck(candidate);
       } catch (error) {
         throw Object.assign(new Error(`Cannot restore backup: ${error.message}`), { statusCode: 400 });

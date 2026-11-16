@@ -189,8 +189,8 @@ production rollout. Leave unrelated local files untouched.
     schema/URL/field/permission/stack changes; dependencies explicit, no new packages.
   - PR: https://github.com/kirbw/oakstead/pull/44. Merge commit: d70dfa82fdc1ff9206f9f6a6acedba20a10ed832 (2026-11-16).
 
-- [ ] **8. Standardize request handling and errors**
-  - Branch: `codex/shared-request-errors`. Status: submitted, awaiting merge.
+- [x] **8. Standardize request handling and errors**
+  - Branch: `codex/shared-request-errors`. Status: merged.
   - Plan: shared browser timeout/auth-loss/error/request-ID handling; consistent
     validation/forbidden/conflict/oversize/unexpected errors, established success
     fields retained. Safe form errors retain appropriate submitted values; hide
@@ -213,10 +213,10 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: successful fields preserved; JSON session failures now 401,
     duplicate records 409; ordinary large forms capped at 1MiB. Upload limits and
     explicit autosave retry preserved. No schema/dependency changes.
-  - PR: https://github.com/kirbw/oakstead/pull/45. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/45. Merge commit: 68173ea81d95bac28f333c64308eb066071c32a0 (2026-11-16).
 
 - [ ] **9. Introduce versioned database migrations**
-  - Branch: `codex/versioned-database-migrations`. Status: planned.
+  - Branch: `codex/versioned-database-migrations`. Status: validated, awaiting PR.
   - Plan: ordered SQLite user_version registry. Recognize/upgrade/validate supported
     unversioned schemas and establish baseline; transactionally advance versions
     only on success; reject future versions before data changes. Startup and staged
@@ -224,7 +224,20 @@ production rollout. Leave unrelated local files untouched.
   - Acceptance: fresh/historical/current/repeated/future/partial fixtures and injected
     failure preserve records, roll back fully, and retain version on failure.
     Document schema compatibility/recovery: reverting code does not undo migration.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: consecutive user_version registry establishes baseline version 1;
+    recognizes supported unversioned schemas, creates fresh DBs in a savepoint, and
+    rolls back all pending steps/data/version on failure. Startup/demo/staged restore
+    share registry; future versions and partial/unrelated schemas rejected pre-write.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (61 tests).
+    Fresh/historical/idempotent/future/partial/injected migration cases, staged future
+    rejection, data/version preservation, and all Windows restore recovery cases.
+    Browser sign-in/create backup/restore/pre-restore copy verified.
+  - Screenshot: screenshots/round-2/pr9-versioned-restore.jpg.
+  - Compatibility/recovery: historical data and orphan diagnostics preserved. No
+    downgrades/repairs/table rebuilds. Candidate migration never alters source backup.
+    Failed upgrade stops startup; reverting code does not undo schema versions.
+    Registry and recovery documented in architecture.md.
+  - PR: Pending. Merge commit: Pending.
 
 - [ ] **10. Make startup and shutdown explicit**
   - Branch: `codex/application-lifecycle`. Status: planned.
