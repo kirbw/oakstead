@@ -1,3 +1,24 @@
+const { parseScoreInput } = require('./input');
+
+function parseScoreChanges(body, entries, mode, maxScoreFor) {
+  return entries.map((entry) => {
+    const change = parseScoreInput(body[entry.key], mode, maxScoreFor(entry));
+    if (change.kind === 'invalid') {
+      throw Object.assign(new Error('Invalid score. Enter a number or leave the field blank to clear it.'), { statusCode: 400 });
+    }
+    return { ...entry, ...change };
+  });
+}
+
+function scoreWriteStatements(changes, fallbackAssignmentId) {
+  return changes.flatMap(({ assignmentId = fallbackAssignmentId, studentId, kind, score }) => {
+    if (kind === 'unchanged') return [];
+    if (kind === 'delete') return [`DELETE FROM os_scores WHERE assignment_id=${assignmentId} AND student_id=${studentId}`];
+    return [`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
+      ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score`];
+  });
+}
+
 function gradebookRedirectUrl({
   assignmentId = 0,
   gradeLevel,
@@ -46,5 +67,7 @@ function scoreFieldEntries(body, prefix = 'score_') {
 module.exports = {
   gradebookRedirectUrl,
   gridScoreEntries,
+  parseScoreChanges,
+  scoreWriteStatements,
   scoreFieldEntries
 };

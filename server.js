@@ -49,7 +49,7 @@ const {
   esc,
   formatFileSize,
   normalizeCategory,
-  scoreInputToPoints,
+  parseScoreInput,
   scoreValueForMode,
   sqlValue
 } = require('./server/input');
@@ -66,6 +66,8 @@ const { acceptsGzip, createHttpHelpers, safeInternalPath } = require('./server/h
 const {
   gradebookRedirectUrl,
   gridScoreEntries,
+  parseScoreChanges,
+  scoreWriteStatements,
   scoreFieldEntries
 } = require('./server/gradebook-utils');
 const APP_STYLESHEET = `:root {
@@ -4520,8 +4522,8 @@ function gradebookTitle(category, title) {
 }
 
 function gradebookLetter(value, scale = DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }))) {
-  const score = Number(value);
-  if (!Number.isFinite(score)) return '';
+  const score = numericValue(value);
+  if (score === null) return '';
   const rows = [...scale]
     .map((row) => ({ letter: cleanText(row.letter, 12), threshold: Number(row.threshold) }))
     .filter((row) => row.letter && Number.isFinite(row.threshold))
@@ -7135,18 +7137,12 @@ function handleRecordPost(req, res, p, body, user, headers) {
       const studentId = asInt(body.studentId);
       const assignment = authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [assignmentId]).get(assignmentId);
       requireScoreStudents(user, schoolYearId, gradeLevel, [studentId]);
-      const rawValue = String(body.scoreValue ?? '').trim();
-      let percent = null;
-      if (!rawValue) {
-        runSql(`DELETE FROM os_scores WHERE assignment_id=${assignmentId} AND student_id=${studentId};`);
-      } else {
-        const maxScore = asPoints(assignment.max_score);
-        const score = scoreInputToPoints(rawValue, scoreMode, maxScore);
-        if (score === null) return sendJson(res, 400, { ok: false, error: 'Invalid score' }, headers);
-        runSql(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
-          ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score;`);
-        percent = maxScore > 0 ? (score / maxScore) * 100 : null;
-      }
+      const maxScore = asPoints(assignment.max_score);
+      const parsed = parseScoreInput(body.scoreValue, scoreMode, maxScore);
+      if (parsed.kind === 'invalid') return sendJson(res, 400, { ok: false, error: 'Invalid score' }, headers);
+      runSqlBatch(scoreWriteStatements([{ assignmentId, studentId, ...parsed }]));
+      const stored = querySql(`SELECT score FROM os_scores WHERE assignment_id=${assignmentId} AND student_id=${studentId};`)[0];
+      const percent = stored?.score == null ? null : (stored.score / maxScore) * 100;
       const scale = letterGradeScale(schoolYearId, gradeLevel, subjectId);
       const period = querySql(`SELECT * FROM os_marking_periods WHERE id=${markingPeriodId} AND school_year_id=${schoolYearId} LIMIT 1;`)[0] || null;
       const assignmentAverage = querySql(`SELECT ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
@@ -7204,16 +7200,8 @@ function handleRecordPost(req, res, p, body, user, headers) {
       requireScoreStudents(user, schoolYearId, gradeLevel, submittedStudentIds);
       const allowedAssignments = new Map([...authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [...assignmentIds])]
         .map(([id, row]) => [id, asPoints(row.max_score)]));
-      const statements = [];
-      scoreEntries.forEach(({ key, assignmentId, studentId }) => {
-        const maxScore = allowedAssignments.get(assignmentId);
-        if (!maxScore) return;
-        const score = scoreInputToPoints(body[key], scoreMode, maxScore);
-        if (score === null) return;
-        statements.push(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
-          ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score`);
-      });
-      runSqlBatch(statements);
+      const changes = parseScoreChanges(body, scoreEntries, scoreMode, (entry) => allowedAssignments.get(entry.assignmentId));
+      runSqlBatch(scoreWriteStatements(changes));
       return redirect(res, gridRedirectTo, headers);
     }
     const teacherId = user.role === ROLE_TEACHER ? asInt(user.teacher_id) : 'NULL';
@@ -7223,16 +7211,10 @@ function handleRecordPost(req, res, p, body, user, headers) {
     if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
     const scoreEntries = scoreFieldEntries(body);
     requireScoreStudents(user, schoolYearId, gradeLevel, scoreEntries.map((entry) => entry.studentId));
+    const changes = parseScoreChanges(body, scoreEntries, scoreMode, () => maxScore);
     const assignmentId = existingAssignmentId || insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, marking_period_id, title, category, assignment_date, max_score, teacher_id)
       VALUES (${schoolYearId}, ${sqlValue(gradeLevel)}, ${subjectId}, ${markingPeriodId || 'NULL'}, ${sqlValue(cleanText(body.title, 140))}, ${sqlValue(normalizeCategory(body.category))}, ${sqlValue(cleanDate(body.assignmentDate))}, ${maxScore}, ${teacherId})`);
-    const statements = [];
-    scoreEntries.forEach(({ key, studentId }) => {
-      const score = scoreInputToPoints(body[key], scoreMode, maxScore);
-      if (score === null) return;
-      statements.push(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
-        ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score`);
-    });
-    runSqlBatch(statements);
+    runSqlBatch(scoreWriteStatements(changes, assignmentId));
     return redirect(res, gradebookRedirectUrl({
       schoolYearId,
       markingPeriodId,
@@ -7275,14 +7257,8 @@ function handleRecordPost(req, res, p, body, user, headers) {
       const maxScore = asPoints(authorizedAssignments(user, schoolYearId, gradeLevel, subjectId, [assignmentId]).get(assignmentId).max_score);
       const scoreEntries = scoreFieldEntries(body);
       requireScoreStudents(user, schoolYearId, gradeLevel, scoreEntries.map((entry) => entry.studentId));
-      const statements = [];
-      scoreEntries.forEach(({ key, studentId }) => {
-        const score = scoreInputToPoints(body[key], scoreMode, maxScore);
-        if (score === null) return;
-        statements.push(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
-          ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score`);
-      });
-      runSqlBatch(statements);
+      const changes = parseScoreChanges(body, scoreEntries, scoreMode, () => maxScore);
+      runSqlBatch(scoreWriteStatements(changes, assignmentId));
       return redirect(res, `${baseRedirect}&mode=${scoreMode}&assignmentId=${assignmentId}`, headers);
     }
 

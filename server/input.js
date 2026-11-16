@@ -91,6 +91,13 @@ function scoreInputToPoints(value, mode, maxScore) {
   return Number((points - wrong).toFixed(2));
 }
 
+function parseScoreInput(value, mode, maxScore) {
+  if (value === undefined) return { kind: 'unchanged' };
+  if (String(value ?? '').trim() === '') return { kind: 'delete' };
+  const score = scoreInputToPoints(value, mode, maxScore);
+  return score === null ? { kind: 'invalid' } : { kind: 'score', score };
+}
+
 function scoreValueForMode(score, maxScore, mode) {
   if (score === null || score === undefined || score === '') return '';
   const earned = Number(score);
@@ -122,6 +129,7 @@ module.exports = {
   esc,
   formatFileSize,
   normalizeCategory,
+  parseScoreInput,
   scoreInputToPoints,
   scoreValueForMode,
   sqlValue
