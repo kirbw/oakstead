@@ -322,6 +322,38 @@ function applyAdditiveMigrations(connection) {
 }
 
 let schemaManifest;
+function identifier(value) { return `"${String(value).replaceAll('"', '""')}"`; }
+
+function uniqueKeys(connection, table) {
+  return connection.prepare(`PRAGMA index_list(${identifier(table)});`).all()
+    .filter((index) => index.unique && !index.partial)
+    .map((index) => connection.prepare(`PRAGMA index_xinfo(${identifier(index.name)});`).all()
+      .filter((column) => column.key)
+      .map((column) => `${column.name}:${column.coll || 'BINARY'}`).sort().join(','));
+}
+
+function foreignKeys(connection, table) {
+  const groups = new Map();
+  for (const row of connection.prepare(`PRAGMA foreign_key_list(${identifier(table)});`).all()) {
+    if (!groups.has(row.id)) groups.set(row.id, []);
+    groups.get(row.id).push(row);
+  }
+  return [...groups.values()].map((rows) => {
+    rows.sort((a, b) => a.seq - b.seq);
+    return { columns: rows.map((row) => row.from), signature: JSON.stringify(rows.map((row) =>
+      [row.from, row.table, row.to, row.on_update, row.on_delete, row.match])) };
+  });
+}
+
+function affinity(type) {
+  const value = String(type).toUpperCase();
+  if (value.includes('INT')) return 'INTEGER';
+  if (/CHAR|CLOB|TEXT/.test(value)) return 'TEXT';
+  if (!value || value.includes('BLOB')) return 'BLOB';
+  if (/REAL|FLOA|DOUB/.test(value)) return 'REAL';
+  return 'NUMERIC';
+}
+
 function expectedSchema() {
   if (schemaManifest) return schemaManifest;
   const reference = new DatabaseSync(':memory:');
@@ -329,20 +361,43 @@ function expectedSchema() {
     reference.exec(SCHEMA_SQL);
     applyAdditiveMigrations(reference);
     schemaManifest = reference.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'os_%';").all()
-      .map(({ name }) => ({ table: name, columns: reference.prepare(`PRAGMA table_info(${name});`).all().map((row) => row.name) }));
+      .map(({ name }) => ({ table: name, columns: reference.prepare(`PRAGMA table_info(${identifier(name)});`).all(),
+        uniqueKeys: uniqueKeys(reference, name), foreignKeys: foreignKeys(reference, name) }));
     return schemaManifest;
   } finally { reference.close(); }
 }
 
 function validateApplicationSchema(connection, { allowAdditive = false } = {}) {
   const tables = new Set(connection.prepare("SELECT name FROM sqlite_master WHERE type='table';").all().map((row) => row.name));
-  for (const { table, columns } of expectedSchema()) {
+  for (const { table, columns, uniqueKeys: requiredKeys, foreignKeys: requiredRelations } of expectedSchema()) {
     if (!tables.has(table)) throw new Error(`Backup is missing required Oakstead table ${table}.`);
-    const actual = new Set(connection.prepare(`PRAGMA table_info(${table});`).all().map((row) => row.name));
+    const actual = new Map(connection.prepare(`PRAGMA table_info(${identifier(table)});`).all().map((row) => [row.name, row]));
     for (const column of columns) {
-      if (actual.has(column)) continue;
-      if (allowAdditive && ADDITIVE_COLUMNS.some((item) => item.table === table && item.column === column)) continue;
-      throw new Error(`Backup is missing required Oakstead column ${table}.${column}.`);
+      const row = actual.get(column.name);
+      if (!row) {
+        if (allowAdditive && ADDITIVE_COLUMNS.some((item) => item.table === table && item.column === column.name)) continue;
+        throw new Error(`Backup is missing required Oakstead column ${table}.${column.name}.`);
+      }
+      if (affinity(row.type) !== affinity(column.type) || row.pk !== column.pk || (column.notnull && !row.notnull)
+        || (column.pk && column.type === 'INTEGER' && row.type.toUpperCase() !== 'INTEGER')) {
+        throw new Error(`Backup has an incompatible column declaration or primary key for ${table}.${column.name}.`);
+      }
+      if (column.dflt_value !== null && String(row.dflt_value).replace(/[()]/g, '') !== String(column.dflt_value).replace(/[()]/g, '')) {
+        throw new Error(`Backup is missing the supported default for ${table}.${column.name}.`);
+      }
+    }
+    const actualKeys = new Set(uniqueKeys(connection, table));
+    for (const key of requiredKeys) {
+      if (!actualKeys.has(key)) throw new Error(`Backup is missing a required unique key on ${table} (${key}).`);
+    }
+    const actualRelations = new Set(foreignKeys(connection, table).map((relation) => relation.signature));
+    for (const relation of requiredRelations) {
+      // Historical additive migrations cannot attach table-level FKs. Keep that
+      // documented compatibility exception; never rebuild user tables implicitly.
+      const legacyAdditive = relation.columns.every((column) => ADDITIVE_COLUMNS.some((item) => item.table === table && item.column === column));
+      if (!legacyAdditive && !actualRelations.has(relation.signature)) {
+        throw new Error(`Backup is missing a supported foreign-key relationship on ${table} (${relation.columns.join(', ')}).`);
+      }
     }
   }
 }
