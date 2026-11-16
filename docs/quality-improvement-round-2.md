@@ -100,7 +100,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/40. Merge commit: 44e0b34528de7857239d9548d7e87bc6eb7edb9c (2026-11-16).
 
 - [ ] **4. Preserve Unicode in multipart forms**
-  - Branch: `codex/fix-multipart-unicode`. Status: validated, awaiting PR.
+  - Branch: `codex/fix-multipart-unicode`. Status: submitted, awaiting merge.
   - Plan: preserve multipart/file bytes and decode text as UTF-8. Preserve upload
     limits and file validation. Reject malformed bodies before mutations. Do not
     guess repairs for previously corrupted stored text.
@@ -115,7 +115,7 @@ production rollout. Leave unrelated local files untouched.
   - Screenshots: Edge CDP capture attempted and timed out. Manual: save an accented/
     non-Latin/emoji school name in System Settings, reload, check exact text and logo.
   - Compatibility: upload limits and signature checks retained; no historical repair.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/41. Merge commit: Pending.
 
 - [ ] **5. Make school-date calculations timezone independent**
   - Branch: `codex/timezone-safe-school-dates`. Status: planned.
