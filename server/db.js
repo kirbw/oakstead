@@ -163,6 +163,7 @@ function createDb({ dbFile, files = fs }) {
   process.on('exit', close);
 
   return {
+    isOpen: () => db !== null,
     applySchemaMigrations,
     checkpoint,
     close,

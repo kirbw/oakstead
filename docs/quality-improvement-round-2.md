@@ -215,8 +215,8 @@ production rollout. Leave unrelated local files untouched.
     explicit autosave retry preserved. No schema/dependency changes.
   - PR: https://github.com/kirbw/oakstead/pull/45. Merge commit: 68173ea81d95bac28f333c64308eb066071c32a0 (2026-11-16).
 
-- [ ] **9. Introduce versioned database migrations**
-  - Branch: `codex/versioned-database-migrations`. Status: submitted, awaiting merge.
+- [x] **9. Introduce versioned database migrations**
+  - Branch: `codex/versioned-database-migrations`. Status: merged.
   - Plan: ordered SQLite user_version registry. Recognize/upgrade/validate supported
     unversioned schemas and establish baseline; transactionally advance versions
     only on success; reject future versions before data changes. Startup and staged
@@ -237,17 +237,30 @@ production rollout. Leave unrelated local files untouched.
     downgrades/repairs/table rebuilds. Candidate migration never alters source backup.
     Failed upgrade stops startup; reverting code does not undo schema versions.
     Registry and recovery documented in architecture.md.
-  - PR: https://github.com/kirbw/oakstead/pull/46. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/46. Merge commit: e6fbe7874fb841faf2fd7f71d4522a2e98e8d3ef (2026-11-16).
 
 - [ ] **10. Make startup and shutdown explicit**
-  - Branch: `codex/application-lifecycle`. Status: planned.
+  - Branch: `codex/application-lifecycle`. Status: submitted, awaiting merge.
   - Plan: create/start/stop; config validation and DB migration precede listener;
     background jobs share lifecycle. Unwind partial startup. Stop accepting requests,
     stop jobs, drain up to five seconds, checkpoint/close DB. Idempotent stop and
     existing restart/update paths; utilities never start listeners/timers by accident.
   - Acceptance: stage failures, repeated stop, pending requests, timer cleanup, port
     release, reopen, forced-stop logging and supported signals work on Windows.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: inert import and create/start/stop API; ordered database/jobs/
+    listener startup and reverse cleanup, including partially started components.
+    Stop listener/jobs, drain up to five seconds, checkpoint/close DB. Idempotent
+    signals/API shutdown; CLI utilities close without listeners/timers. Update worker
+    asks parent over IPC to drain before replacement/supervisor exit.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (67 tests)
+    on Windows. Startup-stage/cleanup failures, repeated API lifecycle, timers,
+    pending and stalled HTTP, port reuse/bind failure retry, DB reopen, utility exit,
+    signals and replacement order covered. Browser startup/sign-in verified.
+  - Screenshot: screenshots/round-2/pr10-lifecycle-startup.jpg.
+  - Compatibility: existing routes/schema unchanged; invalid HOST/PORT rejected.
+    Windows forced termination bypasses JS cleanup; normal API cleanup tested.
+    Standalone updater requires manual restart; managed worker uses parent IPC.
+  - PR: https://github.com/kirbw/oakstead/pull/47. Merge commit: Pending.
 
 - [ ] **11. Add operational health and query visibility**
   - Branch: `codex/operational-health`. Status: planned.
