@@ -35,8 +35,8 @@ production rollout. Leave unrelated local files untouched.
 
 ## Part A — Six bug fixes
 
-- [ ] **1. Make grade autosave reliable**
-  - Branch: `codex/reliable-grade-autosave`. Status: PR submitted, awaiting merge.
+- [x] **1. Make grade autosave reliable**
+  - Branch: `codex/reliable-grade-autosave`. Status: merged.
   - Plan: DOM-independent pending edits keyed by year/assignment/student; reachable
     debounce, serialized saves, coalesced latest values, correct in-flight reverts.
     Add a 30-second timeout, saving/saved/failed states, retained errors and explicit
@@ -55,18 +55,28 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/38. Screenshots: unavailable (Edge Page.captureScreenshot timeout).
     Manual check: enter two grades, Tab to the next student, immediately navigate
     to Dashboard, return, and confirm both grades. Simulate a failed save, verify
-    leaving is blocked, then retry or explicitly discard. Merge commit: Pending.
+    leaving is blocked, then retry or explicitly discard. Merge commit: 7746d26925169c264be8945371275b247dbd0c7c (2026-11-16).
   - Compatibility/recovery: no schema or permission changes. Sudden process/tab
     termination cannot guarantee completion; unload warning is best effort.
 
 - [ ] **2. Restrict the teacher dashboard consistently**
-  - Branch: `codex/scope-teacher-dashboard`. Status: planned.
+  - Branch: `codex/scope-teacher-dashboard`. Status: submitted, awaiting merge.
   - Plan: pass authenticated user into dashboard loading. Scope counts, recent
     assignments, charts, and averages through existing grade/classroom access rules.
     Admin/principal remain schoolwide; parent redirect unchanged; no creator rule.
   - Acceptance: contrasting role fixtures cannot leak other grades/classrooms via
     names, counts, or statistics; authorized grade/classroom access remains.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: central assignment scope now includes authorized grades and
+    classrooms; dashboard uses that scope and accessible enrolled students for all
+    counts and score aggregates. Administrator/principal behavior remains schoolwide.
+  - Validation: npm test and Node 22.13 syntax/refactor/full tests pass (36 tests).
+    Role fixture covers hidden grades/classrooms, cross-year zero counts, inaccessible
+    student scores, teacher-created-by-others access, and parent redirect. Edge
+    browser verified teacher KPI values 1/1/1/1/2 and only authorized assignments.
+  - Screenshots: capture attempted; Edge CDP timed out again. Manual check: compare
+    teacher and admin Dashboard, change school year, confirm scoped counts/entries.
+  - Compatibility: no schema change; existing grade/classroom rules reused.
+  - PR: https://github.com/kirbw/oakstead/pull/39. Merge commit: Pending.
 
 - [ ] **3. Make score clearing consistent**
   - Branch: `codex/consistent-score-clearing`. Status: planned.
