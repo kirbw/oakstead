@@ -7,7 +7,7 @@ const { once } = require('node:events');
 
 const root = path.resolve(__dirname, '../..');
 
-async function startApp(t, { prepare, demoMode = false } = {}) {
+async function startApp(t, { prepare, demoMode = false, entryPoint = path.join(root, 'server.js') } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oakstead-test-'));
   if (prepare) prepare(directory);
   const probe = net.createServer();
@@ -15,7 +15,7 @@ async function startApp(t, { prepare, demoMode = false } = {}) {
   await once(probe, 'listening');
   const port = probe.address().port;
   await new Promise((resolve) => probe.close(resolve));
-  const child = spawn(process.execPath, [path.join(root, 'server.js')], {
+  const child = spawn(process.execPath, [entryPoint], {
     cwd: root,
     env: { ...process.env, DEMO_MODE: demoMode ? '1' : '0', HOST: '127.0.0.1', PORT: String(port),
       OAKSTEAD_DATA_DIR: directory, DB_FILE: path.join(directory, 'school.db') },

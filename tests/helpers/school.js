@@ -1,8 +1,8 @@
 const { DatabaseSync } = require('node:sqlite');
 const { startApp } = require('./app');
 
-async function schoolFixture(t) {
-  const app = await startApp(t);
+async function schoolFixture(t, options) {
+  const app = await startApp(t, options);
   const withDb = (fn) => {
     const db = new DatabaseSync(app.dbFile);
     try { return fn(db); } finally { db.close(); }
