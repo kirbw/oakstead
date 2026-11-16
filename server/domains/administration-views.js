@@ -65,14 +65,14 @@ function createViews({
         <article class="kpi"><div class="kpi-head"><span>Classrooms</span><div class="kpi-icon">${KPI_ICONS.classrooms}</div></div><strong>${kpis.classrooms}</strong></article>
         <article class="kpi"><div class="kpi-head"><span>Assignments</span><div class="kpi-icon">${KPI_ICONS.assignments}</div></div><strong>${kpis.assignments}</strong></article>
       </section>
-      <div class="split">
+      <div class="split dashboard-split">
         <section class="chart-panel">
           <div class="chart-head"><h2>${teacher ? 'Your Classes' : 'School'} Average &mdash; Past 7 School Days</h2><span>${overallLabel}</span></div>
           ${chart.svg}
         </section>
         <section class="ledger">
           <div class="ledger-head"><h2>Recent Gradebook Entries</h2><p>Newest lessons, quizzes, and tests in this school year.</p></div>
-          <div class="table-wrap compact-table"><table>
+          <div class="table-wrap compact-table dashboard-recent" tabindex="0" role="region" aria-label="Recent gradebook entries"><table>
             <tr><th>Assignment</th><th>Type</th><th>Gr.</th><th>Subject</th><th>Avg</th></tr>
             ${recent.map((row) => `<tr>
               <td>${esc(row.title)}</td>

@@ -18,6 +18,8 @@ test('dashboard scopes every count, assignment and score to teacher access', asy
   `));
   const page = async (role, url = '/') => app.request(url, { headers: { Cookie: app.cookie(role) } });
   const teacher = await (await page('teacher')).text();
+  assert.match(teacher, /class="split dashboard-split"/);
+  assert.match(teacher, /tabindex="0" role="region" aria-label="Recent gradebook entries"/);
   assert.match(teacher, /Allowed assignment/);
   // Grade-neutral assignments for authorized grades remain visible even if another teacher created them.
   assert.match(teacher, /Other subject secret/);

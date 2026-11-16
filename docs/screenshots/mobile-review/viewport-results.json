@@ -1,0 +1,557 @@
+{
+  "mainScreens": [
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "Dashboard",
+      "scroll": 378,
+      "width": 378
+    },
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "Assignments",
+      "scroll": 393,
+      "width": 393
+    },
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "Gradebook",
+      "scroll": 393,
+      "width": 393
+    },
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "Absences",
+      "scroll": 393,
+      "width": 393
+    },
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "Reports",
+      "scroll": 378,
+      "width": 378
+    },
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "Report Card",
+      "scroll": 393,
+      "width": 393
+    },
+    {
+      "actual": [
+        393,
+        852
+      ],
+      "name": "School Setup",
+      "scroll": 378,
+      "width": 378
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "Dashboard",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "Assignments",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "Gradebook",
+      "scroll": 375,
+      "width": 375
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "Absences",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "Reports",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "Report Card",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "name": "School Setup",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "Dashboard",
+      "scroll": 375,
+      "width": 375
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "Assignments",
+      "scroll": 390,
+      "width": 390
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "Gradebook",
+      "scroll": 390,
+      "width": 390
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "Absences",
+      "scroll": 390,
+      "width": 390
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "Reports",
+      "scroll": 375,
+      "width": 375
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "Report Card",
+      "scroll": 390,
+      "width": 390
+    },
+    {
+      "actual": [
+        390,
+        844
+      ],
+      "name": "School Setup",
+      "scroll": 375,
+      "width": 375
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "Dashboard",
+      "scroll": 399,
+      "width": 399
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "Assignments",
+      "scroll": 414,
+      "width": 414
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "Gradebook",
+      "scroll": 414,
+      "width": 414
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "Absences",
+      "scroll": 414,
+      "width": 414
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "Reports",
+      "scroll": 399,
+      "width": 399
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "Report Card",
+      "scroll": 414,
+      "width": 414
+    },
+    {
+      "actual": [
+        414,
+        896
+      ],
+      "name": "School Setup",
+      "scroll": 399,
+      "width": 399
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "Dashboard",
+      "scroll": 415,
+      "width": 415
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "Assignments",
+      "scroll": 430,
+      "width": 430
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "Gradebook",
+      "scroll": 430,
+      "width": 430
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "Absences",
+      "scroll": 430,
+      "width": 430
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "Reports",
+      "scroll": 415,
+      "width": 415
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "Report Card",
+      "scroll": 430,
+      "width": 430
+    },
+    {
+      "actual": [
+        430,
+        932
+      ],
+      "name": "School Setup",
+      "scroll": 415,
+      "width": 415
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "Dashboard",
+      "scroll": 425,
+      "width": 425
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "Assignments",
+      "scroll": 440,
+      "width": 440
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "Gradebook",
+      "scroll": 440,
+      "width": 440
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "Absences",
+      "scroll": 440,
+      "width": 440
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "Reports",
+      "scroll": 425,
+      "width": 425
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "Report Card",
+      "scroll": 440,
+      "width": 440
+    },
+    {
+      "actual": [
+        440,
+        956
+      ],
+      "name": "School Setup",
+      "scroll": 425,
+      "width": 425
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "Dashboard",
+      "scroll": 829,
+      "width": 829
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "Assignments",
+      "scroll": 829,
+      "width": 829
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "Gradebook",
+      "scroll": 829,
+      "width": 829
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "Absences",
+      "scroll": 829,
+      "width": 829
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "Reports",
+      "scroll": 829,
+      "width": 829
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "Report Card",
+      "scroll": 829,
+      "width": 829
+    },
+    {
+      "actual": [
+        844,
+        390
+      ],
+      "name": "School Setup",
+      "scroll": 829,
+      "width": 829
+    }
+  ],
+  "setupSections": [
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Families\n        10 households",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "School Districts\n        5 districts",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Congregations\n        6 churches",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Teachers\n        5 records",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Classrooms\n        10 rooms in 2025-2026",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Subjects\n        10 subjects",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 4,
+      "name": "School Years\n        1 years",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Grade Weights\n        2 groups",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Letter Grades\n        0 scales",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 3,
+      "name": "Users\n        4 sign-ins",
+      "scroll": 360,
+      "width": 360
+    },
+    {
+      "actual": [
+        375,
+        667
+      ],
+      "forms": 4,
+      "name": "System Settings\n        Oakstead School",
+      "scroll": 360,
+      "width": 360
+    }
+  ]
+}

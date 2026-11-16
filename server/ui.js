@@ -75,6 +75,23 @@ button[aria-busy="true"] { opacity: .7; cursor: progress; }
   .report-card-document { min-width: 0; max-width: 100%; overflow-x: auto; }
   .report-card-spread { min-width: 1060px; }
 }
+@media screen {
+  .table-wrap { min-width: 0; overflow-x: auto; }
+  .split > * { min-width: 0; }
+  .dashboard-recent > table { min-width: 25rem; }
+}
+@media screen and (min-width: 1040px) and (max-width: 1279px) {
+  .dashboard-split { grid-template-columns: minmax(0, 1fr); }
+}
+@media screen and (max-width: 600px) {
+  .table-wrap.dashboard-recent > table { min-width: 0; table-layout: fixed; }
+  .dashboard-recent :is(th,td) { padding: .6rem .35rem; font-size: .78rem; }
+  .dashboard-recent th:first-child { width: 25%; }
+  .dashboard-recent th:nth-child(2) { width: 3rem; }
+  .dashboard-recent th:nth-child(3) { width: 2.2rem; }
+  .dashboard-recent th:last-child { width: 5rem; }
+  .dashboard-recent .badge { margin-right: 0; }
+}
 `;
 
 module.exports = { notice, emptyState, field, button, UI_STYLESHEET };
