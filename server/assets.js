@@ -730,6 +730,8 @@ tr:last-child td { border-bottom: 0; }
 }
 .badge {
   display: inline-flex;
+  white-space: nowrap;
+  flex-shrink: 0;
   align-items: center;
   min-height: 25px;
   padding: 3px 9px;
@@ -986,6 +988,7 @@ tr:last-child td { border-bottom: 0; }
 }
 .gb-grid-scroll {
   width: 100%;
+  isolation: isolate;
   overflow: auto;
   background: linear-gradient(to bottom, var(--grade-grid-head) 0 126px, var(--paper) 126px);
   scrollbar-color: #a6adba #e5e7eb;
