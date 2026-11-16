@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { setupFixture } = require('../tests/helpers/setup-fixture');
 
 const fixture=setupFixture({familyCount:400,studentCount:1200});
-const normalize=html=>html.replace(/\s+/g,' ').replace(/> </g,'><').trim();
+const normalize=html=>html.replace(/\s*·\s*<a href="\/system\/operations">Operational health<\/a>/g,'').replace(/\s+/g,' ').replace(/> </g,'><').trim();
 function measure(render,url) {
   render(fixture.selectedYear,'fixture',url,{role:'admin'});
   const timings=[];let stats;

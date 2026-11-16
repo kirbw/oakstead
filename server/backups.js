@@ -26,6 +26,7 @@ function createBackupScheduler({ isDue, createBackup, onError = console.error,
   timer.unref();
   return {
     check,
+    status: () => ({ running, stopped }),
     stop() { stopped = true; clearIntervalFn(timer); }
   };
 }

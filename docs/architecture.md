@@ -87,3 +87,23 @@ Network/update utilities do not start listeners or timers. Update workers reques
 a restart over their parent IPC channel; the parent drains before starting a
 replacement, or exits for its supervisor to restart. Standalone update utilities
 request a manual restart instead of accidentally starting an application server.
+
+## Operational visibility
+
+`/health` is public and returns only readiness (200) or unavailable (503). It checks
+lifecycle state, an already-open SQLite connection and a lightweight SELECT probe;
+it never opens a stopped database or scans school records. An unbound listener is
+unreachable during early startup and after shutdown.
+
+Administrators can open `/system/operations` from System Settings to view process
+uptime, request/database counts and latency, backup outcomes, scheduler status and
+integrity links. Counters/histograms and capped route aggregates are process-local;
+no per-request history or external telemetry is stored. Backup failure timestamps
+remain visible until process restart, including after a later successful backup.
+
+JSON logs contain generated request ID, known route label (no query string), HTTP
+method, status and duration. Unknown routes/methods are grouped. Database labels
+are fixed SQL-operation names, never SQL text or parameters; operations over 100ms
+produce a slow-operation event. Counts measure wrapped application calls/batches,
+not individual statements inside migration internals. Observers cannot change
+database outcomes. Reproduce instrumentation timing with npm run benchmark:operations.

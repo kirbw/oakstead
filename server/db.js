@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { smokeCheck } = require('./schema');
 const { migrateDatabase } = require('./migrations');
+const { sqlOperation } = require('./operations');
 
 let DatabaseSync;
 try {
@@ -13,8 +14,20 @@ try {
   process.exit(1);
 }
 
-function createDb({ dbFile, files = fs }) {
+function createDb({ dbFile, files = fs, onQuery, now = () => performance.now() }) {
   let db = null;
+
+  function measure(operation, callback) {
+    if (!onQuery) return callback();
+    const started = now();
+    let failed = false;
+    try { return callback(); }
+    catch (error) { failed = true; throw error; }
+    finally {
+      try { onQuery({ operation, durationMs: now() - started, failed }); }
+      catch { /* Diagnostics must never change database outcomes. */ }
+    }
+  }
 
   function open() {
     if (db) return db;
@@ -34,12 +47,12 @@ function createDb({ dbFile, files = fs }) {
   }
 
   function runSql(sql) {
-    open().exec(String(sql));
+    measure(sqlOperation(sql), () => open().exec(String(sql)));
     return '';
   }
 
   function querySql(sql) {
-    return open().prepare(String(sql)).all();
+    return measure(sqlOperation(sql), () => open().prepare(String(sql)).all());
   }
 
   function insertReturningId(sql) {
@@ -52,7 +65,7 @@ function createDb({ dbFile, files = fs }) {
     if (!transactionSql) return;
     const connection = open();
     try {
-      connection.exec(transactionSql);
+      measure('BATCH', () => connection.exec(transactionSql));
     } catch (error) {
       // The CLI backend rolled back automatically when the subprocess died; a
       // persistent connection would otherwise be left inside the failed
@@ -63,21 +76,21 @@ function createDb({ dbFile, files = fs }) {
   }
 
   function checkpoint() {
-    return open().prepare('PRAGMA wal_checkpoint(TRUNCATE);').get() || {};
+    return measure('PRAGMA', () => open().prepare('PRAGMA wal_checkpoint(TRUNCATE);').get()) || {};
   }
 
   let transactionId = 0;
   function transaction(fn) {
     const connection = open();
     const savepoint = `oakstead_tx_${++transactionId}`;
-    connection.exec(`SAVEPOINT ${savepoint};`);
+    measure('TRANSACTION', () => connection.exec(`SAVEPOINT ${savepoint};`));
     try {
       const result = fn();
       if (result && typeof result.then === 'function') throw new Error('Database transactions require synchronous callbacks.');
-      connection.exec(`RELEASE ${savepoint};`);
+      measure('TRANSACTION', () => connection.exec(`RELEASE ${savepoint};`));
       return result;
     } catch (error) {
-      try { connection.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`); } catch {}
+      try { measure('TRANSACTION', () => connection.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`)); } catch {}
       throw error;
     }
   }
@@ -107,7 +120,7 @@ function createDb({ dbFile, files = fs }) {
   }
 
   function applySchemaMigrations() {
-    migrateDatabase(open());
+    measure('DDL', () => migrateDatabase(open()));
   }
 
   function restoreDatabase(source, { beforeReplace = () => {}, verify = () => {} } = {}) {

@@ -239,8 +239,8 @@ production rollout. Leave unrelated local files untouched.
     Registry and recovery documented in architecture.md.
   - PR: https://github.com/kirbw/oakstead/pull/46. Merge commit: e6fbe7874fb841faf2fd7f71d4522a2e98e8d3ef (2026-11-16).
 
-- [ ] **10. Make startup and shutdown explicit**
-  - Branch: `codex/application-lifecycle`. Status: submitted, awaiting merge.
+- [x] **10. Make startup and shutdown explicit**
+  - Branch: `codex/application-lifecycle`. Status: merged.
   - Plan: create/start/stop; config validation and DB migration precede listener;
     background jobs share lifecycle. Unwind partial startup. Stop accepting requests,
     stop jobs, drain up to five seconds, checkpoint/close DB. Idempotent stop and
@@ -260,10 +260,10 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: existing routes/schema unchanged; invalid HOST/PORT rejected.
     Windows forced termination bypasses JS cleanup; normal API cleanup tested.
     Standalone updater requires manual restart; managed worker uses parent IPC.
-  - PR: https://github.com/kirbw/oakstead/pull/47. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/47. Merge commit: 20f2403d26f962deffd6ad9b5381b4ea0aadc6c0 (2026-11-16).
 
 - [ ] **11. Add operational health and query visibility**
-  - Branch: `codex/operational-health`. Status: planned.
+  - Branch: `codex/operational-health`. Status: submitted, awaiting merge.
   - Plan: structured request ID/normalized route/status/duration logs; DB counts and
     timings, operation-label warnings over 100ms; never raw SQL parameters or records.
     Bounded process-local aggregates. Admin view: uptime/version/readiness, request/
@@ -271,7 +271,24 @@ production rollout. Leave unrelated local files untouched.
     with lightweight DB probe, no school data or repeated integrity scan.
   - Acceptance: DB failure/shutdown unavailable, backup failures visible, bounded
     state and redaction of cookies/passwords/names/scores; benchmark overhead.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: generated-ID structured request logs, normalized route labels,
+    fixed-operation query timing/count/failure/slow events, bounded histograms and
+    route aggregates. Public /health uses already-open DB/lifecycle probe; admin-only
+    /system/operations shows uptime/version/metrics/backup outcomes/scheduler/links.
+    Backup failures remain visible after recovery; no raw SQL/parameters/PII logs.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (72 tests).
+    Bounded/redacted logs, observer safety, DB failures, real 503 recovery, admin-only
+    access/link, backup failure/recovery, no cookies/data in health. Browser admin
+    operational view verified and screenshot captured.
+  - Performance: identical representative grade fixture, 15 interleaved runs: plain
+    66.40ms / instrumented 63.74ms (timing noise); 48 expected/measured calls. Earlier
+    run 62.07ms / 66.08ms. Reproduce with npm run benchmark:operations. Setup query
+    counts unchanged; new admin link is the only intentional baseline HTML change.
+  - Screenshot: screenshots/round-2/pr11-operational-health.jpg.
+  - Compatibility: no schema/dependency changes; new public readiness/admin-only
+    diagnostics routes. Metrics process-local; counts represent calls/batches, not
+    individual migration statements. Closed DB never reopened by health.
+  - PR: https://github.com/kirbw/oakstead/pull/48. Merge commit: Pending.
 
 - [ ] **12. Standardize visual controls and UI states**
   - Branch: `codex/consistent-ui-states`. Status: planned.
