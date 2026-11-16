@@ -18,6 +18,7 @@ function createPageRoutes({
   isAdmin,
   isParent,
   loginPage,
+  operationalPage,
   parentPage,
   path,
   readUpdateStatus,
@@ -68,6 +69,11 @@ function createPageRoutes({
     if (pathname === '/system/diagnostics') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
       return sendAppPage(req, res, headers, pageArgs, 'Data Integrity', dataIntegrityPage());
+    }
+
+    if (pathname === '/system/operations') {
+      if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
+      return sendAppPage(req, res, headers, pageArgs, 'Operational Health', operationalPage());
     }
 
     if (pathname === '/') {

@@ -53,6 +53,8 @@ const {
   sqlValue
 } = require('./server/input');
 const { createDb } = require('./server/db');
+const { createOperationalMonitor, databaseReady, renderOperationalPage } = require('./server/operations');
+const operations = createOperationalMonitor();
 const { createLifecycle, stopHttpServer, installShutdownSignals, restartAfterDrain } = require('./server/lifecycle');
 let application;
 const { addDays, daysBetween, schoolDateRange } = require('./server/dates');
@@ -155,7 +157,7 @@ function gridModeToggle(offUrl, onUrl, isGrid) {
   </div>`;
 }
 
-const db = createDb({ dbFile: DB_FILE });
+const db = createDb({ dbFile: DB_FILE, onQuery: operations.recordQuery });
 const { runSql, querySql, insertReturningId } = db;
 
 function runSqlBatch(statements) {
@@ -174,6 +176,17 @@ function backupPath(fileName) {
 }
 
 function createDatabaseBackup(reason = 'manual') {
+  try {
+    const result = performDatabaseBackup(reason);
+    operations.recordBackup(true);
+    return result;
+  } catch (error) {
+    operations.recordBackup(false);
+    throw error;
+  }
+}
+
+function performDatabaseBackup(reason) {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const safeReason = cleanText(reason, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'manual';
   const fileName = `oakstead-backup-${timestampForFile()}-${safeReason}.db`;
@@ -2028,6 +2041,17 @@ async function handlePost(req, res, p, body, user, headers) {
   return sendText(res, 404, 'Not Found');
 }
 
+function readyForRequests() {
+  return databaseReady({ state: application?.state(), isOpen: db.isOpen, query: querySql });
+}
+
+function operationalPage() {
+  return renderOperationalPage(operations.snapshot(), { escapeHtml: esc, version: APP_VERSION,
+    ready: readyForRequests(), backupAt: getSetting('backup_last_at', ''), scheduler: backupScheduler?.status() });
+}
+
+operations.configureRoutes([...domainRoutes.paths, '/', '/parent', '/setup', '/reports', '/report-cards', '/families', '/users', '/system/diagnostics', '/system/operations', '/system-update/status', '/backup/download', '/assets/app.css', '/assets/app.js', '/assets/logo', '/assets/favicon', '/health']);
+
 const handleGet = require('./server/routes').createPageRoutes({
   DEMO_MODE,
   absencesPage,
@@ -2048,6 +2072,7 @@ const handleGet = require('./server/routes').createPageRoutes({
   isAdmin,
   isParent,
   loginPage,
+  operationalPage,
   parentPage,
   path,
   readUpdateStatus,
@@ -2104,15 +2129,31 @@ function sendAppPage(req, res, headers, pageArgs, title, content) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const started = performance.now();
+  let pathname = '/other';
+  let recorded = false;
+  const record = () => {
+    if (recorded) return;
+    recorded = true;
+    operations.recordRequest({ requestId: res.getHeader('X-Request-ID'), method: req.method, pathname,
+      status: res.writableFinished ? res.statusCode : 499, durationMs: performance.now() - started });
+  };
+  res.once('finish', record);
+  res.once('close', record);
   const headers = {};
   res.setHeader('X-Request-ID', crypto.randomUUID());
   res.setHeader('Cache-Control', 'no-store');
 
   try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    pathname = url.pathname;
+    if (req.method === 'GET' && pathname === '/health') {
+      const ready = readyForRequests();
+      res.writeHead(ready ? 200 : 503, { ...securityHeaders(), 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ status: ready ? 'ready' : 'unavailable' }));
+    }
     if (application?.state() === 'stopping') return sendText(res, 503, 'Oakstead is shutting down. Please try again shortly.');
     const csrfToken = getOrCreateCsrfToken(req, headers);
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const pathname = url.pathname;
     req.allowLoginRedirect = req.method === 'POST' && pathname === '/logout';
     const user = currentUser(req);
 
