@@ -291,7 +291,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/48. Merge commit: 1950122360fcb684d1775d84f1d8cc83eb1ba805 (2026-11-16).
 
 - [ ] **12. Standardize visual controls and UI states**
-  - Branch: `codex/consistent-ui-states`. Status: implemented; preparing PR.
+  - Branch: `codex/consistent-ui-states`. Status: submitted, awaiting merge.
   - Plan: document/consolidate semantic colors, spacing/type/focus/controls while
     preserving green identity/layouts. Shared fields/buttons/notices/empty/loading/
     save/error patterns distinguish failure from empty and offer safe retry. Keyboard
@@ -328,4 +328,4 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: no schema/dependency, route, grading or authorization changes.
     Theme preferences retain their existing storage; no browser grade persistence.
     Screenshots/edits use disposable fixture data; production untouched.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/49. Merge commit: Pending.
