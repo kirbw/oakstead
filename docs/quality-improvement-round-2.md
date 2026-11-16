@@ -118,7 +118,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/41. Merge commit: 9cb762920ac1cea32303e72219df86cdaba7edc5 (2026-11-16).
 
 - [ ] **5. Make school-date calculations timezone independent**
-  - Branch: `codex/timezone-safe-school-dates`. Status: validated, awaiting PR.
+  - Branch: `codex/timezone-safe-school-dates`. Status: submitted, awaiting merge.
   - Plan: UTC date-only calendar helpers, real date validation and ordered school
     year ranges, consistently used for year/period calculations. Preserve inclusive
     days, explicit period links/IDs, and stored historical dates.
@@ -132,7 +132,7 @@ production rollout. Leave unrelated local files untouched.
     Browser saved unchanged periods and confirmed first date and full period table.
   - Screenshot: screenshots/round-2/pr5-school-dates.jpg (in-app browser; Edge capture
     unavailable). Compatibility: no stored date shifts/schema changes/repairs.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/42. Merge commit: Pending.
 
 - [ ] **6. Validate database constraints before restore**
   - Branch: `codex/validate-backup-constraints`. Status: planned.
