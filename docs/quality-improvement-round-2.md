@@ -240,7 +240,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/46. Merge commit: e6fbe7874fb841faf2fd7f71d4522a2e98e8d3ef (2026-11-16).
 
 - [ ] **10. Make startup and shutdown explicit**
-  - Branch: `codex/application-lifecycle`. Status: validated, awaiting PR.
+  - Branch: `codex/application-lifecycle`. Status: submitted, awaiting merge.
   - Plan: create/start/stop; config validation and DB migration precede listener;
     background jobs share lifecycle. Unwind partial startup. Stop accepting requests,
     stop jobs, drain up to five seconds, checkpoint/close DB. Idempotent stop and
@@ -260,7 +260,7 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: existing routes/schema unchanged; invalid HOST/PORT rejected.
     Windows forced termination bypasses JS cleanup; normal API cleanup tested.
     Standalone updater requires manual restart; managed worker uses parent IPC.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/47. Merge commit: Pending.
 
 - [ ] **11. Add operational health and query visibility**
   - Branch: `codex/operational-health`. Status: planned.
