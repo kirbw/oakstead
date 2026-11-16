@@ -27,7 +27,17 @@ function createService({
       const throttle = loginThrottleStatus(req, username);
       if (throttle) return text(429, 'Too many sign-in attempts. Please try again later.', { 'Retry-After': String(throttle.retryAfter) });
       const row = querySql(`SELECT * FROM os_users WHERE username=${sqlValue(username)} LIMIT 1;`)[0];
-      if (!row || !verifyPassword(password, row.password_hash)) {
+      let valid = false;
+      try { valid = Boolean(row) && await verifyPassword(password, row.password_hash); }
+      catch (error) {
+        if (error.code === 'AUTH_BUSY') return text(503, 'Sign-in is busy. Please try again shortly.', { 'Retry-After': '1' });
+        throw error;
+      }
+      // Other attempts, password changes or deletion may finish while scrypt runs.
+      const currentThrottle = loginThrottleStatus(req, username);
+      if (currentThrottle) return text(429, 'Too many sign-in attempts. Please try again later.', { 'Retry-After': String(currentThrottle.retryAfter) });
+      const current = row && querySql(`SELECT * FROM os_users WHERE id=${asInt(row.id)} LIMIT 1;`)[0];
+      if (!valid || !current || current.password_hash !== row.password_hash) {
         recordLoginFailure(req, username);
         return redirectTo('/login?error=1', headers);
       }
