@@ -112,3 +112,5 @@ Normal workload: use the PowerShell settings in school-results.md.
 For profiling set LOAD_PROFILE=1, LOAD_LEVELS=1,50 and LOAD_STAGE_SECONDS=5;
 leave LOAD_REAUTH_EVERY=0. Remove LOAD_PROFILE before timing comparison runs.
 No production or user demo data is touched.
+
+Implementation PR: https://github.com/kirbw/oakstead/pull/54.
