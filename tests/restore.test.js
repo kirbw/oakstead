@@ -17,6 +17,62 @@ function databaseFile(file, label) {
   connection.close();
 }
 
+test('restore rejects missing structural constraints before backups or replacement', (t) => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'oakstead-constraints-'));
+  const live=path.join(directory,'live.db');databaseFile(live,'Original');
+  const db=createDb({dbFile:live});
+  t.after(()=>{db.close();fs.rmSync(directory,{recursive:true,force:true});});
+  const candidates=[
+    ['primary',sql=>sql.replace('id INTEGER PRIMARY KEY AUTOINCREMENT','id INTEGER'),/primary key/],
+    ['unique',sql=>sql.replace('UNIQUE (assignment_id, student_id),',''),/unique key.*os_scores/],
+    ['foreign',sql=>sql.replace('FOREIGN KEY (assignment_id) REFERENCES os_assignments(id) ON DELETE CASCADE,',''),/foreign-key.*os_scores/],
+    ['cascade',sql=>sql.replace('REFERENCES os_assignments(id) ON DELETE CASCADE','REFERENCES os_assignments(id) ON DELETE RESTRICT'),/foreign-key.*os_scores/],
+    ['affinity',sql=>sql.replace('score REAL,','score TEXT,'),/os_scores.score/],
+    ['partial',sql=>sql.replace('UNIQUE (assignment_id, student_id),','')+'\nCREATE UNIQUE INDEX partial_scores ON os_scores(assignment_id,student_id) WHERE score IS NOT NULL;',/unique key.*os_scores/]
+  ];
+  let backups=0;
+  for(const [name,change,pattern] of candidates) {
+    const file=path.join(directory,`${name}.db`),connection=new DatabaseSync(file);
+    connection.exec(change(SCHEMA_SQL));applyAdditiveMigrations(connection);
+    connection.exec("INSERT INTO os_school_years(name) VALUES('Candidate'); INSERT INTO os_users(name,username,role,password_hash) VALUES('Admin','admin','admin','unused');");
+    connection.close();
+    assert.throws(()=>db.restoreDatabase(file,{beforeReplace:()=>backups++}),pattern,name);
+    assert.equal(backups,0);
+    assert.equal(db.querySql('SELECT name FROM os_school_years')[0].name,'Original');
+    db.runSql("INSERT INTO os_settings(key,value) VALUES('usable','yes') ON CONFLICT(key) DO UPDATE SET value='yes'");
+  }
+});
+
+test('semantic key validation permits custom index names and preserves historical orphans', (t) => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'oakstead-schema-compatible-'));
+  const live=path.join(directory,'live.db'),file=path.join(directory,'compatible.db');databaseFile(live,'Original');
+  const connection=new DatabaseSync(file);
+  connection.exec(SCHEMA_SQL.replace('UNIQUE (assignment_id, student_id),','')+
+    '\nCREATE UNIQUE INDEX custom_score_key ON os_scores(student_id,assignment_id);');
+  applyAdditiveMigrations(connection);
+  connection.exec("PRAGMA foreign_keys=OFF; INSERT INTO os_school_years(name) VALUES('Compatible'); INSERT INTO os_users(name,username,role,password_hash) VALUES('Admin','admin','admin','unused'); INSERT INTO os_scores(assignment_id,student_id,score) VALUES(999,998,90);");
+  connection.close();
+  const db=createDb({dbFile:live});t.after(()=>{db.close();fs.rmSync(directory,{recursive:true,force:true});});
+  db.restoreDatabase(file);
+  assert.equal(db.querySql('SELECT score FROM os_scores')[0].score,90);
+  assert.equal(db.querySql('PRAGMA foreign_key_check;').length,2);
+  assert.equal(db.querySql('PRAGMA foreign_keys;')[0].foreign_keys,1);
+  assert.throws(()=>db.runSql('INSERT INTO os_scores(assignment_id,student_id,score) VALUES(997,996,50)'),/FOREIGN KEY/);
+});
+
+test('supported additive legacy columns do not require implicit table rebuilds', (t) => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'oakstead-legacy-constraints-'));
+  const live=path.join(directory,'live.db'),file=path.join(directory,'legacy.db');databaseFile(live,'Original');
+  const connection=new DatabaseSync(file);
+  const legacy=SCHEMA_SQL.replace('  parent_family_id INTEGER,','').replace(',\n  FOREIGN KEY (parent_family_id) REFERENCES os_families(id)','');
+  connection.exec(legacy);
+  connection.exec("INSERT INTO os_school_years(name) VALUES('Legacy'); INSERT INTO os_users(name,username,role,password_hash) VALUES('Admin','admin','admin','unused');");connection.close();
+  const db=createDb({dbFile:live});t.after(()=>{db.close();fs.rmSync(directory,{recursive:true,force:true});});
+  db.restoreDatabase(file);
+  assert.equal(db.querySql('SELECT name FROM os_school_years')[0].name,'Legacy');
+  assert.ok(db.querySql('PRAGMA table_info(os_users)').some(row=>row.name==='parent_family_id'));
+});
+
 test('restore rejects invalid schemas and migrates supported backups before swapping', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(),'oakstead-restore-test-'));
   const live = path.join(directory,'live.db');

@@ -117,8 +117,8 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: upload limits and signature checks retained; no historical repair.
   - PR: https://github.com/kirbw/oakstead/pull/41. Merge commit: 9cb762920ac1cea32303e72219df86cdaba7edc5 (2026-11-16).
 
-- [ ] **5. Make school-date calculations timezone independent**
-  - Branch: `codex/timezone-safe-school-dates`. Status: submitted, awaiting merge.
+- [x] **5. Make school-date calculations timezone independent**
+  - Branch: `codex/timezone-safe-school-dates`. Status: merged.
   - Plan: UTC date-only calendar helpers, real date validation and ordered school
     year ranges, consistently used for year/period calculations. Preserve inclusive
     days, explicit period links/IDs, and stored historical dates.
@@ -132,10 +132,10 @@ production rollout. Leave unrelated local files untouched.
     Browser saved unchanged periods and confirmed first date and full period table.
   - Screenshot: screenshots/round-2/pr5-school-dates.jpg (in-app browser; Edge capture
     unavailable). Compatibility: no stored date shifts/schema changes/repairs.
-  - PR: https://github.com/kirbw/oakstead/pull/42. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/42. Merge commit: 27da081e7c5c8ffe4b16de9e5033ff6b30a7e36e (2026-11-16).
 
 - [ ] **6. Validate database constraints before restore**
-  - Branch: `codex/validate-backup-constraints`. Status: planned.
+  - Branch: `codex/validate-backup-constraints`. Status: submitted, awaiting merge.
   - Plan: validate required PK/UNIQUE/FK constraints, compatible column declarations,
     and application upsert targets through semantic SQLite metadata, not generated
     index names. Reject unsupported staged schemas before replacement; preserve
@@ -144,7 +144,21 @@ production rollout. Leave unrelated local files untouched.
   - Acceptance: missing constraints rejected while current DB stays usable; current
     and supported older restores succeed; Windows WAL/lock, migration, replacement,
     reopen, verification failures recover. Document compatibility and recovery.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: schema manifest now requires compatible affinity/nullability/
+    defaults, PK semantics, non-partial unique keys and FK actions. Index names and
+    unique-column order do not matter. Supported additive FK-column exceptions
+    remain because ALTER ADD COLUMN historically did not attach those constraints.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (48 tests),
+    including all Windows migration/lock/replacement/reopen/verification recovery
+    cases. Missing PK/UNIQUE/FK/cascade, wrong affinity and partial-only keys rejected
+    before backup/replacement. Custom indexes and legacy additive schemas accepted.
+    Restored orphans retained and reported by foreign_key_check; new orphans rejected.
+    Browser created/restored a temporary backup and confirmed pre-restore backup.
+  - Screenshot: screenshots/round-2/pr6-restore-verified.jpg.
+  - Compatibility/recovery: no table rebuilds or guessed repairs; source backups
+    unchanged, active DB usable on rejection, existing staged rollback retained.
+    Historical orphan diagnostics remain admin-only; no contents exposed in errors.
+  - PR: https://github.com/kirbw/oakstead/pull/43. Merge commit: Pending.
 
 ## Part B — First six Nexus patterns
 
