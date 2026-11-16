@@ -99,8 +99,8 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: same bounds/conversions/rounding; no schema changes or repairs.
   - PR: https://github.com/kirbw/oakstead/pull/40. Merge commit: 44e0b34528de7857239d9548d7e87bc6eb7edb9c (2026-11-16).
 
-- [ ] **4. Preserve Unicode in multipart forms**
-  - Branch: `codex/fix-multipart-unicode`. Status: submitted, awaiting merge.
+- [x] **4. Preserve Unicode in multipart forms**
+  - Branch: `codex/fix-multipart-unicode`. Status: merged.
   - Plan: preserve multipart/file bytes and decode text as UTF-8. Preserve upload
     limits and file validation. Reject malformed bodies before mutations. Do not
     guess repairs for previously corrupted stored text.
@@ -115,16 +115,24 @@ production rollout. Leave unrelated local files untouched.
   - Screenshots: Edge CDP capture attempted and timed out. Manual: save an accented/
     non-Latin/emoji school name in System Settings, reload, check exact text and logo.
   - Compatibility: upload limits and signature checks retained; no historical repair.
-  - PR: https://github.com/kirbw/oakstead/pull/41. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/41. Merge commit: 9cb762920ac1cea32303e72219df86cdaba7edc5 (2026-11-16).
 
 - [ ] **5. Make school-date calculations timezone independent**
-  - Branch: `codex/timezone-safe-school-dates`. Status: planned.
+  - Branch: `codex/timezone-safe-school-dates`. Status: validated, awaiting PR.
   - Plan: UTC date-only calendar helpers, real date validation and ordered school
     year ranges, consistently used for year/period calculations. Preserve inclusive
     days, explicit period links/IDs, and stored historical dates.
   - Acceptance: UTC, America/New_York, Pacific/Auckland agree across DST/leap/year
     boundaries; reject impossible/reversed dates atomically; unchanged IDs survive.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: shared UTC date-only helpers, calendar validation, range checks
+    before activation/new-year/promotion/period writes; optional blank dates retained.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (45 tests).
+    UTC/New York/Auckland subprocess fixtures, DST/leap/year boundaries, invalid and
+    reversed ranges, atomic rejection and unchanged period IDs/assignment links.
+    Browser saved unchanged periods and confirmed first date and full period table.
+  - Screenshot: screenshots/round-2/pr5-school-dates.jpg (in-app browser; Edge capture
+    unavailable). Compatibility: no stored date shifts/schema changes/repairs.
+  - PR: Pending. Merge commit: Pending.
 
 - [ ] **6. Validate database constraints before restore**
   - Branch: `codex/validate-backup-constraints`. Status: planned.

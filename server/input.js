@@ -1,3 +1,5 @@
+const { cleanDate } = require('./dates');
+
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;',
@@ -29,11 +31,6 @@ function asInt(value, fallback = 0) {
 
 function cleanText(value, max = 160) {
   return String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
-}
-
-function cleanDate(value) {
-  const text = String(value ?? '').slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
 }
 
 function cleanGrade(value) {

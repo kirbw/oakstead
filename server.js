@@ -54,6 +54,7 @@ const {
   sqlValue
 } = require('./server/input');
 const { createDb } = require('./server/db');
+const { addDays, daysBetween, schoolDateRange } = require('./server/dates');
 const { createScoreSaveQueue } = require('./server/score-save-queue');
 const { SCHEMA_SQL } = require('./server/schema');
 const { backupDue, createBackupScheduler } = require('./server/backups');
@@ -3521,20 +3522,6 @@ function refreshDemoData(reason = 'scheduled') {
   if (result.status === 0) reportDataIntegrity();
 }
 
-function addDays(dateText, days) {
-  const date = new Date(`${dateText}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return '';
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function daysBetween(startDate, endDate) {
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-  return Math.max(0, Math.round((end - start) / 86400000) + 1);
-}
-
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
   return `${salt}:${hash}`;
@@ -6953,13 +6940,14 @@ function handleRecordPost(req, res, p, body, user, headers) {
 
   if (p === '/school-years') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    const { startDate, endDate } = schoolDateRange(body.startDate, body.endDate);
     const existingYearId = asInt(body.yearId);
     if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
     if (existingYearId) {
       runSql(`UPDATE os_school_years
         SET name=${sqlValue(cleanText(body.name, 40))},
-            start_date=${sqlValue(cleanDate(body.startDate))},
-            end_date=${sqlValue(cleanDate(body.endDate))},
+            start_date=${sqlValue(startDate)},
+            end_date=${sqlValue(endDate)},
             is_active=${String(body.makeActive) === '1' ? 1 : 0}
         WHERE id=${existingYearId};`);
       if (String(body.makeActive) === '1') {
@@ -6968,8 +6956,8 @@ function handleRecordPost(req, res, p, body, user, headers) {
       return redirect(res, '/setup?section=years', headers);
     }
     const yearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
-      VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
-    createMarkingPeriods(yearId, 6, cleanDate(body.startDate), cleanDate(body.endDate));
+      VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(startDate)}, ${sqlValue(endDate)}, ${String(body.makeActive) === '1' ? 1 : 0})`);
+    createMarkingPeriods(yearId, 6, startDate, endDate);
     createDefaultWeightGroups(yearId);
     appendSetCookie(headers, `selectedYearId=${cookieValue(yearId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
     return redirect(res, '/setup?section=years', headers);
@@ -6980,8 +6968,7 @@ function handleRecordPost(req, res, p, body, user, headers) {
     const schoolYearId = asInt(body.schoolYearId);
     const schoolDays = Math.max(1, Math.min(260, asInt(body.schoolDays) || 180));
     const periodCount = Math.max(1, Math.min(12, asInt(body.periodCount) || 6));
-    const startDate = cleanDate(body.startDate);
-    const endDate = cleanDate(body.endDate);
+    const { startDate, endDate } = schoolDateRange(body.startDate, body.endDate);
     db.transaction(() => {
       const referenced = querySql(`SELECT p.period_number FROM os_marking_periods p
         JOIN os_assignments a ON a.marking_period_id=p.id
@@ -6997,11 +6984,12 @@ function handleRecordPost(req, res, p, body, user, headers) {
 
   if (p === '/promote-year') {
     if (!canManageSchoolSetup(user)) return sendText(res, 403, 'Forbidden');
+    const { startDate, endDate } = schoolDateRange(body.startDate, body.endDate);
     const fromYearId = asInt(body.fromYearId);
     if (String(body.makeActive) === '1') runSql('UPDATE os_school_years SET is_active=0;');
     const newYearId = insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active)
-      VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(cleanDate(body.startDate))}, ${sqlValue(cleanDate(body.endDate))}, ${String(body.makeActive) === '1' ? 1 : 0})`);
-    createMarkingPeriods(newYearId, 6, cleanDate(body.startDate), cleanDate(body.endDate));
+      VALUES (${sqlValue(cleanText(body.name, 40))}, ${sqlValue(startDate)}, ${sqlValue(endDate)}, ${String(body.makeActive) === '1' ? 1 : 0})`);
+    createMarkingPeriods(newYearId, 6, startDate, endDate);
     createDefaultWeightGroups(newYearId);
     const enrollments = querySql(`SELECT student_id, grade_level FROM os_student_years WHERE school_year_id=${fromYearId} AND status='enrolled';`);
     enrollments.forEach((enrollment) => {
