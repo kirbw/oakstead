@@ -216,7 +216,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/45. Merge commit: 68173ea81d95bac28f333c64308eb066071c32a0 (2026-11-16).
 
 - [ ] **9. Introduce versioned database migrations**
-  - Branch: `codex/versioned-database-migrations`. Status: validated, awaiting PR.
+  - Branch: `codex/versioned-database-migrations`. Status: submitted, awaiting merge.
   - Plan: ordered SQLite user_version registry. Recognize/upgrade/validate supported
     unversioned schemas and establish baseline; transactionally advance versions
     only on success; reject future versions before data changes. Startup and staged
@@ -237,7 +237,7 @@ production rollout. Leave unrelated local files untouched.
     downgrades/repairs/table rebuilds. Candidate migration never alters source backup.
     Failed upgrade stops startup; reverting code does not undo schema versions.
     Registry and recovery documented in architecture.md.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/46. Merge commit: Pending.
 
 - [ ] **10. Make startup and shutdown explicit**
   - Branch: `codex/application-lifecycle`. Status: planned.
