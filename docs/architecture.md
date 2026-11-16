@@ -69,3 +69,21 @@ On upgrade failure, retain the database for diagnosis; no listener starts agains
 failed upgrade. Restore candidates migrate only in a staged copy before replacing
 the active file. Existing pre-restore backup and original-file recovery remain.
 Reverting code does not undo committed versions; use compatible code or a backup.
+
+## Startup and shutdown
+
+Importing the entry point is inert. `createApplication()` exposes idempotent
+`start()` and `stop()` operations and lifecycle state. Configuration and database
+migrations complete before background jobs and HTTP listening. Failed startup
+unwinds even partially started resources in reverse order.
+
+Shutdown stops accepting requests, stops scheduled jobs, drains HTTP requests for
+up to five seconds, then checkpoints/closes SQLite. Forced connection closure is
+logged. SIGINT/SIGTERM use this path where the platform delivers those signals;
+Windows forced process termination cannot run JavaScript cleanup. API stop/start
+is covered on Windows, including occupied-port failure and database reopening.
+
+Network/update utilities do not start listeners or timers. Update workers request
+a restart over their parent IPC channel; the parent drains before starting a
+replacement, or exits for its supervisor to restart. Standalone update utilities
+request a manual restart instead of accidentally starting an application server.

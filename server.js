@@ -53,6 +53,8 @@ const {
   sqlValue
 } = require('./server/input');
 const { createDb } = require('./server/db');
+const { createLifecycle, stopHttpServer, installShutdownSignals, restartAfterDrain } = require('./server/lifecycle');
+let application;
 const { addDays, daysBetween, schoolDateRange } = require('./server/dates');
 const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
@@ -905,19 +907,31 @@ async function checkLatestRelease(channel) {
   return UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel);
 }
 
-function restartApplication() {
+async function restartApplication() {
   writeUpdateStatus({ phase: 'restarting', percent: 98, message: 'Restarting Oakstead.', log: [updateLog('Restarting application')] });
+  if (typeof process.send === 'function') {
+    // The update worker asks its own parent to drain the running application.
+    await new Promise((resolve, reject) => process.send({ type: 'oakstead-restart' }, error => error ? reject(error) : resolve()));
+    db.close();
+    process.disconnect();
+    return;
+  }
+  if (!application) {
+    db.close();
+    writeUpdateStatus({ phase: 'complete', percent: 100, message: 'Update complete. Restart Oakstead to use the updated code.' });
+    return;
+  }
   const supervised = Boolean(process.env.INVOCATION_ID || process.env.pm_id || process.env.NODE_APP_INSTANCE);
-  if (!supervised) {
+  await restartAfterDrain({ stop: application.stop, supervised, exit: code => process.exit(code), spawnReplacement() {
     const child = spawn(process.execPath, [__filename], {
       cwd: APP_ROOT,
       detached: true,
+      windowsHide: true,
       stdio: 'ignore',
       env: process.env
     });
     child.unref();
-  }
-  setTimeout(() => process.exit(0), 900);
+  } });
 }
 
 async function startInstallerUpdate(channel) {
@@ -985,10 +999,15 @@ async function startSystemUpdate(channel) {
   const child = spawn(process.execPath, [__filename, '--run-system-update', updateChannel], {
     cwd: APP_ROOT,
     detached: true,
-    stdio: 'ignore',
+    windowsHide: true,
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     env: process.env
   });
+  child.on('message', (message) => {
+    if (message?.type === 'oakstead-restart') void restartApplication().catch(() => console.error('Application restart failed.'));
+  });
   child.unref();
+  child.channel?.unref();
   return readUpdateStatus();
 }
 
@@ -1015,7 +1034,7 @@ function runSystemUpdateWorker(channel) {
     writeUpdateStatus({ phase: 'validating', percent: 84, message: 'Validating server code.' });
     runUpdateCommand('Running npm run check', 'npm', ['run', 'check']);
     writeUpdateStatus({ running: false, phase: 'complete', percent: 96, message: 'Update complete. Restarting now.', log: [updateLog('Update completed successfully')] });
-    restartApplication();
+    void restartApplication().catch(() => console.error('Update restart handoff failed. Restart Oakstead manually.'));
   } catch (error) {
     writeUpdateStatus({
       running: false,
@@ -2044,57 +2063,6 @@ const handleGet = require('./server/routes').createPageRoutes({
   setupPage,
 });
 
-if (process.argv[2] === '--run-system-update') {
-  ensureRuntimeDirs();
-  if (UPDATE_MODE === 'installer') {
-    writeUpdateStatus({
-      running: false,
-      phase: 'unsupported',
-      percent: 100,
-      message: 'Packaged installs use installer downloads instead of Git updates.',
-      log: [updateLog('Git update worker was skipped in installer mode')]
-    });
-    return;
-  }
-  runSystemUpdateWorker(process.argv[3] === 'prerelease' ? 'prerelease' : 'stable');
-  return;
-}
-
-if (process.argv[2] === '--network-status' || process.argv[2] === '--set-network-access') {
-  ensureRuntimeDirs();
-  ensureDb();
-  if (process.argv[2] === '--network-status') {
-    printNetworkStatus();
-  } else if (!setNetworkAccessFromCli(process.argv.slice(3))) {
-    process.exitCode = 1;
-  }
-  return;
-}
-
-ensureRuntimeDirs();
-ensureDb();
-ACTIVE_NETWORK = desiredNetworkConfig();
-if (DEMO_MODE) {
-  const loopbackHosts = new Set(['127.0.0.1', 'localhost']);
-  if (!loopbackHosts.has(ACTIVE_NETWORK.host)) {
-    console.warn('****************************************************************');
-    console.warn('WARNING: DEMO_MODE is ON and the server is bound to a non-loopback');
-    console.warn(`address (${ACTIVE_NETWORK.host}). Authentication is DISABLED — every`);
-    console.warn('visitor on the network is treated as an admin with full read/write');
-    console.warn('access to student PII. Set DEMO_MODE=0 for any real deployment.');
-    console.warn('****************************************************************');
-  }
-  refreshDemoData('startup');
-  setInterval(() => refreshDemoData('scheduled'), DEMO_REFRESH_HOURS * 60 * 60 * 1000).unref();
-}
-const backupScheduler = createBackupScheduler({
-  isDue: () => fs.existsSync(DB_FILE) && scheduledBackupDue(),
-  createBackup: () => createDatabaseBackup('scheduled'),
-  onError: (error) => console.error('Scheduled backup failed:', error.message || error)
-});
-void backupScheduler.check();
-process.once('exit', backupScheduler.stop);
-
 function sendAssetFile(res, filePath, missingMessage) {
   if (!fs.existsSync(filePath)) return sendText(res, 404, missingMessage);
   res.writeHead(200, {
@@ -2141,6 +2109,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
 
   try {
+    if (application?.state() === 'stopping') return sendText(res, 503, 'Oakstead is shutting down. Please try again shortly.');
     const csrfToken = getOrCreateCsrfToken(req, headers);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
@@ -2163,6 +2132,7 @@ const server = http.createServer(async (req, res) => {
 
     return handleGet(req, res, url, pathname, user, csrfToken, headers);
   } catch (error) {
+    if (res.destroyed || res.writableEnded) return;
     if (error.errcode === 787 || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || /FOREIGN KEY constraint failed/i.test(error.message)) {
       return sendText(res, 409, 'This change conflicts with a linked record. Check the selected records; remove or update dependent records before deleting their parent.');
     }
@@ -2177,13 +2147,111 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(ACTIVE_NETWORK.port, ACTIVE_NETWORK.host, () => {
-  const primaryUrl = ACTIVE_NETWORK.host === '0.0.0.0'
-    ? `http://127.0.0.1:${ACTIVE_NETWORK.port}`
-    : `http://${ACTIVE_NETWORK.host}:${ACTIVE_NETWORK.port}`;
-  console.log(`Oakstead running on ${primaryUrl}`);
-  if (ACTIVE_NETWORK.host === '0.0.0.0') {
-    const lanUrls = networkUrls(ACTIVE_NETWORK).join(', ');
-    if (lanUrls) console.log(`LAN access: ${lanUrls}`);
+let backupScheduler;
+let demoTimer;
+function stopBackgroundJobs() {
+  backupScheduler?.stop();
+  clearInterval(demoTimer);
+}
+
+function createApplication() {
+  if (application) return application;
+  application = createLifecycle([
+    { name: 'database', start() {
+      if (process.env.PORT && !parsePort(process.env.PORT, 0)) throw new Error('PORT must be an integer between 1 and 65535.');
+      if (process.env.HOST && !cleanBindHost(process.env.HOST, '')) throw new Error('HOST must be a supported bind address.');
+      ensureRuntimeDirs();
+      ensureDb();
+      ACTIVE_NETWORK = desiredNetworkConfig();
+    }, stop() {
+      try { if (db.isOpen()) db.checkpoint(); }
+      finally { db.close(); invalidateAppCaches(); }
+    } },
+    { name: 'background jobs', start() {
+      if (DEMO_MODE) {
+        const loopbackHosts = new Set(['127.0.0.1', 'localhost']);
+        if (!loopbackHosts.has(ACTIVE_NETWORK.host)) {
+          console.warn('****************************************************************');
+          console.warn('WARNING: DEMO_MODE is ON and the server is bound to a non-loopback');
+          console.warn(`address (${ACTIVE_NETWORK.host}). Authentication is DISABLED — every`);
+          console.warn('visitor on the network is treated as an admin with full read/write');
+          console.warn('access to student PII. Set DEMO_MODE=0 for any real deployment.');
+          console.warn('****************************************************************');
+        }
+        refreshDemoData('startup');
+        demoTimer = setInterval(() => refreshDemoData('scheduled'), DEMO_REFRESH_HOURS * 60 * 60 * 1000).unref();
+      }
+
+      backupScheduler = createBackupScheduler({
+        isDue: () => fs.existsSync(DB_FILE) && scheduledBackupDue(),
+        createBackup: () => createDatabaseBackup('scheduled'),
+        onError: () => console.error('Scheduled backup failed; it will retry on the next check.')
+      });
+      void backupScheduler.check();
+    }, stop: stopBackgroundJobs },
+    { name: 'http', start() {
+      return new Promise((resolve, reject) => {
+        const onError = error => { server.off('listening', onListen); reject(error); };
+        const onListen = () => {
+          server.off('error', onError);
+
+          const primaryUrl = ACTIVE_NETWORK.host === '0.0.0.0'
+            ? `http://127.0.0.1:${ACTIVE_NETWORK.port}`
+            : `http://${ACTIVE_NETWORK.host}:${ACTIVE_NETWORK.port}`;
+          console.log(`Oakstead running on ${primaryUrl}`);
+          if (ACTIVE_NETWORK.host === '0.0.0.0') {
+            const lanUrls = networkUrls(ACTIVE_NETWORK).join(', ');
+            if (lanUrls) console.log(`LAN access: ${lanUrls}`);
+          }
+
+          resolve();
+        };
+        server.once('error', onError);
+        server.listen(ACTIVE_NETWORK.port, ACTIVE_NETWORK.host, onListen);
+      });
+    }, stop() { return stopHttpServer(server, { beforeDrain: stopBackgroundJobs,
+      onForced: () => console.warn('Forced HTTP shutdown after 5000ms grace period.') }); } }
+  ], { onError: (component) => console.error('Application cleanup failed:', component) });
+  return application;
+}
+
+async function main() {
+  if (process.argv[2] === '--run-system-update') {
+    ensureRuntimeDirs();
+    if (UPDATE_MODE === 'installer') {
+      writeUpdateStatus({
+        running: false,
+        phase: 'unsupported',
+        percent: 100,
+        message: 'Packaged installs use installer downloads instead of Git updates.',
+        log: [updateLog('Git update worker was skipped in installer mode')]
+      });
+      return;
+    }
+    runSystemUpdateWorker(process.argv[3] === 'prerelease' ? 'prerelease' : 'stable');
+    db.close();
+    return;
   }
+
+  if (process.argv[2] === '--network-status' || process.argv[2] === '--set-network-access') {
+    ensureRuntimeDirs();
+    ensureDb();
+    if (process.argv[2] === '--network-status') {
+      printNetworkStatus();
+    } else if (!setNetworkAccessFromCli(process.argv.slice(3))) {
+      process.exitCode = 1;
+    }
+    db.close();
+    return;
+  }
+
+  const app = createApplication();
+  installShutdownSignals(app);
+  await app.start();
+}
+
+module.exports = { createApplication };
+if (require.main === module) void main().catch(error => {
+  console.error('Oakstead startup failed:', error.message);
+  process.exitCode = 1;
 });
