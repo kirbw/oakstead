@@ -163,7 +163,7 @@ production rollout. Leave unrelated local files untouched.
 ## Part B — First six Nexus patterns
 
 - [ ] **7. Establish domain routes, services, and validation boundaries**
-  - Branch: `codex/domain-boundaries`. Status: validated, awaiting PR.
+  - Branch: `codex/domain-boundaries`. Status: submitted, awaiting merge.
   - Plan: separate dispatch, dependency-free input validation, business operations,
     database access and rendering. Group authentication/people/academics/admin;
     entry point composes/starts app. Shared services own authorization/transactions.
@@ -187,7 +187,7 @@ production rollout. Leave unrelated local files untouched.
     pure grade calculation and section loading code unchanged; timing noise observed.
   - Screenshot: screenshots/round-2/pr7-domain-gradebook.jpg. Compatibility: no
     schema/URL/field/permission/stack changes; dependencies explicit, no new packages.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/44. Merge commit: Pending.
 
 - [ ] **8. Standardize request handling and errors**
   - Branch: `codex/shared-request-errors`. Status: planned.
