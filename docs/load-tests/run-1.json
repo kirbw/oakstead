@@ -1,0 +1,105 @@
+{
+  "date": "2026-11-16T22:47:25.985Z",
+  "node": "v26.13.1",
+  "platform": "win32",
+  "demoMode": false,
+  "fixture": {
+    "teachers": 20,
+    "students": 37,
+    "assignments": 2400,
+    "scores": 8880
+  },
+  "phases": [
+    {
+      "name": "1 simultaneous logins",
+      "elapsedMs": 68.4,
+      "requests": {
+        "count": 1,
+        "medianMs": 56,
+        "p95Ms": 56,
+        "maxMs": 56
+      },
+      "healthProbes": {
+        "count": 1,
+        "medianMs": 4,
+        "p95Ms": 4,
+        "maxMs": 4
+      },
+      "failures": 0
+    },
+    {
+      "name": "5 simultaneous logins",
+      "elapsedMs": 154.3,
+      "requests": {
+        "count": 5,
+        "medianMs": 82.4,
+        "p95Ms": 133.1,
+        "maxMs": 133.1
+      },
+      "healthProbes": {
+        "count": 1,
+        "medianMs": 75.8,
+        "p95Ms": 75.8,
+        "maxMs": 75.8
+      },
+      "failures": 0
+    },
+    {
+      "name": "20 simultaneous logins",
+      "elapsedMs": 589.9,
+      "requests": {
+        "count": 20,
+        "medianMs": 267.6,
+        "p95Ms": 547.4,
+        "maxMs": 577.2
+      },
+      "healthProbes": {
+        "count": 1,
+        "medianMs": 518.5,
+        "p95Ms": 518.5,
+        "maxMs": 518.5
+      },
+      "failures": 0
+    },
+    {
+      "name": "20 teachers browsing: 5 dashboard/gradebook cycles each",
+      "elapsedMs": 468.8,
+      "requests": {
+        "count": 200,
+        "medianMs": 46.6,
+        "p95Ms": 58.3,
+        "maxMs": 62.6
+      },
+      "healthProbes": {
+        "count": 7,
+        "medianMs": 45.1,
+        "p95Ms": 51.8,
+        "maxMs": 51.8
+      },
+      "failures": 0
+    },
+    {
+      "name": "20 simultaneous score saves",
+      "elapsedMs": 16.2,
+      "requests": {
+        "count": 20,
+        "medianMs": 9,
+        "p95Ms": 14.6,
+        "maxMs": 15.2
+      },
+      "healthProbes": {
+        "count": 0,
+        "medianMs": 0,
+        "p95Ms": 0,
+        "maxMs": 0
+      },
+      "failures": 0
+    }
+  ],
+  "verifiedScoreWrites": 20,
+  "finalHealth": {
+    "status": "ready"
+  },
+  "integrity": "ok",
+  "relationshipViolations": 0
+}

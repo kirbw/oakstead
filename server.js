@@ -248,16 +248,7 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   return `${salt}:${hash}`;
 }
 
-function verifyPassword(password, encoded) {
-  if (!encoded || !String(encoded).includes(':')) return false;
-  const [salt, expected] = String(encoded).split(':');
-  const actual = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
-  } catch {
-    return false;
-  }
-}
+const verifyPassword = require('./server/passwords').createPasswordVerifier();
 
 function clientIp(req) {
   return req.socket?.remoteAddress || 'unknown';
