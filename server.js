@@ -4559,7 +4559,10 @@ function letterGradeScale(yearId, grade, subjectId) {
 }
 
 function assignmentAccessClause(user, yearId) {
-  return isTeacher(user) ? `AND (a.classroom_id IS NULL OR a.classroom_id IN
+  return isTeacher(user) ? `AND a.grade_level IN
+    (SELECT cg.grade_level FROM os_classroom_grades cg JOIN os_classrooms c ON c.id=cg.classroom_id
+      WHERE c.school_year_id=${asInt(yearId)} AND c.teacher_id=${asInt(user.teacher_id)})
+    AND (a.classroom_id IS NULL OR a.classroom_id IN
     (SELECT id FROM os_classrooms WHERE school_year_id=${asInt(yearId)} AND teacher_id=${asInt(user.teacher_id)}))` : '';
 }
 
@@ -4869,21 +4872,27 @@ function recentSchoolDays(count) {
   return days.reverse();
 }
 
-function dashboardPage(selectedYear) {
+function dashboardPage(selectedYear, user) {
   const yearId = asInt(selectedYear.id);
+  const teacher = isTeacher(user);
+  const studentScope = `FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id
+    WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' ${studentAccessClause(user, yearId)}`;
+  const roomScope = `WHERE school_year_id=${yearId} ${teacher ? `AND teacher_id=${asInt(user.teacher_id)}` : ''}`;
+  const assignmentScope = assignmentAccessClause(user, yearId);
+  const scoreScope = teacher ? `AND sc.student_id IN (SELECT st.id ${studentScope})` : '';
   const kpis = {
-    families: querySql('SELECT COUNT(*) AS c FROM os_families;')[0]?.c || 0,
-    students: querySql(`SELECT COUNT(*) AS c FROM os_student_years WHERE school_year_id=${yearId} AND status='enrolled';`)[0]?.c || 0,
-    teachers: querySql('SELECT COUNT(*) AS c FROM os_teachers;')[0]?.c || 0,
-    classrooms: querySql(`SELECT COUNT(*) AS c FROM os_classrooms WHERE school_year_id=${yearId};`)[0]?.c || 0,
-    assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments WHERE school_year_id=${yearId};`)[0]?.c || 0
+    families: querySql(teacher ? `SELECT COUNT(DISTINCT st.family_id) AS c ${studentScope};` : 'SELECT COUNT(*) AS c FROM os_families;')[0]?.c || 0,
+    students: querySql(`SELECT COUNT(*) AS c ${studentScope};`)[0]?.c || 0,
+    teachers: querySql(teacher ? `SELECT COUNT(DISTINCT teacher_id) AS c FROM os_classrooms ${roomScope};` : 'SELECT COUNT(*) AS c FROM os_teachers;')[0]?.c || 0,
+    classrooms: querySql(`SELECT COUNT(*) AS c FROM os_classrooms ${roomScope};`)[0]?.c || 0,
+    assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments a WHERE a.school_year_id=${yearId} ${assignmentScope};`)[0]?.c || 0
   };
   const recent = querySql(`SELECT a.title, a.category, a.grade_level, s.name AS subject_name,
       COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
     JOIN os_subjects s ON s.id = a.subject_id
-    LEFT JOIN os_scores sc ON sc.assignment_id = a.id
-    WHERE a.school_year_id=${yearId}
+    LEFT JOIN os_scores sc ON sc.assignment_id = a.id ${scoreScope}
+    WHERE a.school_year_id=${yearId} ${assignmentScope}
     GROUP BY a.id
     ORDER BY a.assignment_date DESC, a.id DESC
     LIMIT 8;`);
@@ -4891,8 +4900,8 @@ function dashboardPage(selectedYear) {
   const weekData = querySql(`SELECT DATE(a.assignment_date) AS day,
       ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
     FROM os_assignments a
-    JOIN os_scores sc ON sc.assignment_id = a.id
-    WHERE a.school_year_id=${yearId}
+    JOIN os_scores sc ON sc.assignment_id = a.id ${scoreScope}
+    WHERE a.school_year_id=${yearId} ${assignmentScope}
       AND DATE(a.assignment_date) IN (${schoolDays.map((day) => sqlValue(day.key)).join(', ')})
     GROUP BY DATE(a.assignment_date)
     ORDER BY day ASC;`);
@@ -4910,7 +4919,7 @@ function dashboardPage(selectedYear) {
     </section>
     <div class="split">
       <section class="chart-panel">
-        <div class="chart-head"><h2>School Average &mdash; Past 7 School Days</h2><span>${overallLabel}</span></div>
+        <div class="chart-head"><h2>${teacher ? 'Your Classes' : 'School'} Average &mdash; Past 7 School Days</h2><span>${overallLabel}</span></div>
         ${chart.svg}
       </section>
       <section class="ledger">
@@ -7414,7 +7423,7 @@ function handleGet(req, res, url, pathname, user, csrfToken, headers) {
 
   if (pathname === '/') {
     if (isParent(user)) return redirect(res, '/parent', headers);
-    return sendAppPage(req, res, headers, pageArgs, 'Dashboard', dashboardPage(selected));
+    return sendAppPage(req, res, headers, pageArgs, 'Dashboard', dashboardPage(selected, user));
   }
   if (pathname === '/parent') {
     if (!isParent(user)) return redirect(res, '/', headers);
