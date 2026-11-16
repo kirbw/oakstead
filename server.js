@@ -54,6 +54,7 @@ const {
   sqlValue
 } = require('./server/input');
 const { createDb } = require('./server/db');
+const { createScoreSaveQueue } = require('./server/score-save-queue');
 const { SCHEMA_SQL } = require('./server/schema');
 const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
@@ -1375,6 +1376,7 @@ tr:last-child td { border-bottom: 0; }
   font-size: .62em;
   margin-left: .05rem;
 }
+.gb-grid-footer button[hidden] { display: none !important; }
 .gb-grid-footer {
   position: sticky;
   bottom: 0;
@@ -2782,10 +2784,12 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
 (function(){
   const root = document.documentElement;
   const saved = localStorage.getItem('oakstead-theme');
-  const gridTimers = new WeakMap();
-  let gridSaveQueue = Promise.resolve();
+  const scoreQueue = (${createScoreSaveQueue.toString()})({ send: sendGridScore, onChange: renderGridSave });
+  const resumedForms = new WeakSet();
   let activeScoreInput = null;
   let navAbort = null;
+  let navigating = false;
+  let displayedUrl = window.location.href;
   if (saved === 'dark') root.setAttribute('data-theme', 'dark');
 
   function mainEl() {
@@ -2818,7 +2822,22 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     if (currentMobileLabel && nextMobileLabel) currentMobileLabel.textContent = nextMobileLabel.textContent;
   }
 
-  function navigateApp(to, options) {
+  async function navigateApp(to, options) {
+    if (navigating) return false;
+    navigating = true;
+    const inputs = Array.from(document.querySelectorAll('[data-grid-score-input]:not(:disabled)'));
+    inputs.forEach(function(input) { input.disabled = true; });
+    try {
+      if (!(await scoreQueue.flush())) return false;
+      scoreQueue.forgetClean();
+      return await performNavigation(to, options);
+    } finally {
+      inputs.forEach(function(input) { input.disabled = false; });
+      navigating = false;
+    }
+  }
+
+  function performNavigation(to, options) {
     options = options || {};
     const nextUrl = new URL(to, window.location.href);
     if (!canUseAppNav(nextUrl)) {
@@ -2850,6 +2869,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
         const liveMain = mainEl();
         liveMain.replaceWith(document.importNode(nextMain, true));
         if (options.push !== false) history.pushState({ oaksteadApp: true }, '', nextUrl.toString());
+        displayedUrl = window.location.href;
         if (options.scroll !== false) window.scrollTo(0, 0);
         setMobileNav(false);
         initDynamicContent(mainEl());
@@ -2878,7 +2898,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     if (!form) return;
     const method = (form.getAttribute('method') || 'get').toLowerCase();
     if (method !== 'get' || form.classList.contains('year-form') || form.dataset.noAppNav !== undefined) {
-      form.submit();
+      if (awaitGridForm(form)) form.requestSubmit();
       return;
     }
     navigateApp(formToUrl(form), options);
@@ -2886,8 +2906,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
 
   function goToUrl(url, options) {
     const nextUrl = new URL(url, window.location.href);
-    if (canUseAppNav(nextUrl)) navigateApp(nextUrl, options);
-    else window.location.href = nextUrl.toString();
+    navigateApp(nextUrl, options);
   }
 
   const themeToggle = document.getElementById('themeToggle');
@@ -2921,11 +2940,16 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
 
   document.querySelectorAll('.year-form select').forEach(function(select) {
     select.addEventListener('change', function() {
-      select.form.submit();
+      submitFormSmoothly(select.form);
     });
   });
 
   document.addEventListener('click', function(event) {
+    if (event.target.closest('[data-grid-retry]')) { void scoreQueue.retry(); return; }
+    if (event.target.closest('[data-grid-discard]')) {
+      if (window.confirm('Discard unsaved grade edits? Completed saves will remain.')) void scoreQueue.discard();
+      return;
+    }
     const printButton = event.target.closest('[data-print-page]');
     if (printButton) {
       window.print();
@@ -2957,6 +2981,7 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
       if (!target) return;
       target.value = scoreChip.dataset.scoreChip;
       updateScorePreview(target);
+      if (target.matches('[data-grid-score-input]')) autosaveGridInput(target);
       const next = target.closest('.score-row')?.nextElementSibling?.querySelector('[data-score-input]');
       if (next) {
         next.focus();
@@ -2967,11 +2992,43 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     const anchor = event.target.closest('a[href]');
     if (!anchor || event.defaultPrevented) return;
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (anchor.target || anchor.hasAttribute('download') || anchor.dataset.noAppNav !== undefined) return;
+    if (anchor.target || anchor.hasAttribute('download')) return;
     const url = new URL(anchor.href, window.location.href);
+    if (url.origin === window.location.origin && anchor.dataset.noAppNav !== undefined && scoreQueue.isDirty()) {
+      event.preventDefault();
+      scoreQueue.flush().then(function(saved) { if (saved) window.location.href = url.toString(); });
+      return;
+    }
+    if (anchor.dataset.noAppNav !== undefined) return;
     if (!canUseAppNav(url) || isSamePageHash(url)) return;
     event.preventDefault();
     navigateApp(url);
+  });
+
+  function awaitGridForm(form) {
+    if (!scoreQueue.isDirty()) return true;
+    scoreQueue.flush().then(function(saved) { if (saved) form.requestSubmit(); });
+    return false;
+  }
+
+  document.addEventListener('submit', function(event) {
+    if (!scoreQueue.isDirty() || resumedForms.has(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const form = event.target;
+    const submitter = event.submitter;
+    scoreQueue.flush().then(function(saved) {
+      if (!saved || !form.isConnected) return;
+      resumedForms.add(form);
+      try { form.requestSubmit(submitter || undefined); }
+      finally { resumedForms.delete(form); }
+    });
+  }, true);
+
+  window.addEventListener('beforeunload', function(event) {
+    if (!scoreQueue.isDirty()) return;
+    event.preventDefault();
+    event.returnValue = '';
   });
 
   document.addEventListener('submit', function(event) {
@@ -3028,7 +3085,6 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
     }
     const gridInput = event.target.closest('[data-grid-score-input]');
     if (gridInput) {
-      clearTimeout(gridTimers.get(gridInput));
       autosaveGridInput(gridInput);
       return;
     }
@@ -3046,12 +3102,11 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
   document.addEventListener('input', function(event) {
     if (event.target.matches('[data-score-input]')) {
       updateScorePreview(event.target);
-      return;
+      if (!event.target.matches('[data-grid-score-input]')) return;
     }
     if (event.target.matches('[data-grid-score-input]')) {
       const input = event.target;
-      clearTimeout(gridTimers.get(input));
-      gridTimers.set(input, setTimeout(function() { autosaveGridInput(input); }, 550));
+      autosaveGridInput(input);
       return;
     }
     if (event.target.matches('input[name="maxScore"]')) {
@@ -3073,7 +3128,9 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
   });
 
   window.addEventListener('popstate', function() {
-    navigateApp(window.location.href, { push: false, scroll: false });
+    navigateApp(window.location.href, { push: false, scroll: false }).then(function(moved) {
+      if (!moved) history.pushState({ oaksteadApp: true }, '', displayedUrl);
+    });
   });
 
   history.replaceState({ oaksteadApp: true }, '', window.location.href);
@@ -3138,50 +3195,47 @@ const APP_CLIENT_SCRIPT = `function generateReportCardPdf(btn) {
 
   function autosaveGridInput(input) {
     const container = input.closest('[data-grid-autosave]');
-    if (!container || input.value === input.dataset.originalValue) return;
-    const valueToSave = input.value;
-    gridSaveQueue = gridSaveQueue
-      .catch(function() {})
-      .then(function() {
-        return saveGridInput(input, container, valueToSave);
-      });
+    if (!container) return;
+    const context = { actionUrl: container.dataset.action || '/gradebook' };
+    ['csrfToken', 'schoolYearId', 'markingPeriodId', 'gradeLevel', 'subjectId', 'scoreMode'].forEach(function(name) {
+      context[name] = gridHidden(container, name);
+    });
+    context.assignmentId = input.dataset.assignmentId;
+    context.studentId = input.dataset.studentId;
+    const key = [context.schoolYearId, context.assignmentId, context.studentId].join(':');
+    scoreQueue.edit(key, input.value, context, input.dataset.originalValue);
   }
 
-  function saveGridInput(input, container, valueToSave) {
-    if (!input.isConnected || !container.isConnected || valueToSave === input.dataset.originalValue) return Promise.resolve();
+  async function sendGridScore(context, value, signal) {
     const formData = new FormData();
-    formData.set('csrfToken', gridHidden(container, 'csrfToken'));
+    Object.keys(context).forEach(function(name) { if (name !== 'actionUrl') formData.set(name, context[name]); });
     formData.set('action', 'grid-score');
-    formData.set('schoolYearId', gridHidden(container, 'schoolYearId'));
-    formData.set('markingPeriodId', gridHidden(container, 'markingPeriodId'));
-    formData.set('gradeLevel', gridHidden(container, 'gradeLevel'));
-    formData.set('subjectId', gridHidden(container, 'subjectId'));
-    formData.set('scoreMode', gridHidden(container, 'scoreMode'));
-    formData.set('assignmentId', input.dataset.assignmentId || '');
-    formData.set('studentId', input.dataset.studentId || '');
-    formData.set('scoreValue', valueToSave);
-    const status = container.querySelector('[data-grid-autosave-status]');
-    markGridCell(input, 'saving');
-    if (status) status.textContent = 'Saving...';
-    return fetch(container.dataset.action || '/gradebook', { method: 'POST', body: formData, headers: { Accept: 'application/json' } })
-      .then(function(response) {
-        if (!response.ok) throw new Error('Save failed');
-        return response.json();
-      })
-      .then(function(result) {
-        if (!input.isConnected || !container.isConnected) return;
-        input.dataset.originalValue = valueToSave;
-        if (input.value !== valueToSave) return;
+    formData.set('scoreValue', value);
+    const response = await fetch(context.actionUrl, { method: 'POST', body: formData, signal: signal, headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('Save failed');
+    const result = await response.json();
+    if (!result || result.ok !== true) throw new Error('Save failed');
+    return result;
+  }
+
+  function renderGridSave(entry, result, state) {
+    const container = document.querySelector('[data-grid-autosave]');
+    if (!container) return;
+    const context = entry.context;
+    const input = container.querySelector('[data-grid-score-input][data-assignment-id="' + context.assignmentId + '"][data-student-id="' + context.studentId + '"]');
+    if (input) {
+      input.dataset.originalValue = entry.saved;
+      if (!entry.sending && !entry.error && entry.value === entry.saved) input.value = entry.value;
+      markGridCell(input, entry.error ? 'save-error' : entry.sending || entry.value !== entry.saved ? 'saving' : 'saved');
+      if (result && entry.value === entry.saved) {
         const letter = input.closest('.gb-grid-score-cell')?.querySelector('.gb-cell-letter');
         if (letter && result.letter !== undefined) letter.textContent = result.letter || '';
-        updateGridAverages(result, container);
-        markGridCell(input, 'saved');
-        if (status) status.textContent = 'Saved';
-      })
-      .catch(function() {
-        markGridCell(input, 'save-error');
-        if (status) status.textContent = 'Could not save';
-      });
+      }
+    }
+    if (result) updateGridAverages(result, container);
+    const status = container.querySelector('[data-grid-autosave-status]');
+    if (status) status.textContent = state.halted ? 'Could not save. Retry or discard unsaved edits before leaving.' : state.dirty ? 'Saving...' : 'Saved';
+    container.querySelectorAll('[data-grid-retry], [data-grid-discard]').forEach(function(button) { button.hidden = !state.halted; });
   }
 
   function syncRoleOptions(form) {
@@ -5219,7 +5273,9 @@ function gradebookGridView({
       </div>
       <div class="gb-grid-footer">
         <span>${students.length} students / ${gridAssignments.length} assignments / ${subjectLabel}</span>
-        <span data-grid-autosave-status>Autosaves changes</span>
+        <span data-grid-autosave-status role="status" aria-live="polite">Autosaves changes</span>
+        <button type="button" class="secondary-btn" data-grid-retry hidden>Retry saves</button>
+        <button type="button" class="secondary-btn" data-grid-discard hidden>Discard unsaved edits</button>
       </div>
       ${assignmentDialogs}
       <dialog class="assignment-dialog" id="add-assignment-dialog">
