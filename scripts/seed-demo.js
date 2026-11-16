@@ -6,6 +6,7 @@ const SHOULD_RESET = process.argv.includes('--reset');
 
 const db = createDb({ dbFile: DB_FILE });
 const { runSql: run, querySql: query, insertReturningId } = db;
+db.applySchemaMigrations();
 
 function sqlValue(value) {
   if (value === null || value === undefined || value === '') return 'NULL';

@@ -49,3 +49,23 @@ automatically retries mutations. Form errors preserve the current DOM values and
 associate field errors with the focused alert. Autosave retains its serial queue,
 explicit retry/discard behavior, and independent pending values. Authentication
 loss offers sign-in in another tab so unsaved work is retained.
+
+## Database versions and recovery
+
+`server/migrations.js` owns ordered migrations using SQLite `user_version`.
+Version 1 establishes the existing schema and supported additive columns. Fresh
+databases are created and upgraded in one savepoint; recognized unversioned
+databases retain their records. Partial/unrelated schemas are rejected. All pending
+steps, data changes and the version marker roll back together on failure.
+Startup, demo seeding and staged restores share the registry. Future versions are
+rejected before initialization writes; automatic downgrades are unsupported.
+
+Append migrations rather than changing released steps. Update version-specific
+schema requirements with future steps and test historical fixtures. Default-record
+initialization remains idempotent and transactional. Historical relationship
+violations remain preserved and reported, not repaired.
+
+On upgrade failure, retain the database for diagnosis; no listener starts against a
+failed upgrade. Restore candidates migrate only in a staged copy before replacing
+the active file. Existing pre-restore backup and original-file recovery remain.
+Reverting code does not undo committed versions; use compatible code or a backup.

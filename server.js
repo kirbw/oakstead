@@ -54,7 +54,6 @@ const {
 } = require('./server/input');
 const { createDb } = require('./server/db');
 const { addDays, daysBetween, schoolDateRange } = require('./server/dates');
-const { SCHEMA_SQL } = require('./server/schema');
 const { backupDue, createBackupScheduler } = require('./server/backups');
 const { SESSION_VALID_SQL } = require('./server/sessions');
 const { numericValue, numericValues, average } = require('./server/averages');
@@ -291,7 +290,6 @@ function clearLoginFailures(req, username) {
 
 function ensureDb() {
   db.transaction(() => {
-    runSql(SCHEMA_SQL);
     db.applySchemaMigrations();
 
     runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
