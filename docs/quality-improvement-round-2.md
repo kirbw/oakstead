@@ -78,8 +78,8 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: no schema change; existing grade/classroom rules reused.
   - PR: https://github.com/kirbw/oakstead/pull/39. Merge commit: f9685995d2c21b1cf9e391539f6013973f7a5ff0 (2026-11-16).
 
-- [ ] **3. Make score clearing consistent**
-  - Branch: `codex/consistent-score-clearing`. Status: submitted, awaiting merge.
+- [x] **3. Make score clearing consistent**
+  - Branch: `codex/consistent-score-clearing`. Status: merged.
   - Plan: shared parser distinguishes omitted (unchanged), blank (delete), invalid
     (reject), and valid score. Apply across individual/conventional/bulk paths.
     Validate every target before writes; no partial submissions. Ungraded letter
@@ -97,16 +97,25 @@ production rollout. Leave unrelated local files untouched.
     unique test window. Manual: save 90, clear, Tab away, reload; confirm no F and
     ungraded averages, then repeat with the conventional assignment form.
   - Compatibility: same bounds/conversions/rounding; no schema changes or repairs.
-  - PR: https://github.com/kirbw/oakstead/pull/40. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/40. Merge commit: 44e0b34528de7857239d9548d7e87bc6eb7edb9c (2026-11-16).
 
 - [ ] **4. Preserve Unicode in multipart forms**
-  - Branch: `codex/fix-multipart-unicode`. Status: planned.
+  - Branch: `codex/fix-multipart-unicode`. Status: validated, awaiting PR.
   - Plan: preserve multipart/file bytes and decode text as UTF-8. Preserve upload
     limits and file validation. Reject malformed bodies before mutations. Do not
     guess repairs for previously corrupted stored text.
   - Acceptance: accents/non-Latin text/emoji round-trip; mixed text/file checksums,
     quoted/unquoted boundaries, empty fields, malformed bodies, upload rejections.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: byte-buffer delimiter parsing, UTF-8 text/header decoding,
+    framing validation and safe asynchronous parse rejection. File bytes unchanged.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (42 tests).
+    Unicode/emoji/empty/quoted boundaries, binary checksums with boundary-like bytes,
+    malformed/truncated/invalid UTF-8 requests, real settings and upload rejection.
+    Edge browser saved and reloaded Colegio José 学校 🌿 without corruption.
+  - Screenshots: Edge CDP capture attempted and timed out. Manual: save an accented/
+    non-Latin/emoji school name in System Settings, reload, check exact text and logo.
+  - Compatibility: upload limits and signature checks retained; no historical repair.
+  - PR: Pending. Merge commit: Pending.
 
 - [ ] **5. Make school-date calculations timezone independent**
   - Branch: `codex/timezone-safe-school-dates`. Status: planned.
