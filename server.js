@@ -55,6 +55,7 @@ const {
 const { createDb } = require('./server/db');
 const { createOperationalMonitor, databaseReady, renderOperationalPage } = require('./server/operations');
 const operations = createOperationalMonitor();
+const ui = require('./server/ui');
 const { createLifecycle, stopHttpServer, installShutdownSignals, restartAfterDrain } = require('./server/lifecycle');
 let application;
 const { addDays, daysBetween, schoolDateRange } = require('./server/dates');
@@ -1276,7 +1277,7 @@ function navItemActive(pathname, currentPath) {
 
 function navLink(pathname, currentPath, label, iconKey) {
   const active = navItemActive(pathname, currentPath);
-  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}">${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
+  return `<a class="nav-link ${active ? 'active' : ''}" href="${pathname}"${active ? ' aria-current="page"' : ''}>${NAV_ICONS[iconKey] || ''}<span>${esc(label)}</span></a>`;
 }
 
 function navItemsForUser(user) {
@@ -1300,7 +1301,7 @@ function actionPanel(title, body, meta = '') {
 }
 
 function emptyState(text) {
-  return `<p class="empty">${esc(text)}</p>`;
+  return ui.emptyState(text);
 }
 
 function pageTemplate({ title, currentPath, content, csrfToken, user, years = [], selectedYear = null }) {
@@ -1365,6 +1366,7 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
       </button>
     </div>
   </nav>` : ''}
+  ${ui.notice({kind:'loading',id:'view-loading-status',message:'Loading view…',floating:true,hidden:true})}
   <main class="main" data-app-main>${content}</main>
   <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><a href="${esc(APP_REPOSITORY_URL)}" target="_blank" rel="noopener noreferrer"><strong>Oakstead</strong> v${esc(APP_VERSION)}</a></span></footer>
 </div>

@@ -51,7 +51,7 @@ function createScoreSaveQueue({ send, onChange = () => {}, debounceMs = 550, tim
         } catch (error) {
           entry.sending = false;
           entry.error = true;
-          entry.failure = { message: error.message, requestId: error.requestId };
+          entry.failure = { message: error.message, requestId: error.requestId, status: error.status };
           halted = true;
           notify(entry);
         } finally {

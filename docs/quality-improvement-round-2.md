@@ -262,8 +262,8 @@ production rollout. Leave unrelated local files untouched.
     Standalone updater requires manual restart; managed worker uses parent IPC.
   - PR: https://github.com/kirbw/oakstead/pull/47. Merge commit: 20f2403d26f962deffd6ad9b5381b4ea0aadc6c0 (2026-11-16).
 
-- [ ] **11. Add operational health and query visibility**
-  - Branch: `codex/operational-health`. Status: submitted, awaiting merge.
+- [x] **11. Add operational health and query visibility**
+  - Branch: `codex/operational-health`. Status: merged.
   - Plan: structured request ID/normalized route/status/duration logs; DB counts and
     timings, operation-label warnings over 100ms; never raw SQL parameters or records.
     Bounded process-local aggregates. Admin view: uptime/version/readiness, request/
@@ -288,10 +288,10 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: no schema/dependency changes; new public readiness/admin-only
     diagnostics routes. Metrics process-local; counts represent calls/batches, not
     individual migration statements. Closed DB never reopened by health.
-  - PR: https://github.com/kirbw/oakstead/pull/48. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/48. Merge commit: 1950122360fcb684d1775d84f1d8cc83eb1ba805 (2026-11-16).
 
 - [ ] **12. Standardize visual controls and UI states**
-  - Branch: `codex/consistent-ui-states`. Status: planned.
+  - Branch: `codex/consistent-ui-states`. Status: submitted, awaiting merge.
   - Plan: document/consolidate semantic colors, spacing/type/focus/controls while
     preserving green identity/layouts. Shared fields/buttons/notices/empty/loading/
     save/error patterns distinguish failure from empty and offer safe retry. Keyboard
@@ -300,4 +300,32 @@ production rollout. Leave unrelated local files untouched.
   - Acceptance: main screens/all Setup sections/grade entry/parent/staff flows,
     keyboard, mobile/desktop, light/dark, reduced motion, loading/error/empty states;
     representative screenshots.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: shared escaped notices/empty states/fields/buttons and browser
+    feedback; semantic spacing/color/focus/control tokens, dark button contrast,
+    keyboard focus, associated errors with retained values, loading/save announcements,
+    safe read retry, cell status symbols, 44px mobile controls, reduced-motion CSS.
+    Narrow tables/reports scroll within their containers; desktop/print layouts kept.
+    Browser checks found populated Congregations/Districts referenced unloaded family
+    arrays: section loaders now return aggregate family counts; regression covers
+    first record, zero families and linked families without loading family records.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (74 tests)
+    on Windows. All 14 Setup sections rendered in browser for admin/principal;
+    principal church creation, rejected date/retained input/correction, staff main
+    screens, teacher Tab/Shift+Tab saves (90, zero, clear), parent graph/report,
+    light/dark, empty/error/save states and 375/320px sizing verified. Parent report
+    overflow corrected and rechecked at 320px (305px content and scroll widths).
+    Reduced-motion preference emulation is unavailable in browser tooling; CSS rule
+    reviewed. Manual check: enable OS reduced motion, reload gradebook, save a cell
+    and confirm loading/save transitions do not animate. No OS preference changed.
+    Initial screenshot capture failures were retried successfully with viewport shots.
+  - Performance: Setup 15-run medians: network 0.04ms (2 queries/1 row), settings
+    0.03ms (2/1), families 1.08ms (11/404); query counts unchanged from PR 11.
+  - Screenshots: screenshots/round-2/pr12-validation-desktop.jpg,
+    screenshots/round-2/pr12-validation-mobile.jpg,
+    screenshots/round-2/pr12-empty-dark.jpg,
+    screenshots/round-2/pr12-gradebook-saved.jpg,
+    screenshots/round-2/pr12-parent-mobile.jpg. Visual rules: design-system.md.
+  - Compatibility: no schema/dependency, route, grading or authorization changes.
+    Theme preferences retain their existing storage; no browser grade persistence.
+    Screenshots/edits use disposable fixture data; production untouched.
+  - PR: https://github.com/kirbw/oakstead/pull/49. Merge commit: Pending.

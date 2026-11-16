@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const querystring = require('querystring');
 const zlib = require('zlib');
+const ui = require('./ui');
 
 function safeInternalPath(value, fallback = '/') {
   try {
@@ -193,7 +194,7 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
       return res.end(JSON.stringify({ ok: false, error: safeMessage, requestId, problem }));
     }
     res.writeHead(status, { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(problem.title)}</title><link rel="stylesheet" href="/assets/app.css?v=${require('./assets').APP_STYLESHEET_VERSION}"><main class="main"><section class="chart-panel" role="alert"><h1>${escapeHtml(problem.title)}</h1><p>${escapeHtml(safeMessage)}</p><p>Request ID: ${escapeHtml(requestId)}</p><p>Use your browser's Back button to return to the form and review your entries.</p><a href="/">Dashboard</a></section></main></html>`);
+    return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(problem.title)}</title><link rel="stylesheet" href="/assets/app.css?v=${require('./assets').APP_STYLESHEET_VERSION}"><main class="main"><section class="chart-panel"><h1>${escapeHtml(problem.title)}</h1>${ui.notice({kind:'error',message:safeMessage})}<p>Request ID: ${escapeHtml(requestId)}</p><p>Use your browser's Back button to return to the form and review your entries.</p><a href="/">Dashboard</a></section></main></html>`);
   }
 
   function redirect(res, location, headers = {}) {

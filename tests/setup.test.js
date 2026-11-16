@@ -5,7 +5,7 @@ const { schoolFixture } = require('./helpers/school');
 const { startApp } = require('./helpers/app');
 
 const sections=['families','districts','congregations','teachers','classrooms','subjects','years','weights','letter-grades','users','settings','network','backups','updates'];
-const normalize=html=>html.replace(/\s*·\s*<a href="\/system\/operations">Operational health<\/a>/g,'').replace(/\s+/g,' ').replace(/> </g,'><').trim();
+const normalize=html=>html.replace(/ aria-current="page"/g,'').replace(/\s*·\s*<a href="\/system\/operations">Operational health<\/a>/g,'').replace(/\s+/g,' ').replace(/> </g,'><').trim();
 
 test('selected-section rendering preserves corrected baseline HTML and navigation counts', () => {
   const fixture=setupFixture({familyCount:4,studentCount:12});

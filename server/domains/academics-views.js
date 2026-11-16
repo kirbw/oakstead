@@ -1,3 +1,5 @@
+const ui = require('../ui');
+
 function createViews({
   DEFAULT_LETTER_GRADES,
   ROLE_TEACHER,
@@ -234,8 +236,8 @@ function createViews({
         <div class="gb-grid-footer">
           <span>${students.length} students / ${gridAssignments.length} assignments / ${subjectLabel}</span>
           <span data-grid-autosave-status role="status" aria-live="polite">Autosaves changes</span>
-          <button type="button" class="secondary-btn" data-grid-retry hidden>Retry saves</button>
-          <button type="button" class="secondary-btn" data-grid-discard hidden>Discard unsaved edits</button>
+          ${ui.button({label:'Retry saves',attributes:{'data-grid-retry':'',hidden:true}})}
+          ${ui.button({label:'Discard unsaved edits',attributes:{'data-grid-discard':'',hidden:true}})}
         </div>
         ${assignmentDialogs}
         <dialog class="assignment-dialog" id="add-assignment-dialog">
