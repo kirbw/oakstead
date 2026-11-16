@@ -134,8 +134,8 @@ production rollout. Leave unrelated local files untouched.
     unavailable). Compatibility: no stored date shifts/schema changes/repairs.
   - PR: https://github.com/kirbw/oakstead/pull/42. Merge commit: 27da081e7c5c8ffe4b16de9e5033ff6b30a7e36e (2026-11-16).
 
-- [ ] **6. Validate database constraints before restore**
-  - Branch: `codex/validate-backup-constraints`. Status: submitted, awaiting merge.
+- [x] **6. Validate database constraints before restore**
+  - Branch: `codex/validate-backup-constraints`. Status: merged.
   - Plan: validate required PK/UNIQUE/FK constraints, compatible column declarations,
     and application upsert targets through semantic SQLite metadata, not generated
     index names. Reject unsupported staged schemas before replacement; preserve
@@ -158,12 +158,12 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility/recovery: no table rebuilds or guessed repairs; source backups
     unchanged, active DB usable on rejection, existing staged rollback retained.
     Historical orphan diagnostics remain admin-only; no contents exposed in errors.
-  - PR: https://github.com/kirbw/oakstead/pull/43. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/43. Merge commit: 5473415b11137fc7ac56f610a61ed200abffcff7 (2026-11-16).
 
 ## Part B — First six Nexus patterns
 
 - [ ] **7. Establish domain routes, services, and validation boundaries**
-  - Branch: `codex/domain-boundaries`. Status: planned.
+  - Branch: `codex/domain-boundaries`. Status: submitted, awaiting merge.
   - Plan: separate dispatch, dependency-free input validation, business operations,
     database access and rendering. Group authentication/people/academics/admin;
     entry point composes/starts app. Shared services own authorization/transactions.
@@ -171,7 +171,23 @@ production rollout. Leave unrelated local files untouched.
   - Acceptance: integrations and focused authorization/validation/rollback service
     tests pass; representative response comparisons and before/after grade/Setup
     benchmarks show no material regression.
-  - PR / implementation / validation / screenshots / compatibility / merge: Pending.
+  - Implementation: authentication/people/academics/administration service and view
+    factories, explicit repository injection, shared input guard, response descriptors
+    and route adapter. Shared academic authorization and service-owned transactions;
+    rejected results roll back before HTTP response. Hashed CSS/client assets moved
+    out of entry point. Architecture documented in architecture.md.
+  - Validation: npm test and Node 22.13 syntax/refactor/full suite pass (52 tests).
+    Direct service authorization/validation/rollback tests, transport commit/cookie
+    behavior, browser-asset syntax/hash/gzip checks. Forty role/route responses match
+    pre-extraction behavior (CSRF/temporary runtime values normalized). Browser
+    sign-in, authorized grade grid and autosave 90/Saved verified.
+  - Benchmarks: graph 3 queries/51,166 rows, 74.78ms before / 82.95ms after; single
+    period 3 queries/1,398 rows, 1.78ms / 1.39ms. Setup network 2 queries/1 row 0.03ms
+    both; settings 0.02ms both; families 11 queries/404 rows 1.03ms / 0.97ms. Existing
+    pure grade calculation and section loading code unchanged; timing noise observed.
+  - Screenshot: screenshots/round-2/pr7-domain-gradebook.jpg. Compatibility: no
+    schema/URL/field/permission/stack changes; dependencies explicit, no new packages.
+  - PR: https://github.com/kirbw/oakstead/pull/44. Merge commit: Pending.
 
 - [ ] **8. Standardize request handling and errors**
   - Branch: `codex/shared-request-errors`. Status: planned.
