@@ -1,6 +1,7 @@
 const { asInt, cleanText, esc, normalizeCategory, formatFileSize, compactNumber } = require('./input');
 const { APP_VERSION, DATA_DIR, RELEASE_REPO, UPDATE_MODE, DEMO_MODE, DEMO_HIDDEN_SETUP_SECTIONS } = require('./config');
 const { loadSetupCounts, loadSetupSection } = require('./setup-data');
+const ui = require('./ui');
 
 function createSetupRenderer(helpers) {
   const {
@@ -210,7 +211,7 @@ function createSetupRenderer(helpers) {
         <div class="table-wrap compact-table"><table>
           <tr><th>District</th><th>Families</th><th></th></tr>
           ${districts.map((district) => {
-            const count = families.filter((family) => asInt(family.school_district_id) === asInt(district.id)).length;
+            const count = district.family_count;
             return `<tr><td>${esc(district.name)}</td><td>${count}</td><td><a class="text-action" href="/setup?section=districts&districtId=${district.id}">Edit</a></td></tr>`;
           }).join('') || `<tr><td colspan="3">${emptyState('No school districts yet.')}</td></tr>`}
         </table></div>
@@ -240,7 +241,7 @@ function createSetupRenderer(helpers) {
         <div class="table-wrap compact-table"><table>
           <tr><th>Church</th><th>Families</th><th></th></tr>
           ${congregations.map((congregation) => {
-            const count = families.filter((family) => asInt(family.congregation_id) === asInt(congregation.id)).length;
+            const count = congregation.family_count;
             return `<tr><td>${esc(congregation.name)}</td><td>${count}</td><td><a class="text-action" href="/setup?section=congregations&congregationId=${congregation.id}">Edit</a></td></tr>`;
           }).join('') || `<tr><td colspan="3">${emptyState('No congregations yet.')}</td></tr>`}
         </table></div>
@@ -591,7 +592,7 @@ function createSetupRenderer(helpers) {
         </div>
         <form method="post" action="/system-settings" enctype="multipart/form-data" class="form-grid two">
           ${csrfInput(csrfToken)}
-          <label>School Name<input name="schoolName" required maxlength="120" value="${esc(settings.schoolName)}" /></label>
+          ${ui.field({name:'schoolName',label:'School Name',required:true,maxLength:120,value:settings.schoolName})}
           <label>Logo<input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" /></label>
           <label>Favicon<input type="file" name="favicon" accept=".ico,.png,.jpg,.jpeg,.webp,image/x-icon,image/png,image/jpeg,image/webp" /></label>
           <button type="submit">Save Settings</button>
@@ -792,7 +793,7 @@ function createSetupRenderer(helpers) {
     ];
     const setupNav = `<aside class="setup-nav" aria-label="School setup modules">
       <div class="setup-nav-head"><h2>Setup</h2></div>
-      ${setupLinks.map(([key, label, meta]) => `<a class="setup-link ${section === key ? 'active' : ''}" href="/setup?section=${key}">
+      ${setupLinks.map(([key, label, meta]) => `<a class="setup-link ${section === key ? 'active' : ''}" href="/setup?section=${key}"${section === key ? ' aria-current="page"' : ''}>
         <strong>${esc(label)}</strong>
         <span>${esc(meta)}</span>
       </a>`).join('')}

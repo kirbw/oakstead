@@ -36,6 +36,7 @@ async function schoolFixture(t, options) {
       ('fixture-principal',102,'2099-01-01T00:00:00.000Z'),
       ('fixture-admin',1,'2099-01-01T00:00:00.000Z'),
       ('fixture-parent',103,'2099-01-01T00:00:00.000Z');
+    UPDATE os_users SET password_hash=(SELECT password_hash FROM os_users WHERE id=1) WHERE id IN (101,102,103);
   `));
   const cookie = (role = 'teacher') => `csrfToken=fixture; sessionToken=fixture-${role}`;
   const post = (url, fields, role = 'teacher') => app.request(url, {

@@ -1,3 +1,5 @@
+const ui = require('../ui');
+
 function createViews({ APP_STYLESHEET_VERSION, appSettings, csrfInput, esc, https }) {
   function loginPage(csrfToken, hasError) {
     const settings = appSettings();
@@ -22,11 +24,11 @@ function createViews({ APP_STYLESHEET_VERSION, appSettings, csrfInput, esc, http
       </div>
       <form method="post" action="/login" class="form-grid">
         ${csrfInput(csrfToken)}
-        <label>Username<input name="username" autocomplete="username" required maxlength="80" /></label>
-        <label>Password<input type="password" name="password" autocomplete="current-password" required maxlength="120" /></label>
-        <button type="submit">Sign in</button>
+        ${ui.field({name:'username',label:'Username',autocomplete:'username',required:true,maxLength:80})}
+        ${ui.field({name:'password',label:'Password',type:'password',autocomplete:'current-password',required:true,maxLength:120})}
+        ${ui.button({label:'Sign in',type:'submit',variant:'primary'})}
       </form>
-      ${hasError ? '<p class="notice danger">That username or password did not match.</p>' : '<p class="notice">Default administrator: admin / ChangeMeNow!</p>'}
+      ${hasError ? ui.notice({kind:'error',message:'That username or password did not match.'}) : '<p class="notice">Default administrator: admin / ChangeMeNow!</p>'}
     </section>
   </main>
   </body>

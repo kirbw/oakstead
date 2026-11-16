@@ -38,8 +38,8 @@ function loadSetupSection(query, yearId, section, requestedFamilyId = 0) {
   const loaders = {
     teachers: () => query('SELECT * FROM os_teachers ORDER BY name;'),
     subjects: () => query('SELECT * FROM os_subjects ORDER BY name;'),
-    districts: () => query('SELECT * FROM os_school_districts ORDER BY name;'),
-    congregations: () => query('SELECT * FROM os_congregations ORDER BY name;'),
+    districts: () => query('SELECT d.*, (SELECT COUNT(*) FROM os_families f WHERE f.school_district_id=d.id) AS family_count FROM os_school_districts d ORDER BY d.name;'),
+    congregations: () => query('SELECT c.*, (SELECT COUNT(*) FROM os_families f WHERE f.congregation_id=c.id) AS family_count FROM os_congregations c ORDER BY c.name;'),
     roleGroups: () => query('SELECT * FROM os_role_groups ORDER BY name;'),
     roleTypes: () => query('SELECT rt.*, rg.name AS group_name FROM os_role_types rt JOIN os_role_groups rg ON rg.id = rt.group_id ORDER BY rg.name, rt.name;'),
     personRoles: () => query(`SELECT pr.*, rg.name AS group_name, rt.name AS role_name
