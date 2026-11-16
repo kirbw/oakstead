@@ -190,7 +190,7 @@ production rollout. Leave unrelated local files untouched.
   - PR: https://github.com/kirbw/oakstead/pull/44. Merge commit: d70dfa82fdc1ff9206f9f6a6acedba20a10ed832 (2026-11-16).
 
 - [ ] **8. Standardize request handling and errors**
-  - Branch: `codex/shared-request-errors`. Status: validated, awaiting PR.
+  - Branch: `codex/shared-request-errors`. Status: submitted, awaiting merge.
   - Plan: shared browser timeout/auth-loss/error/request-ID handling; consistent
     validation/forbidden/conflict/oversize/unexpected errors, established success
     fields retained. Safe form errors retain appropriate submitted values; hide
@@ -213,7 +213,7 @@ production rollout. Leave unrelated local files untouched.
   - Compatibility: successful fields preserved; JSON session failures now 401,
     duplicate records 409; ordinary large forms capped at 1MiB. Upload limits and
     explicit autosave retry preserved. No schema/dependency changes.
-  - PR: Pending. Merge commit: Pending.
+  - PR: https://github.com/kirbw/oakstead/pull/45. Merge commit: Pending.
 
 - [ ] **9. Introduce versioned database migrations**
   - Branch: `codex/versioned-database-migrations`. Status: planned.
