@@ -30,7 +30,7 @@ headers, and initial frontend extraction from server.js.
     [Release check](performance-recovery/release-check.jpg).
   - Compatibility: no schema/dependency changes; existing successful response
     fields retained. New 409 response for concurrent check/update requests.
-  - Status: validated, awaiting PR. PR: pending. Merge: pending.
+  - Status: validated, awaiting merge. PR: https://github.com/kirbw/oakstead/pull/55. Merge: pending.
 - [ ] 2. Async response work — `codex/async-response-work`
   - Async dynamic gzip, maximum four concurrent jobs, uncompressed fallback
     without a queue, safe header/disconnect/error handling. Static compression
