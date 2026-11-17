@@ -92,6 +92,7 @@ function createService({
       try {
         return json(200, await checkLatestRelease(cleanText(body.channel, 20)), headers);
       } catch (error) {
+        if (error.statusCode === 409) return json(409, { error: error.message }, headers);
         const status = writeUpdateStatus({ running: false, phase: 'check failed', percent: 0, message: error.message || 'Update check failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
         return json(500, status, headers);
       }
@@ -103,6 +104,7 @@ function createService({
         const status = await startSystemUpdate(cleanText(body.channel, 20));
         return json(202, status, headers);
       } catch (error) {
+        if (error.statusCode === 409) return json(409, { error: error.message }, headers);
         const status = writeUpdateStatus({ running: false, phase: 'update failed', percent: 100, message: error.message || 'Update failed.', log: [updateLog(`ERROR ${error.message || error}`)] });
         return json(500, status, headers);
       }
