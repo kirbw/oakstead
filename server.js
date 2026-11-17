@@ -800,12 +800,19 @@ function installerAssetForRelease(release, version) {
     || null;
 }
 
+const releaseCommands = require('./server/release-commands').createReleaseCommands({ cwd: APP_ROOT });
+let releaseOperation = false;
+function releaseBusy() { return Object.assign(new Error('A release check or update is already in progress.'), { statusCode: 409 }); }
+
 function runUpdateCommand(label, command, args, options = {}) {
   writeUpdateStatus({ message: label, log: [updateLog(label)] });
   const result = spawnSync(command, args, {
     cwd: APP_ROOT,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 8,
+    timeout: 120000,
+    windowsHide: true,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' },
     ...options
   });
   const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
@@ -826,7 +833,8 @@ function latestReleaseTag(channel) {
   return channel === 'prerelease' ? (prerelease || stable || '') : (stable || '');
 }
 
-function checkLatestGitRelease(channel) {
+async function checkLatestGitRelease(channel) {
+  const deadline = Date.now() + 20000;
   const updateChannel = channel === 'prerelease' ? 'prerelease' : 'stable';
   writeUpdateStatus({
     phase: 'checking',
@@ -839,8 +847,11 @@ function checkLatestGitRelease(channel) {
     message: 'Checking GitHub for available releases.',
     log: [updateLog(`Checking ${updateChannel} releases`)]
   });
-  runUpdateCommand('Fetching GitHub release tags', 'git', ['fetch', '--tags', '--prune', 'origin']);
-  const tag = latestReleaseTag(updateChannel);
+  await releaseCommands.run('git', ['fetch', '--tags', '--prune', 'origin'], { deadline });
+  const tags = (await releaseCommands.run('git', ['tag', '--list', '--sort=-v:refname'], { deadline })).split('\n').map(tag => tag.trim());
+  const stable = tags.find(tag => /^v?\d+\.\d+\.\d+$/.test(tag));
+  const prerelease = tags.find(tag => /^v?\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/.test(tag));
+  const tag = (updateChannel === 'prerelease' ? prerelease || stable : stable) || '';
   const latestVersion = tag ? tag.replace(/^v/, '') : '';
   const updateAvailable = Boolean(latestVersion && compareVersions(latestVersion, APP_VERSION) > 0);
   return writeUpdateStatus({
@@ -909,7 +920,10 @@ async function checkLatestInstallerRelease(channel) {
 }
 
 async function checkLatestRelease(channel) {
-  return UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel);
+  if (releaseOperation || readUpdateStatus().running) throw releaseBusy();
+  releaseOperation = true;
+  try { return await (UPDATE_MODE === 'installer' ? checkLatestInstallerRelease(channel) : checkLatestGitRelease(channel)); }
+  finally { releaseOperation = false; }
 }
 
 async function restartApplication() {
@@ -988,6 +1002,13 @@ async function startInstallerUpdate(channel) {
 }
 
 async function startSystemUpdate(channel) {
+  if (releaseOperation || readUpdateStatus().running) throw releaseBusy();
+  releaseOperation = true;
+  try { return await performSystemUpdate(channel); }
+  finally { releaseOperation = false; }
+}
+
+async function performSystemUpdate(channel) {
   const active = readUpdateStatus();
   if (active.running) return active;
   if (UPDATE_MODE === 'installer') return startInstallerUpdate(channel);
@@ -2169,6 +2190,7 @@ let demoTimer;
 function stopBackgroundJobs() {
   backupScheduler?.stop();
   clearInterval(demoTimer);
+  return releaseCommands.stop();
 }
 
 function createApplication() {
