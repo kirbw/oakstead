@@ -49,7 +49,7 @@ headers, and initial frontend extraction from server.js.
   - Compatibility: schema/hash format unchanged; more uncompressed HTML under
     load, no WAN benchmark. Concurrent target changes return 409; full hash
     capacity returns 503.
-  - Status: validated; PR pending; merge pending.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/56; merge pending.
 - [ ] 3. Browser source files — `codex/browser-source-files`
   - Ordinary JS/CSS, dependency-free startup assembly, existing URLs/content
     hashes/precompression, directly testable helpers without function-string
