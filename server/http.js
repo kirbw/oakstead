@@ -13,7 +13,11 @@ function safeInternalPath(value, fallback = '/') {
 }
 
 function acceptsGzip(req) {
-  return /\bgzip\b/.test(String(req?.headers?.['accept-encoding'] || ''));
+  const encodings = String(req?.headers?.['accept-encoding'] || '').split(',').map(value => value.trim().split(';'));
+  const match = encodings.find(([name]) => name.toLowerCase() === 'gzip') || encodings.find(([name]) => name === '*');
+  if (!match) return false;
+  const quality = match.slice(1).find(value => /^\s*q\s*=/i.test(value));
+  return !quality || Number(quality.split('=')[1]) > 0;
 }
 
 function parseMultipart(buffer, contentType) {
@@ -67,7 +71,8 @@ function parseMultipart(buffer, contentType) {
   }
 }
 
-function createHttpHelpers({ escapeHtml, maxBodySize }) {
+function createHttpHelpers({ escapeHtml, maxBodySize, canCompress = () => true, gzip = (body, done) => zlib.gzip(body, { level: zlib.constants.Z_BEST_SPEED }, done) }) {
+  let compressing = 0;
   function parseCookies(req) {
     return String(req.headers.cookie || '').split(';').reduce((cookies, part) => {
       const [key, ...rest] = part.trim().split('=');
@@ -159,15 +164,31 @@ function createHttpHelpers({ escapeHtml, maxBodySize }) {
     };
   }
 
-  function sendHtml(req, res, html, headers = {}) {
-    const baseHeaders = { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8' };
-    if (acceptsGzip(req)) {
-      res.writeHead(200, { ...baseHeaders, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
-      res.end(zlib.gzipSync(Buffer.from(html)));
-      return;
+  async function sendHtml(req, res, html, headers = {}) {
+    const baseHeaders = { ...securityHeaders(), ...headers, 'Content-Type': 'text/html; charset=utf-8', Vary: 'Accept-Encoding' };
+    let body = html;
+    if (acceptsGzip(req) && compressing < 4 && canCompress()) {
+      compressing++;
+      try {
+        const compressed = await new Promise(resolve => {
+          // Compression is optional: never hold a page behind a busy worker pool.
+          const timer = setTimeout(() => resolve(null), 10);
+          let finished = false;
+          const done = (error, data) => {
+            if (finished) return;
+            finished = true;
+            compressing--;
+            clearTimeout(timer);
+            resolve(error ? null : data);
+          };
+          try { gzip(Buffer.from(html), done); } catch (error) { done(error); }
+        });
+        if (compressed) { body = compressed; baseHeaders['Content-Encoding'] = 'gzip'; }
+      } catch { body = html; }
     }
+    if (res.destroyed || res.writableEnded) return;
     res.writeHead(200, baseHeaders);
-    res.end(html);
+    res.end(body);
   }
 
   function sendText(res, status, text, headers = {}) {

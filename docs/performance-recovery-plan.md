@@ -11,7 +11,7 @@ headers, and initial frontend extraction from server.js.
 
 ## Checklist
 
-- [ ] 1. Asynchronous, bounded release checks — `codex/async-release-checks`
+- [x] 1. Asynchronous, bounded release checks — `codex/async-release-checks`
   - Git argument arrays, noninteractive environment, hidden Windows processes,
     bounded output, 20-second overall check deadline, process-tree termination,
     shutdown cleanup, and one check/update at a time with a busy response.
@@ -30,7 +30,8 @@ headers, and initial frontend extraction from server.js.
     [Release check](performance-recovery/release-check.jpg).
   - Compatibility: no schema/dependency changes; existing successful response
     fields retained. New 409 response for concurrent check/update requests.
-  - Status: validated, awaiting merge. PR: https://github.com/kirbw/oakstead/pull/55. Merge: pending.
+  - Status: merged; branch deleted. PR: https://github.com/kirbw/oakstead/pull/55.
+    Merge: 46f2d713385543eb2b1b216abd4c9b9268816420.
 - [ ] 2. Async response work — `codex/async-response-work`
   - Async dynamic gzip, maximum four concurrent jobs, uncompressed fallback
     without a queue, safe header/disconnect/error handling. Static compression
@@ -38,7 +39,17 @@ headers, and initial frontend extraction from server.js.
     recheck actor/target after await. Preserve password format.
   - Validate overload, failures, shutdown, authorization races, equivalent HTML;
     compare identical 50-teacher/500-student gzip-enabled load tests.
-  - Status/PR/validation/compatibility/merge: pending.
+  - Implemented: async level-1 gzip, four-job cap, 10ms wait and busy-request
+    identity fallback; bounded async account hashing and actor/target rechecks.
+  - Validation: 90 tests pass on Node 26.13.1 and 22.13.0; npm syntax/refactor
+    checks pass. Browser verified login, grade entry, updated averages and Saved.
+    [Screenshot](performance-recovery/async-response-gradebook.jpg).
+    [Load measurements](performance-recovery/async-response-results.md): 50-actor
+    throughput 422–424 to 627–634 ops/s; no failures or incorrect final scores.
+  - Compatibility: schema/hash format unchanged; more uncompressed HTML under
+    load, no WAN benchmark. Concurrent target changes return 409; full hash
+    capacity returns 503.
+  - Status: validated; PR pending; merge pending.
 - [ ] 3. Browser source files — `codex/browser-source-files`
   - Ordinary JS/CSS, dependency-free startup assembly, existing URLs/content
     hashes/precompression, directly testable helpers without function-string
