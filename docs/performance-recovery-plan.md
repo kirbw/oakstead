@@ -69,7 +69,7 @@ headers, and initial frontend extraction from server.js.
     [iPhone](performance-recovery/browser-sources-iphone.jpg).
   - Compatibility: URLs/CSP/layout/role rules unchanged; assets refresh through
     content hashes. No schema or dependency changes.
-  - Status: validated; PR pending; merge pending.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/57; merge pending.
 - [ ] 4. Bound database writes — `codex/parameterized-database-writes`
   - Single-statement parameterized reads/writes/inserted IDs; trusted schema
     scripts stay separate. Convert authentication, users, settings, people,
