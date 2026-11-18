@@ -30,4 +30,19 @@ function createPasswordVerifier({ concurrency = 4, maxPending = 64, scrypt = cry
     });
   };
 }
-module.exports = { createPasswordVerifier };
+function createPasswordHasher({ concurrency = 4, scrypt = crypto.scrypt } = {}) {
+  let active = 0;
+  return function hashPassword(password) {
+    if (active >= concurrency) return Promise.reject(Object.assign(new Error('Password processing is busy. Please retry.'), { statusCode: 503 }));
+    active++;
+    const salt = crypto.randomBytes(16).toString('hex');
+    return new Promise((resolve, reject) => {
+      const finish = (error, hash) => {
+        active--;
+        error ? reject(error) : resolve(`${salt}:${hash.toString('hex')}`);
+      };
+      try { scrypt(String(password), salt, 64, finish); } catch (error) { finish(error); }
+    });
+  };
+}
+module.exports = { createPasswordVerifier, createPasswordHasher };

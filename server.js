@@ -74,6 +74,7 @@ const {
   scoreFieldEntries
 } = require('./server/gradebook-utils');
 const { APP_STYLESHEET_VERSION, APP_CLIENT_SCRIPT_VERSION, STATIC_ASSETS } = require('./server/assets');
+let activeRequests = 0;
 const {
   appendSetCookie,
   cookieValue,
@@ -87,7 +88,9 @@ const {
   sendHtml,
   sendJson,
   sendText
-} = createHttpHelpers({ escapeHtml: esc, maxBodySize: MAX_BODY_SIZE });
+} = createHttpHelpers({ escapeHtml: esc, maxBodySize: MAX_BODY_SIZE,
+  // Optional compression must not add a worker wait while other requests wait.
+  canCompress: () => activeRequests <= 1 });
 let ACTIVE_NETWORK = {
   host: DEFAULT_HOST,
   port: DEFAULT_PORT,
@@ -1900,7 +1903,8 @@ const administrationService = require('./server/domains/administration').createA
   canManageAdminUsers,
   canManageSchoolUsers,
   cleanText,
-  hashPassword,
+  hashPassword: require('./server/passwords').createPasswordHasher(),
+  currentUser,
   sqlValue,
 });
 const peopleViews = require('./server/domains/people-views').createViews({
@@ -2126,12 +2130,14 @@ function sendAppPage(req, res, headers, pageArgs, title, content) {
 }
 
 const server = http.createServer(async (req, res) => {
+  activeRequests++;
   const started = performance.now();
   let pathname = '/other';
   let recorded = false;
   const record = () => {
     if (recorded) return;
     recorded = true;
+    activeRequests--;
     operations.recordRequest({ requestId: res.getHeader('X-Request-ID'), method: req.method, pathname,
       status: res.writableFinished ? res.statusCode : 499, durationMs: performance.now() - started });
   };
@@ -2168,7 +2174,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method !== 'GET') return sendText(res, 405, 'Method Not Allowed');
 
-    return handleGet(req, res, url, pathname, user, csrfToken, headers);
+    return await handleGet(req, res, url, pathname, user, csrfToken, headers);
   } catch (error) {
     if (res.destroyed || res.writableEnded) return;
     if (error.errcode === 787 || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || /FOREIGN KEY constraint failed/i.test(error.message)) {
