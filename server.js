@@ -1332,7 +1332,7 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
   const navMarkup = navItems.map((item) => navLink(item.pathname, currentPath, item.label, item.iconKey)).join('');
   const activeNav = navItems.find((item) => navItemActive(item.pathname, currentPath)) || navItems[0] || null;
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-demo-mode="${esc(String(DEMO_MODE))}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />

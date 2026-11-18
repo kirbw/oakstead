@@ -32,7 +32,7 @@ headers, and initial frontend extraction from server.js.
     fields retained. New 409 response for concurrent check/update requests.
   - Status: merged; branch deleted. PR: https://github.com/kirbw/oakstead/pull/55.
     Merge: 46f2d713385543eb2b1b216abd4c9b9268816420.
-- [ ] 2. Async response work — `codex/async-response-work`
+- [x] 2. Async response work — `codex/async-response-work`
   - Async dynamic gzip, maximum four concurrent jobs, uncompressed fallback
     without a queue, safe header/disconnect/error handling. Static compression
     remains at startup. Async bounded account hashing before transactions;
@@ -49,14 +49,27 @@ headers, and initial frontend extraction from server.js.
   - Compatibility: schema/hash format unchanged; more uncompressed HTML under
     load, no WAN benchmark. Concurrent target changes return 409; full hash
     capacity returns 503.
-  - Status: validated; PR https://github.com/kirbw/oakstead/pull/56; merge pending.
+  - Status: merged; PR https://github.com/kirbw/oakstead/pull/56; branch deleted.
+    Merge: 767013cbb6aef6e01d39d26f6a357aae73c34887.
 - [ ] 3. Browser source files — `codex/browser-source-files`
   - Ordinary JS/CSS, dependency-free startup assembly, existing URLs/content
     hashes/precompression, directly testable helpers without function-string
     serialization, demo configuration via escaped HTML data attribute.
   - Include files in Windows packages and syntax checks. Browser-check login,
     grade autosave/retry/navigation, updates and demo; desktop/iPhone screenshots.
-  - Status/PR/validation/compatibility/merge: pending.
+  - Implemented: ordinary sources in server/browser; startup concatenation and
+    content hashes; Node compatibility exports retained. Demo offset reads an
+    escaped root data attribute. Syntax gate now checks all server/browser JS.
+  - Validation: 92 tests pass on Node 26.13.1 and 22.13.0, syntax/refactor gates
+    pass. Standalone Windows package-layout copy loads identical assets; source
+    changes alter hashes. Full installer build not run (vendor binaries absent).
+  - Browser: login, save-before-navigation (91), simulated failed save/retry (92),
+    fake Git update check, and demo at 390x844 verified; no horizontal overflow.
+    [Desktop](performance-recovery/browser-sources-desktop.jpg),
+    [iPhone](performance-recovery/browser-sources-iphone.jpg).
+  - Compatibility: URLs/CSP/layout/role rules unchanged; assets refresh through
+    content hashes. No schema or dependency changes.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/57; merge pending.
 - [ ] 4. Bound database writes — `codex/parameterized-database-writes`
   - Single-statement parameterized reads/writes/inserted IDs; trusted schema
     scripts stay separate. Convert authentication, users, settings, people,
