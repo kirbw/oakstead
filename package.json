@@ -18,7 +18,7 @@
   "scripts": {
     "test": "npm run check && npm run test:refactor && node --test tests/*.test.js",
     "start": "node server.js",
-    "check": "node --check server.js",
+    "check": "node scripts/check-syntax.js",
     "benchmark:grades": "node scripts/benchmark-grades.js",
     "benchmark:setup": "node scripts/benchmark-setup.js",
     "benchmark:operations": "node scripts/benchmark-operations.js",
