@@ -581,6 +581,7 @@ function createSetupRenderer(helpers) {
       </div>
       <div class="family-detail-body">
         ${isAdmin(user) ? '<p><a href="/system/diagnostics">Review data integrity</a> · <a href="/system/operations">Operational health</a></p>' : ''}
+        <p><a href="/history?yearId=${asInt(yearId)}">Academic history</a></p>
         <div class="asset-preview-grid">
           <div class="asset-preview">
             <img src="${settings.logoUrl}" alt="${esc(settings.schoolName)} logo" />

@@ -1,10 +1,10 @@
 const { esc } = require('./input');
 
 const KINDS = new Set(['info','success','warning','error','loading']);
-function notice({ kind = 'info', message, title = '', id = '', floating = false, hidden = false }) {
+function notice({ kind = 'info', message, title = '' }) {
   const state = KINDS.has(kind) ? kind : 'info';
   const icon = { info:'i', success:'✓', warning:'!', error:'!', loading:'…' }[state];
-  return `<div class="ui-notice${floating?' ui-view-status':''}" data-ui-state="${state}" role="${state==='error'?'alert':'status'}"${id?` id="${esc(id)}"`:''}${hidden?' hidden':''}><span class="ui-state-icon" aria-hidden="true">${icon}</span><div>${title?`<strong>${esc(title)}</strong>`:''}<p>${esc(message)}</p></div></div>`;
+  return `<div class="ui-notice" data-ui-state="${state}" role="${state==='error'?'alert':'status'}"><span class="ui-state-icon" aria-hidden="true">${icon}</span><div>${title?`<strong>${esc(title)}</strong>`:''}<p>${esc(message)}</p></div></div>`;
 }
 
 function emptyState(message) {

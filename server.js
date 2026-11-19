@@ -1381,7 +1381,6 @@ function pageTemplate({ title, currentPath, content, csrfToken, user, years = []
       </button>
     </div>
   </nav>` : ''}
-  ${ui.notice({kind:'loading',id:'view-loading-status',message:'Loading view…',floating:true,hidden:true})}
   <main class="main" data-app-main>${content}</main>
   <footer class="app-footer"><span>${esc(settings.schoolName)}</span><span><a href="${esc(APP_REPOSITORY_URL)}" target="_blank" rel="noopener noreferrer"><strong>Oakstead</strong> v${esc(APP_VERSION)}</a></span></footer>
 </div>
