@@ -120,7 +120,10 @@ headers, and initial frontend extraction from server.js.
     counts, rows, selection, ordering and averages for each allowed role.
   - Compatibility: schema, permissions, URLs and response fields unchanged.
     No persistent cache, dependencies or production data changes.
-  - Status: validated; PR/merge pending.
+  - Load check: same-session baseline versus bound reads at 50 actors averages
+    477.8 versus 476.3 ops/s; gradebook p95 132.7 versus 133.0ms. Zero failures,
+    correct final scores and clean integrity in both runs; raw reports linked.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/59; merge pending.
 - [ ] 6. Academic history — `codex/academic-change-history`
   - Versioned additive append-only history: actor identity/role snapshot, UTC,
     request ID, operation/record IDs, before/after values. All score paths,
