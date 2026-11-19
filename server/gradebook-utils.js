@@ -15,9 +15,9 @@ function parseScoreChanges(body, entries, mode, maxScoreFor) {
 function scoreWriteStatements(changes, fallbackAssignmentId) {
   return changes.flatMap(({ assignmentId = fallbackAssignmentId, studentId, kind, score }) => {
     if (kind === 'unchanged') return [];
-    if (kind === 'delete') return [`DELETE FROM os_scores WHERE assignment_id=${assignmentId} AND student_id=${studentId}`];
-    return [`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentId}, ${score})
-      ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score`];
+    if (kind === 'delete') return [{ sql: 'DELETE FROM os_scores WHERE assignment_id=? AND student_id=?', parameters: [assignmentId, studentId] }];
+    return [{ sql: `INSERT INTO os_scores (assignment_id, student_id, score) VALUES (?, ?, ?)
+      ON CONFLICT(assignment_id, student_id) DO UPDATE SET score=excluded.score`, parameters: [assignmentId, studentId, score] }];
   });
 }
 

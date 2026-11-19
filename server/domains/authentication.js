@@ -1,3 +1,4 @@
+const { sqlParameter } = require('../input');
 const { text, json, redirectTo } = require('./results');
 const { formRecord } = require('./validation');
 const { safeInternalPath } = require('../http');
@@ -26,7 +27,7 @@ function createService({
       const password = String(body.password || '').slice(0, 120);
       const throttle = loginThrottleStatus(req, username);
       if (throttle) return text(429, 'Too many sign-in attempts. Please try again later.', { 'Retry-After': String(throttle.retryAfter) });
-      const row = querySql(`SELECT * FROM os_users WHERE username=${sqlValue(username)} LIMIT 1;`)[0];
+      const row = querySql(`SELECT * FROM os_users WHERE username=? LIMIT 1;`, [sqlParameter(username)])[0];
       let valid = false;
       try { valid = Boolean(row) && await verifyPassword(password, row.password_hash); }
       catch (error) {
@@ -36,7 +37,7 @@ function createService({
       // Other attempts, password changes or deletion may finish while scrypt runs.
       const currentThrottle = loginThrottleStatus(req, username);
       if (currentThrottle) return text(429, 'Too many sign-in attempts. Please try again later.', { 'Retry-After': String(currentThrottle.retryAfter) });
-      const current = row && querySql(`SELECT * FROM os_users WHERE id=${asInt(row.id)} LIMIT 1;`)[0];
+      const current = row && querySql(`SELECT * FROM os_users WHERE id=? LIMIT 1;`, [asInt(row.id)])[0];
       if (!valid || !current || current.password_hash !== row.password_hash) {
         recordLoginFailure(req, username);
         return redirectTo('/login?error=1', headers);
