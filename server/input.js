@@ -15,6 +15,11 @@ function sqlValue(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+// Match legacy optional-field semantics without embedding values in SQL.
+function sqlParameter(value) {
+  return value === null || value === undefined || value === '' ? null : String(value);
+}
+
 function buildTransaction(statements) {
   const clean = (Array.isArray(statements) ? statements : [])
     .map((statement) => String(statement || '').trim())
@@ -129,5 +134,6 @@ module.exports = {
   parseScoreInput,
   scoreInputToPoints,
   scoreValueForMode,
-  sqlValue
+  sqlValue,
+  sqlParameter
 };

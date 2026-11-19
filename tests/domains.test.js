@@ -43,7 +43,7 @@ test('transport adapter emits a response only after the domain operation commits
 
 test('academic services authorize actual assignments and students without an HTTP request', async (t) => {
   const app=await schoolFixture(t);
-  const access=createAcademicAccess({repository:{querySql:sql=>app.withDb(db=>db.prepare(sql).all())},asInt,sqlValue,
+  const access=createAcademicAccess({repository:{querySql:(sql,parameters=[])=>app.withDb(db=>db.prepare(sql).all(...parameters))},asInt,sqlValue,
     isAdmin:user=>user.role==='admin',isPrincipal:user=>user.role==='principal',isTeacher:user=>user.role==='teacher',isParent:user=>user.role==='parent'});
   const teacher={role:'teacher',teacher_id:101};
   assert.equal(access.authorizedAssignments(teacher,1,'1',101,[101]).get(101).title,'Allowed assignment');

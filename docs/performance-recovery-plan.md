@@ -51,7 +51,7 @@ headers, and initial frontend extraction from server.js.
     capacity returns 503.
   - Status: merged; PR https://github.com/kirbw/oakstead/pull/56; branch deleted.
     Merge: 767013cbb6aef6e01d39d26f6a357aae73c34887.
-- [ ] 3. Browser source files — `codex/browser-source-files`
+- [x] 3. Browser source files — `codex/browser-source-files`
   - Ordinary JS/CSS, dependency-free startup assembly, existing URLs/content
     hashes/precompression, directly testable helpers without function-string
     serialization, demo configuration via escaped HTML data attribute.
@@ -69,14 +69,35 @@ headers, and initial frontend extraction from server.js.
     [iPhone](performance-recovery/browser-sources-iphone.jpg).
   - Compatibility: URLs/CSP/layout/role rules unchanged; assets refresh through
     content hashes. No schema or dependency changes.
-  - Status: validated; PR https://github.com/kirbw/oakstead/pull/57; merge pending.
+  - Status: merged; PR https://github.com/kirbw/oakstead/pull/57; branch deleted.
+    Merge: e71e4cb33e59e507d5668d705d2e75af10fdae63.
 - [ ] 4. Bound database writes — `codex/parameterized-database-writes`
   - Single-statement parameterized reads/writes/inserted IDs; trusted schema
     scripts stay separate. Convert authentication, users, settings, people,
     academic mutations and authorization lookups. Structured transactional score
     operations. Allowlist identifiers. Preserve null/blank/zero/omission semantics.
   - Test Unicode/quotes/SQL-looking values, bulk rollback, access and insert IDs.
-  - Status/PR/validation/compatibility/merge: pending.
+  - Implemented: positional parameters for mutations and their authorization
+    lookups; structured score and marking-period operations inside synchronous
+    transactions. Trusted initialization scripts remain separate.
+  - Validation: 95 tests pass on Windows with Node 26.13.1 and 22.13.0;
+    syntax/refactor gates pass. Added literal Unicode/SQL-looking text, inserted
+    IDs, empty/null/zero values, reopen and rollback coverage. Existing tests
+    cover every score form, mixed unauthorized batches, account races and restores.
+  - Browser attempt: CUA initialization and retry both failed with "trusted Node
+    process exited unexpectedly; kernel reset". No screenshot captured. Manual
+    checks: sign in as admin, create/edit a family with O'Brien and Unicode text,
+    reload it; as teacher save 90, then 0, then clear a grade and reload; confirm
+    inaccessible students/assignments remain unavailable. HTTP fixture checks
+    cover persistence and access; visual behavior was not verified in this PR.
+  - Compatibility: no schema, dependencies, URLs or permission changes. Optional
+    blank fields still map to NULL; bound APIs also support explicit empty text.
+    Remaining display reads are reserved for item 5. No injection vulnerability
+    is claimed; this change makes value handling easier to audit.
+  - Benchmarks: correctness comparisons pass; current graph 95.03ms, single
+    period 1.43ms; Setup Network 0.04ms, Families 1.09ms. Historical fixture
+    comparisons are not a before/after performance claim for this PR.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/58; merge pending.
 - [ ] 5. Bound reads and measured reuse — `codex/parameterized-database-reads`
   - Convert remaining runtime reads/access filters and IN lists; document safe
     structural SQL. Benchmark preparation with grade/Setup fixtures.

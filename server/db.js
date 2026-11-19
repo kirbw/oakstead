@@ -51,12 +51,16 @@ function createDb({ dbFile, files = fs, onQuery, now = () => performance.now() }
     return '';
   }
 
-  function querySql(sql) {
-    return measure(sqlOperation(sql), () => open().prepare(String(sql)).all());
+  function querySql(sql, parameters = []) {
+    return measure(sqlOperation(sql), () => open().prepare(String(sql)).all(...parameters));
   }
 
-  function insertReturningId(sql) {
-    const row = querySql(`${sql} RETURNING id;`)[0];
+  function executeSql(sql, parameters = []) {
+    return measure(sqlOperation(sql), () => open().prepare(String(sql)).run(...parameters));
+  }
+
+  function insertReturningId(sql, parameters = []) {
+    const row = querySql(`${String(sql).replace(/;\s*$/, '')} RETURNING id;`, parameters)[0];
     const id = Number(row?.id);
     return Number.isInteger(id) && id >= 0 ? id : 0;
   }
@@ -180,6 +184,7 @@ function createDb({ dbFile, files = fs, onQuery, now = () => performance.now() }
     applySchemaMigrations,
     checkpoint,
     close,
+    executeSql,
     insertReturningId,
     querySql,
     runSql,

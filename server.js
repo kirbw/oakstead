@@ -1,3 +1,4 @@
+const { sqlParameter } = require('./server/input');
 const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
@@ -162,10 +163,12 @@ function gridModeToggle(offUrl, onUrl, isGrid) {
 }
 
 const db = createDb({ dbFile: DB_FILE, onQuery: operations.recordQuery });
-const { runSql, querySql, insertReturningId } = db;
+const { runSql, querySql, executeSql, insertReturningId } = db;
 
 function runSqlBatch(statements) {
-  if (statements.length) db.transaction(() => runSql(statements.filter(Boolean).join(';\n')));
+  if (statements.length) db.transaction(() => {
+    for (const statement of statements.filter(Boolean)) executeSql(statement.sql, statement.parameters);
+  });
 }
 
 function timestampForFile(date = new Date()) {
@@ -302,9 +305,9 @@ function ensureDb() {
   db.transaction(() => {
     db.applySchemaMigrations();
 
-    runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ${sqlValue(DEFAULT_SCHOOL_NAME)});`);
-    runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ${sqlValue(DEFAULT_HOST)});`);
-    runSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ${sqlValue(DEFAULT_PORT)});`);
+    executeSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('school_name', ?);`, [sqlParameter(DEFAULT_SCHOOL_NAME)]);
+    executeSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_bind_host', ?);`, [sqlParameter(DEFAULT_HOST)]);
+    executeSql(`INSERT OR IGNORE INTO os_settings (key, value) VALUES ('network_port', ?);`, [sqlParameter(DEFAULT_PORT)]);
     createDefaultRoleGroups();
     migrateLessonHomeworkWeights();
 
@@ -316,16 +319,16 @@ function ensureDb() {
 
     const userCount = querySql('SELECT COUNT(*) AS count FROM os_users')[0]?.count || 0;
     if (!userCount) {
-      runSql(`INSERT INTO os_users (name, username, role, password_hash)
-        VALUES ('System Administrator', 'admin', '${ROLE_ADMIN}', ${sqlValue(hashPassword('ChangeMeNow!'))});`);
+      executeSql(`INSERT INTO os_users (name, username, role, password_hash)
+        VALUES ('System Administrator', 'admin', ?, ?);`, [ROLE_ADMIN, sqlParameter(hashPassword('ChangeMeNow!'))]);
     }
 
     querySql('SELECT id, name, start_date, end_date FROM os_school_years;').forEach((year) => {
-      const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+      const periodCount = querySql(`SELECT COUNT(*) AS count FROM os_marking_periods WHERE school_year_id=?;`, [asInt(year.id)])[0]?.count || 0;
       if (!periodCount) createMarkingPeriods(asInt(year.id), 6, year.start_date, year.end_date);
-      const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+      const weightCount = querySql(`SELECT COUNT(*) AS count FROM os_grade_weight_groups WHERE school_year_id=?;`, [asInt(year.id)])[0]?.count || 0;
       if (!weightCount) createDefaultWeightGroups(asInt(year.id));
-      const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=${asInt(year.id)};`)[0]?.count || 0;
+      const letterCount = querySql(`SELECT COUNT(*) AS count FROM os_letter_grade_groups WHERE school_year_id=?;`, [asInt(year.id)])[0]?.count || 0;
       if (!letterCount) createDefaultLetterGradeGroup(asInt(year.id));
     });
 
@@ -344,9 +347,10 @@ function markingPeriodStatements(yearId, count, startDate = '', endDate = '') {
   return Array.from({ length: periods }, (_, index) => {
     const periodStart = span ? addDays(startDate, Math.floor((span * index) / periods)) : '';
     const periodEnd = span ? addDays(startDate, Math.floor((span * (index + 1)) / periods) - 1) : '';
-    return `INSERT INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
-      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)})
-      ON CONFLICT(school_year_id, period_number) DO UPDATE SET start_date=excluded.start_date, end_date=excluded.end_date;`;
+    return { sql: `INSERT INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(school_year_id, period_number) DO UPDATE SET start_date=excluded.start_date, end_date=excluded.end_date;`,
+      parameters: [yearId, index + 1, `Period ${index + 1}`, sqlParameter(periodStart), sqlParameter(periodEnd)] };
   });
 }
 
@@ -367,10 +371,10 @@ function dataIntegrityPage() {
 
 function createWeightGroup(yearId, name, minGrade, maxGrade, weights) {
   const groupId = insertReturningId(`INSERT INTO os_grade_weight_groups (school_year_id, name, min_grade, max_grade)
-    VALUES (${yearId}, ${sqlValue(name)}, ${sqlValue(minGrade)}, ${sqlValue(maxGrade)})`);
+    VALUES (?, ?, ?, ?)`, [yearId, sqlParameter(name), sqlParameter(minGrade), sqlParameter(maxGrade)]);
   Object.entries(weights).forEach(([category, weight]) => {
-    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
-      VALUES (${groupId}, ${sqlValue(category)}, ${Number(weight) || 0});`);
+    executeSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+      VALUES (?, ?, ?);`, [groupId, sqlParameter(category), Number(weight) || 0]);
   });
 }
 
@@ -381,10 +385,10 @@ function createDefaultWeightGroups(yearId) {
 
 function createDefaultLetterGradeGroup(yearId) {
   const groupId = insertReturningId(`INSERT INTO os_letter_grade_groups (school_year_id, name, min_grade, max_grade, subject_id)
-    VALUES (${yearId}, 'Default Letter Grades', '1', '12', NULL)`);
+    VALUES (?, 'Default Letter Grades', '1', '12', NULL)`, [yearId]);
   DEFAULT_LETTER_GRADES.forEach(([letter, threshold], index) => {
-    runSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
-      VALUES (${groupId}, ${sqlValue(letter)}, ${Number(threshold)}, ${index});`);
+    executeSql(`INSERT INTO os_letter_grade_items (group_id, letter, threshold, sort_order)
+      VALUES (?, ?, ?, ?);`, [groupId, sqlParameter(letter), Number(threshold), index]);
   });
 }
 
@@ -394,10 +398,10 @@ function createDefaultRoleGroups() {
     'Faculty Team': ['Teacher', 'Principal', 'Librarian', 'Nurse']
   };
   Object.entries(defaults).forEach(([groupName, roles]) => {
-    const groupId = insertReturningId(`INSERT INTO os_role_groups (name) VALUES (${sqlValue(groupName)})
-      ON CONFLICT(name) DO UPDATE SET name=excluded.name`);
+    const groupId = insertReturningId(`INSERT INTO os_role_groups (name) VALUES (?)
+      ON CONFLICT(name) DO UPDATE SET name=excluded.name`, [sqlParameter(groupName)]);
     roles.forEach((roleName) => {
-      runSql(`INSERT OR IGNORE INTO os_role_types (group_id, name) VALUES (${groupId}, ${sqlValue(roleName)});`);
+      executeSql(`INSERT OR IGNORE INTO os_role_types (group_id, name) VALUES (?, ?);`, [groupId, sqlParameter(roleName)]);
     });
   });
 }
@@ -406,26 +410,26 @@ function migrateLessonHomeworkWeights() {
   querySql('SELECT DISTINCT wi.group_id FROM os_grade_weight_items wi JOIN os_grade_weight_groups wg ON wg.id=wi.group_id;').forEach((row) => {
     const groupId = asInt(row.group_id);
     const legacyItems = querySql(`SELECT category, weight FROM os_grade_weight_items
-      WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
+      WHERE group_id=? AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`, [groupId]);
     if (!legacyItems.length) return;
     const combinedWeight = Math.min(100, legacyItems.reduce((sum, item) => sum + Number(item.weight || 0), 0));
-    runSql(`DELETE FROM os_grade_weight_items WHERE group_id=${groupId} AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`);
-    runSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
-      VALUES (${groupId}, 'Lesson / Homework', ${combinedWeight});`);
+    executeSql(`DELETE FROM os_grade_weight_items WHERE group_id=? AND category IN ('Lesson', 'Homework', 'Lesson / Homework');`, [groupId]);
+    executeSql(`INSERT INTO os_grade_weight_items (group_id, category, weight)
+      VALUES (?, 'Lesson / Homework', ?);`, [groupId, combinedWeight]);
   });
 }
 
 function createSession(userId, headers) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_HOURS * 60 * 60 * 1000).toISOString();
-  runSql(`INSERT INTO os_sessions (session_token, user_id, expires_at)
-    VALUES (${sqlValue(token)}, ${asInt(userId)}, ${sqlValue(expiresAt)});`);
+  executeSql(`INSERT INTO os_sessions (session_token, user_id, expires_at)
+    VALUES (?, ?, ?);`, [sqlParameter(token), asInt(userId), sqlParameter(expiresAt)]);
   appendSetCookie(headers, `sessionToken=${cookieValue(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_HOURS * 3600}`);
 }
 
 function clearSession(req, headers) {
   const token = parseCookies(req).sessionToken;
-  if (token) runSql(`DELETE FROM os_sessions WHERE session_token=${sqlValue(token)};`);
+  if (token) executeSql(`DELETE FROM os_sessions WHERE session_token=?;`, [sqlParameter(token)]);
   appendSetCookie(headers, 'sessionToken=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
 }
 
@@ -436,8 +440,8 @@ function currentUser(req) {
   const rows = querySql(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id
     FROM os_sessions s
     JOIN os_users u ON u.id = s.user_id
-    WHERE s.session_token=${sqlValue(token)} AND (${SESSION_VALID_SQL})
-    LIMIT 1;`);
+    WHERE s.session_token=? AND (${SESSION_VALID_SQL})
+    LIMIT 1;`, [token]);
   return rows[0] || null;
 }
 
@@ -528,14 +532,14 @@ function getSelectedYear(req, url) {
 }
 
 function getSetting(key, fallback = '') {
-  const row = querySql(`SELECT value FROM os_settings WHERE key=${sqlValue(key)} LIMIT 1;`)[0];
+  const row = querySql(`SELECT value FROM os_settings WHERE key=? LIMIT 1;`, [sqlParameter(key)])[0];
   return row?.value || fallback;
 }
 
 function setSetting(key, value) {
-  runSql(`INSERT INTO os_settings (key, value, updated_at)
-    VALUES (${sqlValue(key)}, ${sqlValue(value)}, CURRENT_TIMESTAMP)
-    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;`);
+  executeSql(`INSERT INTO os_settings (key, value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP;`, [sqlParameter(key), sqlParameter(value)]);
   invalidateAppCaches();
 }
 
