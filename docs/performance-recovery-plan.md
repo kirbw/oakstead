@@ -94,7 +94,10 @@ headers, and initial frontend extraction from server.js.
     blank fields still map to NULL; bound APIs also support explicit empty text.
     Remaining display reads are reserved for item 5. No injection vulnerability
     is claimed; this change makes value handling easier to audit.
-  - Status: validated; PR/merge pending.
+  - Benchmarks: correctness comparisons pass; current graph 95.03ms, single
+    period 1.43ms; Setup Network 0.04ms, Families 1.09ms. Historical fixture
+    comparisons are not a before/after performance claim for this PR.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/58; merge pending.
 - [ ] 5. Bound reads and measured reuse — `codex/parameterized-database-reads`
   - Convert remaining runtime reads/access filters and IN lists; document safe
     structural SQL. Benchmark preparation with grade/Setup fixtures.
