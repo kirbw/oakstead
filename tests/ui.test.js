@@ -27,7 +27,7 @@ test('all Setup sections preserve forms and expose their selected navigation sta
     assert.equal(page.status,200,role+'/'+section);
     const html=await page.text();
     assert.match(html,new RegExp(`href="/setup\\?section=${section}" aria-current="page"`));
-    assert.match(html,/id="view-loading-status" hidden/);
+    assert.doesNotMatch(html,/view-loading-status|Loading view/);
     assert.match(html,/method="post"/);
   }
   const badLogin=await (await app.request('/login?error=1')).text();

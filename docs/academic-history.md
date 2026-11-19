@@ -1,7 +1,7 @@
 # Academic history
 
-Administrators and principals can open **Academic history** from Gradebook or
-Absences. Teachers and parents cannot open the history page. Filter by school
+Administrators and principals can open **Academic history** under **School Setup → System
+Settings**. Teachers and parents cannot open the history page. Filter by school
 year, student, assignment, actor ID, UTC date range or event type. Each page shows
 up to 50 changes; Older changes follows an ID cursor so newly added entries do
 not shift the remaining pages.
@@ -44,8 +44,8 @@ Existing orphan-record diagnostics continue to preserve and report violations.
 The browser tool was attempted but failed during initialization with "trusted
 Node process exited unexpectedly; kernel reset"; no screenshot was captured.
 HTTP tests verify permissions, escaping, filtering, paging and no-store headers.
-Manual visual checks: as admin/principal follow the Gradebook and Absences
-history links; inspect a set/zero/clear sequence and assignment deletion; filter
+Manual visual checks: as admin/principal follow the history link under
+School Setup → System Settings; inspect a set/zero/clear sequence and assignment deletion; filter
 by each field and follow Older changes; check an empty result at desktop and
 390x844 widths. Confirm teachers/parents see no link and receive Forbidden at
 `/history`. Open Backup Settings and confirm the history restore notice.

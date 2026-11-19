@@ -269,13 +269,6 @@ button, select, input { min-height: var(--control-height); }
 .theme-icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .main {
   padding: 1rem .85rem 3.5rem;
-  transition: opacity .14s ease;
-}
-.main.app-loading {
-  opacity: .48;
-}
-@media (prefers-reduced-motion: reduce) {
-  .main { transition: none; }
 }
 .app-footer {
   grid-column: 1 / -1;

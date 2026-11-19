@@ -58,6 +58,21 @@ test('assignment interpretation, cascaded scores and attendance retain actor sna
   assert.ok(history.every(row => row.actor_name === 'Teacher One' && row.actor_role === 'teacher'));
 });
 
+test('Academic History is linked from System Settings for administrators and principals', async t => {
+  const app = await schoolFixture(t);
+  for (const role of ['admin', 'principal']) {
+    const headers = { Cookie: app.cookie(role) };
+    for (const path of ['/gradebook', '/absences', '/setup']) {
+      const response = await app.request(path, { headers });
+      assert.equal(response.status, 200);
+      assert.doesNotMatch(await response.text(), /href="\/history(?:[?"])/);
+    }
+    const settings = await app.request('/setup?section=settings', { headers });
+    assert.equal(settings.status, 200);
+    assert.match(await settings.text(), /<a href="\/history\?yearId=1">Academic history<\/a>/);
+  }
+});
+
 test('history is staff-restricted, escaped, filtered and paginated with stable cursors', async t => {
   const app = await schoolFixture(t);
   for (const role of ['teacher', 'parent']) assert.equal((await app.request('/history', { headers: { Cookie: app.cookie(role) } })).status, 403);

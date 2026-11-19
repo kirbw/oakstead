@@ -85,7 +85,7 @@ function generateReportCardPdf(btn) {
     }
     if (navAbort) navAbort.abort();
     navAbort = new AbortController();
-    setViewBusy(currentMain, true);
+    currentMain.setAttribute('aria-busy', 'true');
     return appRequest(nextUrl.toString(), {
       responseType: 'text',
       signal: navAbort.signal,
@@ -115,8 +115,7 @@ function generateReportCardPdf(btn) {
       showRequestNotice(error, undefined, function() { void navigateApp(nextUrl, options); });
       return false;
     }).finally(function() {
-      const liveMain = mainEl();
-      if (liveMain) setViewBusy(liveMain, false);
+      currentMain.removeAttribute('aria-busy');
     });
   }
 
@@ -242,13 +241,6 @@ function generateReportCardPdf(btn) {
 
   function showRequestNotice(error, form, retry) {
     feedback.show(form || mainEl() || document.body, error, form, retry);
-  }
-
-  function setViewBusy(element, busy) {
-    element.classList.toggle('app-loading', busy);
-    element.setAttribute('aria-busy', String(busy));
-    const status = document.getElementById('view-loading-status');
-    if (status) status.hidden = !busy;
   }
 
   async function submitPostForm(form, submitter) {
