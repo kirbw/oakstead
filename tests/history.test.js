@@ -92,6 +92,29 @@ test('history is staff-restricted, escaped, filtered and paginated with stable c
   assert.equal((await app.request('/history?from=2026-02-30', { headers: { Cookie: app.cookie('admin') } })).status, 400);
 });
 
+test('recorded changes display names for new and legacy entries, including deleted assignments', async t => {
+  const app = await schoolFixture(t);
+  const score = { action: 'grid-score', assignmentId: '101', studentId: '101', scoreValue: '84' };
+  assert.equal((await app.post('/gradebook', score)).status, 200);
+  assert.equal((await app.post('/gradebook', { ...score, scoreValue: '85' })).status, 200);
+  app.withDb(db => db.exec(`
+    UPDATE os_academic_history SET before_json = json_remove(before_json, '$._names'),
+      after_json = json_remove(after_json, '$._names') WHERE operation = 'create';
+    UPDATE os_students SET first_name = 'Renamed' WHERE id = 101;
+  `));
+  assert.equal((await app.post('/gradebook', {
+    action: 'update-assignment', assignmentId: '101', deleteAssignment: '1'
+  })).status, 302);
+  const response = await app.request('/history?assignmentId=101', { headers: { Cookie: app.cookie('admin') } });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /score create<br>School year: 2025-2026 · Student: Renamed Student · Assignment: Allowed assignment/);
+  assert.match(html, /score update<br>School year: 2025-2026 · Student: One Student · Assignment: Allowed assignment/);
+  assert.match(html, /<strong>Subject:<\/strong> Math/);
+  assert.match(html, /<strong>Teacher:<\/strong> Teacher Two/);
+  assert.doesNotMatch(html, /<strong>[^<]* ID:<\/strong>|Name unavailable/);
+});
+
 test('history migration rolls back and version-one backups restore with no fabricated events', async t => {
   const db = new DatabaseSync(':memory:');
   try {
