@@ -186,7 +186,7 @@ headers, and initial frontend extraction from server.js.
   - Compatibility: old backup names remain usable; new names add a unique suffix.
     No schema change or existing policy activation. Manual/uploaded/pre-restore/
     pre-update/unrecognized files preserved. Copying remains synchronous.
-  - Status: validated; PR/merge pending.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/61; merge pending.
 - [ ] 8. Recovery visibility — `codex/recovery-health-visibility`
   - Backup/operations screens: durable safe success/failure/cleanup status,
     count/size and async free-space checks for data/backup locations; unavailable
