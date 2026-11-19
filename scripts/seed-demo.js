@@ -26,6 +26,7 @@ function findOne(sql) {
 function resetData() {
   run(`
 DELETE FROM os_sessions;
+DELETE FROM os_academic_history;
 DELETE FROM os_users;
 DELETE FROM os_letter_grade_items;
 DELETE FROM os_letter_grade_groups;

@@ -78,7 +78,7 @@ test('real application import is inert; repeated API start/stop clears timers an
     const blocker=net.createServer();await new Promise(resolve=>blocker.listen(Number(process.env.PORT),'127.0.0.1',resolve));
     await assert.rejects(app.start(),/EADDRINUSE/);assert.equal(timers.size,0);assert.equal(app.state(),'failed');await new Promise(resolve=>blocker.close(resolve));
     await app.start();await app.stop();assert.equal(timers.size,0);
-    const db=new(require('node:sqlite').DatabaseSync)(process.env.DB_FILE);assert.equal(db.prepare('PRAGMA user_version').get().user_version,1);db.close();
+    const db=new(require('node:sqlite').DatabaseSync)(process.env.DB_FILE);assert.equal(db.prepare('PRAGMA user_version').get().user_version,require('./server/migrations').CURRENT_SCHEMA_VERSION);db.close();
     console.log('Lifecycle complete');})().catch(error=>{console.error(error);process.exitCode=1;});`;
   const result=spawnSync(process.execPath,['-e',source],{cwd:path.resolve(__dirname,'..'),env:{...process.env,HOST:'127.0.0.1',DEMO_MODE:'0',OAKSTEAD_DATA_DIR:directory,DB_FILE:path.join(directory,'school.db')},windowsHide:true,encoding:'utf8',timeout:15000});
   assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/Lifecycle complete/);

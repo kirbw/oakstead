@@ -681,7 +681,7 @@ function createSetupRenderer(helpers) {
           <label>Upload Backup<input type="file" name="backupFile" accept=".db,application/octet-stream" /></label>
           <button class="secondary-btn compact-action" type="submit">Restore Backup</button>
         </form>
-        <p class="notice">Restoring replaces the current database. Oakstead creates a pre-restore backup first.</p>
+        <p class="notice">Restoring replaces the current database, including academic history. Later history remains only in the pre-restore backup Oakstead creates first. Use a compatible Oakstead version to recover it.</p>
         <div class="backup-list">
           ${backups.map((backup) => `<div class="backup-row">
             <div><strong>${esc(backup.fileName)}</strong><span>${esc(formatFileSize(backup.size))} / ${esc(backup.createdAt.toLocaleString())}</span></div>
