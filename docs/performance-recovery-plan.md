@@ -158,7 +158,7 @@ headers, and initial frontend extraction from server.js.
   - Compatibility: additive migration only, no historical backfill/repair.
     Older backup restores begin empty history; later events remain in pre-restore
     backup. Do not downgrade code/schema; use compatible code and validated backup.
-  - Status: validated; PR/merge pending.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/60; merge pending.
 - [ ] 7. Opt-in backup retention — `codex/safe-backup-retention`
   - Keep all by default; admin option newest N scheduled backups (minimum 3,
     suggested 30), preview before save, no deletion on settings save. Cleanup
