@@ -125,7 +125,7 @@ headers, and initial frontend extraction from server.js.
     correct final scores and clean integrity in both runs; raw reports linked.
   - Status: merged; PR https://github.com/kirbw/oakstead/pull/59; branch deleted.
     Merge: 1ba2aedf71de700797e6639101493ae29cee4b97.
-- [ ] 6. Academic history — `codex/academic-change-history`
+- [x] 6. Academic history — `codex/academic-change-history`
   - Versioned additive append-only history: actor identity/role snapshot, UTC,
     request ID, operation/record IDs, before/after values. All score paths,
     assignment interpretation edits/deletion/affected scores, attendance writes.
@@ -158,7 +158,8 @@ headers, and initial frontend extraction from server.js.
   - Compatibility: additive migration only, no historical backfill/repair.
     Older backup restores begin empty history; later events remain in pre-restore
     backup. Do not downgrade code/schema; use compatible code and validated backup.
-  - Status: validated; PR https://github.com/kirbw/oakstead/pull/60; merge pending.
+  - Status: merged; PR https://github.com/kirbw/oakstead/pull/60; branch deleted.
+    Merge: fb04a11c72d96fbda756fb7229044135be7ad8dd.
 - [ ] 7. Opt-in backup retention — `codex/safe-backup-retention`
   - Keep all by default; admin option newest N scheduled backups (minimum 3,
     suggested 30), preview before save, no deletion on settings save. Cleanup
@@ -167,7 +168,25 @@ headers, and initial frontend extraction from server.js.
   - Stage/validate/rename backups; failure preserves good files and success time.
     Report cleanup independently. Test Windows locks, traversal, timestamps,
     partial failures, boundary counts and retained backup restores.
-  - Status/PR/validation/compatibility/merge: pending.
+  - Implemented: administrator-only GET preview followed by explicit policy save;
+    saving and manual backups never clean files. Scheduled backups publish through
+    a private exclusive temporary file, convert that copy out of WAL, validate,
+    then rename. Random suffixes prevent same-millisecond filename collisions.
+    Strict scheduled-name/date validation, direct regular files and no symlinks;
+    deterministic ties. Cleanup reports deleted/remaining files separately.
+  - Validation: 107 tests pass with syntax/refactor gates on Windows, Node
+    26.13.1 and 22.13.0. Real Windows exclusive file handle preserves a locked
+    backup and retries after release. Tests cover copy/validation/rename failures,
+    partial cleanup, symlinks/path escapes, disabled/boundary policy and restores.
+  - Browser attempt failed during initialization (trusted Node process exited;
+    kernel reset); no screenshot. Manual: Backup Settings defaults to keep-all;
+    enable N=3 and preview candidates; saving removes none; principal cannot
+    change policy. After a successful scheduled backup inspect remaining files
+    and cleanup notice. Check desktop and 390x844 layouts.
+  - Compatibility: old backup names remain usable; new names add a unique suffix.
+    No schema change or existing policy activation. Manual/uploaded/pre-restore/
+    pre-update/unrecognized files preserved. Copying remains synchronous.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/61; merge pending.
 - [ ] 8. Recovery visibility — `codex/recovery-health-visibility`
   - Backup/operations screens: durable safe success/failure/cleanup status,
     count/size and async free-space checks for data/backup locations; unavailable

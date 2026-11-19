@@ -13,7 +13,9 @@ test('selected-section rendering preserves corrected baseline HTML and navigatio
     for(const role of ['admin','principal'])for(const section of sections)for(const action of ['',`add-${section==='families'?'family':section==='teachers'?'teacher':section==='users'?'user':section==='subjects'?'subject':'year'}`]) {
       const url=new URL(`http://localhost/setup?section=${section}&action=${action}`);
       const args=[fixture.selectedYear,'fixture',url,{role}];
-      assert.equal(normalize(fixture.after(...args)),normalize(fixture.before(...args)),`${role}/${section}/${action}`);
+      const rendered = fixture.after(...args);
+      if (section === 'backups') assert.match(rendered, /Keeping all backups \(cleanup disabled\)/);
+      assert.equal(normalize(rendered.replace(/<section data-backup-retention>[\s\S]*?<\/section>/g, '')),normalize(fixture.before(...args)),`${role}/${section}/${action}`);
     }
     for(const [section,param] of [['families','familyId=3&action=edit-family'],['families','familyId=3&studentId=7&action=edit-child'],['families','familyId=999'],['subjects','subjectId=1'],['weights','weightGroupId=1'],['years','yearId=1']]) {
       const args=[fixture.selectedYear,'fixture',new URL(`http://localhost/setup?section=${section}&${param}`),{role:'admin'}];

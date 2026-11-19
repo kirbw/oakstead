@@ -146,7 +146,7 @@ test('real restore route leaves active school usable after a rejected upload', a
   assert.equal(app.withDb(db=>db.prepare('SELECT COUNT(*) AS n FROM os_assignments').get().n),5);
   assert.equal(fs.readdirSync(path.join(app.directory,'backups')).filter(name=>name.includes('pre-restore')).length,0);
   assert.equal((await app.post('/backup/create',{},'admin')).status,302);
-  const backup=fs.readdirSync(path.join(app.directory,'backups')).find(name=>name.endsWith('manual.db'));
+  const backup=fs.readdirSync(path.join(app.directory,'backups')).find(name=>/manual(?:-[a-f0-9]{12})?\.db$/.test(name));
   app.withDb(db=>db.exec("UPDATE os_assignments SET title='Changed after backup' WHERE id=101"));
   assert.equal((await app.post('/backup/restore',{backupFileName:backup},'admin')).status,302);
   assert.equal(app.withDb(db=>db.prepare('SELECT title FROM os_assignments WHERE id=101').get().title),'Allowed assignment');
