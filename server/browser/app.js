@@ -248,26 +248,39 @@ function generateReportCardPdf(btn) {
     submittingForms.add(form);
     const body = new FormData(form);
     if (submitter?.name) body.append(submitter.name, submitter.value);
-    if (submitter) { submitter.disabled = true; submitter.setAttribute('aria-busy', 'true'); }
+    const button = submitter || form.querySelector('button[type="submit"]:enabled');
+    const originalContents = button && !form.classList.contains('year-form') ? [...button.childNodes] : null;
+    const originalMinWidth = button?.style.minWidth;
+    if (button) {
+      if (originalContents) {
+        button.style.minWidth = `${button.getBoundingClientRect().width}px`;
+        button.textContent = form.classList.contains('logout-form') ? 'Signing out…' : 'Saving…';
+      }
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+    }
     form.setAttribute('aria-busy', 'true');
     feedback.clear(form);
-    let status = form.querySelector('[data-form-status]');
-    if (!status && !form.classList.contains('year-form')) {
-      status = document.createElement('p'); status.dataset.formStatus = ''; status.dataset.uiState = 'loading';
-      status.className = 'ui-notice'; status.setAttribute('role', 'status'); status.textContent = 'Saving changes…'; form.prepend(status);
-    }
-    if (status) status.hidden = false;
     try {
-      const response = await appRequest(form.action || window.location.href, { method: 'POST', body: body,
-        responseType: 'text', allowLoginRedirect: new URL(form.action, window.location.href).pathname === '/logout', headers: { Accept: 'application/json' } });
+      // A control named "action" can shadow the form's action property.
+      const action = form.getAttribute('action');
+      const target = action ? new URL(action, document.baseURI) : new URL(window.location.href);
+      const response = await appRequest(target.href, { method: 'POST', body: body,
+        responseType: 'text', allowLoginRedirect: target.pathname === '/logout', headers: { Accept: 'application/json' } });
       if (response.redirected && new URL(response.url).pathname === '/login') window.location.href = response.url;
       else await navigateApp(response.url || window.location.href);
     } catch (error) { showRequestNotice(error, form); }
     finally {
       submittingForms.delete(form);
       form.removeAttribute('aria-busy');
-      if (status) status.hidden = true;
-      if (submitter) { submitter.disabled = false; submitter.removeAttribute('aria-busy'); }
+      if (button) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        if (originalContents) {
+          button.replaceChildren(...originalContents);
+          button.style.minWidth = originalMinWidth;
+        }
+      }
     }
   }
 
