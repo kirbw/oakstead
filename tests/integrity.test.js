@@ -91,12 +91,15 @@ test('demo reset and repeated seeding work with enforcement enabled', async (t) 
     assert.deepEqual(issues,[]);
     const recentDays = recentSchoolDays(7).map(({ key }) => key);
     const scoredDays = app.withDb(db => db.prepare(`
-      SELECT DISTINCT a.assignment_date
+      SELECT a.assignment_date, AVG(s.score) AS average
       FROM os_assignments a JOIN os_scores s ON s.assignment_id = a.id
       WHERE a.assignment_date >= ?
+      GROUP BY a.assignment_date
       ORDER BY a.assignment_date
-    `).all(recentDays[0]).map(row => row.assignment_date));
-    assert.deepEqual(scoredDays, recentDays);
+    `).all(recentDays[0]));
+    assert.deepEqual(scoredDays.map(row => row.assignment_date), recentDays);
+    const averages = scoredDays.map(row => row.average);
+    assert.ok(Math.max(...averages) - Math.min(...averages) >= 10);
     assert.equal(app.withDb(db=>db.prepare('SELECT COUNT(*) AS n FROM os_academic_history').get().n),0);
   }
 });

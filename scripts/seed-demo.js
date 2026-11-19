@@ -8,6 +8,13 @@ const PERIOD_COUNT = 6;
 const PERIOD_DAYS = 48;
 const recentDays = recentSchoolDays(7).map(({ key }) => key);
 
+// A shared offset per day keeps the variation visible in the school-wide average.
+const dailyScoreOffsets = [-8, -5, -2, 0, 3, 6, 9];
+for (let index = dailyScoreOffsets.length - 1; index > 0; index -= 1) {
+  const other = Math.floor(Math.random() * (index + 1));
+  [dailyScoreOffsets[index], dailyScoreOffsets[other]] = [dailyScoreOffsets[other], dailyScoreOffsets[index]];
+}
+
 const db = createDb({ dbFile: DB_FILE });
 const { runSql: run, querySql: query, insertReturningId } = db;
 db.applySchemaMigrations();
@@ -266,12 +273,15 @@ db.transaction(() => {
         assignmentTemplates.forEach(([title, category, offset], templateIndex) => {
           // Stagger subjects across the latest seven school days so the chart has a full week.
           const dateIndex = Math.min(templateIndex * 2 + subjectIndex % 2, recentDays.length - 1);
-          const date = period.period_number === PERIOD_COUNT ? recentDays[dateIndex] : addDays(period.start_date, offset);
+          const isCurrentPeriod = period.period_number === PERIOD_COUNT;
+          const date = isCurrentPeriod ? recentDays[dateIndex] : addDays(period.start_date, offset);
+          const scoreOffset = isCurrentPeriod ? dailyScoreOffsets[dateIndex] : 0;
           const assignmentId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, classroom_id, marking_period_id, title, category, assignment_date, max_score)
             VALUES (${yearId}, ${sqlValue(gradeText)}, ${subjectIdValue}, ${roomsByGrade.get(gradeText)}, ${period.id}, ${sqlValue(title)}, ${sqlValue(category)}, ${sqlValue(date)}, 100)`);
           assignmentCount += 1;
           studentIds.forEach((studentIdValue, studentIndex) => {
-            const score = Math.max(58, Math.min(100, 72 + ((grade * 3 + subjectIdValue * 2 + period.period_number * 4 + templateIndex * 5 + studentIndex * 3) % 26)));
+            const baseScore = 72 + ((grade * 3 + subjectIdValue * 2 + period.period_number * 4 + templateIndex * 5 + studentIndex * 3) % 26);
+            const score = Math.max(58, Math.min(100, baseScore + scoreOffset));
             scoreStatements.push(`INSERT INTO os_scores (assignment_id, student_id, score) VALUES (${assignmentId}, ${studentIdValue}, ${score});`);
             scoreCount += 1;
           });
