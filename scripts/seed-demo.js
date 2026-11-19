@@ -1,8 +1,12 @@
 const path = require('path');
 const { createDb } = require('../server/db');
+const { addDays, recentSchoolDays } = require('../server/dates');
 
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'school.db');
 const SHOULD_RESET = process.argv.includes('--reset');
+const PERIOD_COUNT = 6;
+const PERIOD_DAYS = 48;
+const recentDays = recentSchoolDays(7).map(({ key }) => key);
 
 const db = createDb({ dbFile: DB_FILE });
 const { runSql: run, querySql: query, insertReturningId } = db;
@@ -57,22 +61,23 @@ DELETE FROM sqlite_sequence WHERE name LIKE 'os_%';
 }
 
 function ensureYear() {
-  const existing = findOne(`SELECT * FROM os_school_years WHERE name='2025-2026'`);
+  // Keep the sample calendar in its final marking period with room for new work.
+  const startDate = addDays(recentDays.at(-1), -((PERIOD_COUNT - 1) * PERIOD_DAYS + 35));
+  const endDate = addDays(startDate, PERIOD_COUNT * PERIOD_DAYS - 1);
+  const startYear = startDate.slice(0, 4);
+  const endYear = endDate.slice(0, 4);
+  const name = startYear === endYear ? startYear : `${startYear}-${endYear}`;
+  const existing = findOne(`SELECT * FROM os_school_years WHERE name=${sqlValue(name)}`);
   const yearId = existing ? existing.id : insertReturningId(`INSERT INTO os_school_years (name, start_date, end_date, is_active, school_days)
-    VALUES ('2025-2026', '2025-08-15', '2026-05-31', 1, 180)`);
-  run(`UPDATE os_school_years SET is_active=CASE WHEN id=${yearId} THEN 1 ELSE 0 END;`);
-  const periods = [
-    ['Period 1', '2025-08-15', '2025-10-01'],
-    ['Period 2', '2025-10-02', '2025-11-18'],
-    ['Period 3', '2025-11-19', '2026-01-06'],
-    ['Period 4', '2026-01-07', '2026-02-23'],
-    ['Period 5', '2026-02-24', '2026-04-12'],
-    ['Period 6', '2026-04-13', '2026-05-31']
-  ];
-  periods.forEach((period, index) => {
+    VALUES (${sqlValue(name)}, ${sqlValue(startDate)}, ${sqlValue(endDate)}, 1, 180)`);
+  run(`UPDATE os_school_years SET is_active=CASE WHEN id=${yearId} THEN 1 ELSE 0 END;
+    UPDATE os_school_years SET start_date=${sqlValue(startDate)}, end_date=${sqlValue(endDate)} WHERE id=${yearId};`);
+  for (let index = 0; index < PERIOD_COUNT; index += 1) {
+    const periodStart = addDays(startDate, index * PERIOD_DAYS);
+    const periodEnd = addDays(periodStart, PERIOD_DAYS - 1);
     run(`INSERT INTO os_marking_periods (school_year_id, period_number, name, start_date, end_date)
-      VALUES (${yearId}, ${index + 1}, ${sqlValue(period[0])}, ${sqlValue(period[1])}, ${sqlValue(period[2])}) ON CONFLICT(school_year_id,period_number) DO UPDATE SET name=excluded.name,start_date=excluded.start_date,end_date=excluded.end_date;`);
-  });
+      VALUES (${yearId}, ${index + 1}, ${sqlValue(`Period ${index + 1}`)}, ${sqlValue(periodStart)}, ${sqlValue(periodEnd)}) ON CONFLICT(school_year_id,period_number) DO UPDATE SET name=excluded.name,start_date=excluded.start_date,end_date=excluded.end_date;`);
+  }
   return yearId;
 }
 
@@ -138,12 +143,6 @@ function studentId(familyIdValue, student) {
   if (existing) return existing.id;
   return insertReturningId(`INSERT INTO os_students (family_id, first_name, middle_name, last_name, birth_date, gender)
     VALUES (${familyIdValue}, ${sqlValue(student.first)}, ${sqlValue(student.middle || '')}, ${sqlValue(student.last)}, ${sqlValue(student.birth)}, ${sqlValue(student.gender || '')})`);
-}
-
-function assignmentDate(period, offset) {
-  const start = new Date(`${period.start_date}T00:00:00Z`);
-  start.setUTCDate(start.getUTCDate() + offset);
-  return start.toISOString().slice(0, 10);
 }
 
 db.transaction(() => {
@@ -262,11 +261,14 @@ db.transaction(() => {
   for (let grade = 1; grade <= 10; grade += 1) {
     const gradeText = String(grade);
     const studentIds = studentsByGrade.get(gradeText) || [];
-    for (const [, subjectIdValue] of subjectIds) {
+    for (const [subjectIndex, [, subjectIdValue]] of subjectIds.entries()) {
       for (const period of periods) {
         assignmentTemplates.forEach(([title, category, offset], templateIndex) => {
+          // Stagger subjects across the latest seven school days so the chart has a full week.
+          const dateIndex = Math.min(templateIndex * 2 + subjectIndex % 2, recentDays.length - 1);
+          const date = period.period_number === PERIOD_COUNT ? recentDays[dateIndex] : addDays(period.start_date, offset);
           const assignmentId = insertReturningId(`INSERT INTO os_assignments (school_year_id, grade_level, subject_id, classroom_id, marking_period_id, title, category, assignment_date, max_score)
-            VALUES (${yearId}, ${sqlValue(gradeText)}, ${subjectIdValue}, ${roomsByGrade.get(gradeText)}, ${period.id}, ${sqlValue(title)}, ${sqlValue(category)}, ${sqlValue(assignmentDate(period, offset))}, 100)`);
+            VALUES (${yearId}, ${sqlValue(gradeText)}, ${subjectIdValue}, ${roomsByGrade.get(gradeText)}, ${period.id}, ${sqlValue(title)}, ${sqlValue(category)}, ${sqlValue(date)}, 100)`);
           assignmentCount += 1;
           studentIds.forEach((studentIdValue, studentIndex) => {
             const score = Math.max(58, Math.min(100, 72 + ((grade * 3 + subjectIdValue * 2 + period.period_number * 4 + templateIndex * 5 + studentIndex * 3) % 26)));

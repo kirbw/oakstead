@@ -106,6 +106,8 @@ node scripts/seed-demo.js --reset
 
 To run a public disposable demo, explicitly set `DEMO_MODE=1`. Demo mode treats every visitor as an administrator and disables authentication. Never enable it on an installation that contains real records.
 
+On startup and each scheduled reset, the sample school calendar rolls forward and the dashboard gets scores for the latest seven school days.
+
 ## Validation
 
 Check the server syntax after installation or configuration changes:
