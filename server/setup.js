@@ -2,11 +2,12 @@ const { asInt, cleanText, esc, normalizeCategory, formatFileSize, compactNumber 
 const { APP_VERSION, DATA_DIR, RELEASE_REPO, UPDATE_MODE, DEMO_MODE, DEMO_HIDDEN_SETUP_SECTIONS } = require('./config');
 const { loadSetupCounts, loadSetupSection } = require('./setup-data');
 const ui = require('./ui');
+const { retentionCount } = require('./backup-storage');
 
 function createSetupRenderer(helpers) {
   const {
     querySql, appSettings, getSetting, backupFrequency, backupFrequencyLabel,
-    networkAccessLabel, desiredNetworkConfig, networkStatus, listDatabaseBackups, readUpdateStatus,
+    networkAccessLabel, desiredNetworkConfig, networkStatus, listDatabaseBackups, readUpdateStatus, backupRetentionPreview,
     schoolYearHead, selectedAttr, csrfInput, familyReportName, firstNameOnly,
     studentDisplayName, genderIcon, genderOptions, gradeOptions, gradeChoices,
     roleAssignmentRows, roleAssignmentForm, roleOptionsForUser, roleLabel, canManageAdminUsers,
@@ -650,6 +651,32 @@ function createSetupRenderer(helpers) {
   function renderBackups({ yearId, selectedYear, csrfToken, url, user, action, settings, data, backupFreq }) {
     const backups = listDatabaseBackups();
     const latestBackup = backups[0] || null;
+    const currentRetention = retentionCount(getSetting('backup_retention_count', '0'));
+    let cleanupNotice = '';
+    try {
+      const cleanup = JSON.parse(getSetting('backup_cleanup_result', 'null'));
+      if (cleanup) cleanupNotice = `<p class="notice">Last cleanup: ${esc(cleanup.at)}. ${cleanup.deleted?.length || 0} files removed.
+        ${cleanup.error ? 'Cleanup could not scan the directory; remaining files were preserved.' : ''}
+        ${cleanup.failed?.length ? `Could not remove: ${cleanup.failed.map(esc).join(', ')}. These files remain; check permissions or open file handles.` : ''}</p>`;
+    } catch { cleanupNotice = '<p class="notice">Previous cleanup status is unavailable.</p>'; }
+    let retentionPreview = '';
+    if (isAdmin(user) && url.searchParams.get('previewRetention') === '1') {
+      const proposed = url.searchParams.get('retentionEnabled') === '1'
+        ? retentionCount(url.searchParams.get('retentionCount')) : 0;
+      let candidates;
+      try { candidates = backupRetentionPreview(proposed); }
+      catch { retentionPreview = '<p class="notice error">Cleanup preview is unavailable. Check access to the backup directory before changing retention.</p>'; }
+      if (candidates) retentionPreview = `<div class="notice"><strong>${proposed ? `Keep the newest ${proposed} scheduled backups` : 'Keep all backups'}</strong>
+        <p>Saving deletes nothing. After the next successful scheduled backup, these existing files would qualify for cleanup (the list can change before then):</p>
+        ${candidates.length ? `<ul>${candidates.map(name => `<li>${esc(name)}</li>`).join('')}</ul>` : '<p>No existing files qualify.</p>'}
+        <form method="post" action="/backup-settings">${csrfInput(csrfToken)}<input type="hidden" name="action" value="retention"><input type="hidden" name="retentionCount" value="${proposed}"><button type="submit">Save retention policy</button></form></div>`;
+    }
+    const retentionModule = `<section data-backup-retention><h3>Scheduled backup retention</h3>${cleanupNotice}
+      <p>${currentRetention ? `Keeping the newest ${currentRetention} scheduled backups.` : 'Keeping all backups (cleanup disabled).' } Manual, uploaded, pre-restore, pre-update and unrecognized files are preserved.</p>
+      ${isAdmin(user) ? `<form method="get" action="/setup" class="form-grid two"><input type="hidden" name="section" value="backups"><input type="hidden" name="previewRetention" value="1">
+        <label><input type="checkbox" name="retentionEnabled" value="1" ${currentRetention ? 'checked' : ''}> Enable scheduled backup cleanup</label>
+        <label>Scheduled backups to keep<input type="number" name="retentionCount" min="3" step="1" value="${currentRetention || 30}" required></label>
+        <button type="submit">Preview retention policy</button></form>${retentionPreview}` : '<p>Only administrators can change this policy.</p>'}</section>`;
     const backupsModule = `<section class="family-detail">
       <div class="family-detail-head">
         <h2>Backups</h2>
@@ -674,6 +701,7 @@ function createSetupRenderer(helpers) {
           <form method="post" action="/backup/create" style="margin:0">${csrfInput(csrfToken)}<button class="page-action compact-action" type="submit">Create Backup</button></form>
           ${latestBackup ? `<a class="secondary-btn compact-action" href="/backup/download?file=${encodeURIComponent(latestBackup.fileName)}">Download Latest</a>` : ''}
         </div>
+        ${retentionModule}
         <div class="subhead"><h3>Restore Backup</h3></div>
         <form method="post" action="/backup/restore" enctype="multipart/form-data" class="form-grid two">
           ${csrfInput(csrfToken)}

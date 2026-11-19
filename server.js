@@ -163,6 +163,10 @@ function gridModeToggle(offUrl, onUrl, isGrid) {
 
 const db = createDb({ dbFile: DB_FILE, onQuery: operations.recordQuery });
 const { runSql, querySql, executeSql, insertReturningId } = db;
+const backupStorage = require('./server/backup-storage').createBackupStorage({
+  backupDir: BACKUP_DIR, dbFile: DB_FILE, checkpoint: db.checkpoint,
+  withDatabaseClosed: db.withDatabaseClosed, validate: db.prepareBackupDatabase
+});
 
 function runSqlBatch(statements) {
   if (statements.length) db.transaction(() => {
@@ -193,27 +197,19 @@ function createDatabaseBackup(reason = 'manual') {
 }
 
 function performDatabaseBackup(reason) {
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  const safeReason = cleanText(reason, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'manual';
-  const fileName = `oakstead-backup-${timestampForFile()}-${safeReason}.db`;
-  const target = path.join(BACKUP_DIR, fileName);
-  // Under WAL, committed data can live only in the -wal sidecar; fold it into
-  // the main file before copying so the backup is complete and self-contained.
-  let checkpointed = false;
-  for (let attempt = 0; attempt < 3 && !checkpointed; attempt += 1) {
-    checkpointed = !db.checkpoint().busy;
-  }
-  if (checkpointed) {
-    fs.copyFileSync(DB_FILE, target);
-  } else {
-    db.withDatabaseClosed(() => fs.copyFileSync(DB_FILE, target));
-  }
-  const size = fs.statSync(target).size;
+  const result = backupStorage.publish(reason);
   db.transaction(() => {
-    setSetting('backup_last_file', fileName);
+    setSetting('backup_last_file', result.fileName);
     setSetting('backup_last_at', new Date().toISOString());
   });
-  return { fileName, path: target, size };
+  if (reason === 'scheduled') {
+    const cleanup = backupStorage.cleanup(getSetting('backup_retention_count', '0'));
+    try { setSetting('backup_cleanup_result', JSON.stringify({ ...cleanup, at: new Date().toISOString() })); }
+    catch { console.error('Backup succeeded, but cleanup status could not be saved.'); }
+    if (cleanup.error || cleanup.failed.length) console.error('Backup succeeded; some scheduled backups could not be cleaned up.');
+    result.cleanup = cleanup;
+  }
+  return result;
 }
 
 function listDatabaseBackups() {
@@ -222,7 +218,8 @@ function listDatabaseBackups() {
     .map((fileName) => {
       const target = backupPath(fileName);
       if (!target || !fs.existsSync(target)) return null;
-      const stat = fs.statSync(target);
+      const stat = fs.lstatSync(target);
+      if (!stat.isFile() || stat.isSymbolicLink()) return null;
       return { fileName, size: stat.size, createdAt: stat.mtime };
     })
     .filter(Boolean)
@@ -1484,6 +1481,7 @@ function selectedAttr(value, selected) {
 }
 
 const setupPage = createSetupRenderer({
+  backupRetentionPreview: count => backupStorage.preview(count, true),
   querySql,
   appSettings,
   getSetting,

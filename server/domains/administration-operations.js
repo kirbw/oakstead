@@ -1,5 +1,6 @@
 const { text, json, redirectTo } = require('./results');
 const { formRecord } = require('./validation');
+const { retentionCount } = require('../backup-storage');
 function createService({
   BACKUP_DIR,
   DEFAULT_PORT,
@@ -53,6 +54,11 @@ function createService({
 
     if (p === '/backup-settings') {
       if (!canManageSchoolSetup(user)) return text(403, 'Forbidden');
+      if (body.action === 'retention') {
+        if (user.role !== 'admin') return text(403, 'Only administrators can change backup retention.');
+        setSetting('backup_retention_count', String(retentionCount(body.retentionCount)));
+        return redirectTo('/setup?section=backups', headers);
+      }
       setSetting('backup_frequency', backupFrequency(body.frequency));
       return redirectTo('/setup?section=backups', headers);
     }

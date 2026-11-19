@@ -127,6 +127,14 @@ function createDb({ dbFile, files = fs, onQuery, now = () => performance.now() }
     measure('DDL', () => migrateDatabase(open()));
   }
 
+  function prepareBackupDatabase(filePath) {
+    // Only call on a private staged copy, never the live database or an upload.
+    const candidate = new DatabaseSync(filePath);
+    try { candidate.exec('PRAGMA journal_mode=DELETE;'); }
+    finally { candidate.close(); }
+    validateBackupDatabase(filePath);
+  }
+
   function restoreDatabase(source, { beforeReplace = () => {}, verify = () => {} } = {}) {
     const stagingDir = files.mkdtempSync(path.join(path.dirname(dbFile), '.oakstead-restore-'));
     const candidateFile = path.join(stagingDir, 'candidate.db');
@@ -187,6 +195,7 @@ function createDb({ dbFile, files = fs, onQuery, now = () => performance.now() }
     executeSql,
     insertReturningId,
     querySql,
+    prepareBackupDatabase,
     runSql,
     runSqlTransaction,
     restoreDatabase,
