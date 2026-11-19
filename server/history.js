@@ -1,5 +1,16 @@
+const { references, resolveHistoryNames, historyName } = require('./history-names');
 const { asInt } = require('./input');
 const { gridScoreEntries, scoreFieldEntries } = require('./gradebook-utils');
+
+function serialize(values, names) {
+  if (!values) return null;
+  const labels = {};
+  for (const key of Object.keys(references)) {
+    const name = historyName(values, key, names);
+    if (name) labels[key] = name;
+  }
+  return JSON.stringify({ ...values, _names: labels });
+}
 
 function createAcademicHistory(repository, { demoMode = false, now = () => new Date() } = {}) {
   const { querySql, executeSql } = repository;
@@ -33,8 +44,12 @@ function createAcademicHistory(repository, { demoMode = false, now = () => new D
 
   function record(snapshot, user, requestId) {
     const timestamp = now().toISOString();
+    const events = [];
     function event(type, before, after, key) {
       if (JSON.stringify(before) === JSON.stringify(after)) return;
+      events.push({ type, before, after, key });
+    }
+    function writeEvent({ type, before, after, key }, names) {
       const row = after || before;
       executeSql(`INSERT INTO os_academic_history (occurred_at,actor_id,actor_name,actor_role,
         request_id,event_type,operation,school_year_id,student_id,assignment_id,record_id,before_json,after_json)
@@ -42,7 +57,7 @@ function createAcademicHistory(repository, { demoMode = false, now = () => new D
         demoMode ? 'Demo' : String(user.name || ''), demoMode ? 'Demo' : String(user.role || ''),
         requestId, type, !before ? 'create' : !after ? 'delete' : 'update', row.school_year_id,
         row.student_id || null, type === 'assignment' ? row.id : row.assignment_id || null,
-        key || null, before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null]);
+        key || null, serialize(before, names), serialize(after, names)]);
     }
     function compare(type, previous, current, keyFor) {
       const oldRows = new Map(previous.map(row => [keyFor(row), row]));
@@ -54,12 +69,20 @@ function createAcademicHistory(repository, { demoMode = false, now = () => new D
     }
     if (snapshot.kind === 'attendance') {
       for (const row of querySql('SELECT * FROM os_absences WHERE id>? ORDER BY id', [snapshot.lastId])) event('attendance', null, row, row.id);
-      return;
+    } else {
+      const ids = snapshot.lastId === null ? snapshot.ids
+        : querySql('SELECT id FROM os_assignments WHERE id>? ORDER BY id', [snapshot.lastId]).map(row => row.id);
+      if (snapshot.metadata) compare('assignment', snapshot.assignments, assignments(ids), row => row.id);
+      compare('score', snapshot.scores, scores(ids, snapshot.studentIds), row => `${row.assignment_id}:${row.student_id}`);
     }
-    const ids = snapshot.lastId === null ? snapshot.ids
-      : querySql('SELECT id FROM os_assignments WHERE id>? ORDER BY id', [snapshot.lastId]).map(row => row.id);
-    if (snapshot.metadata) compare('assignment', snapshot.assignments, assignments(ids), row => row.id);
-    compare('score', snapshot.scores, scores(ids, snapshot.studentIds), row => `${row.assignment_id}:${row.student_id}`);
+    if (!events.length) return;
+    const records = events.flatMap(({ before, after }) => [before, after].filter(Boolean));
+    const names = resolveHistoryNames(querySql, records);
+    for (const { type, before, after } of events) {
+      const assignment = after || before;
+      if (type === 'assignment' && assignment.title) names.assignment_id.set(assignment.id, assignment.title);
+    }
+    for (const entry of events) writeEvent(entry, names);
   }
   return { capture, record };
 }

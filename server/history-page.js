@@ -1,17 +1,26 @@
 const { esc } = require('./input');
 const { addDays, cleanDate } = require('./dates');
 
-function describeValues(json) {
+const { references, resolveHistoryNames, parseHistoryValues, historyName } = require('./history-names');
+
+function describeValues(json, values, names) {
   if (!json) return '—';
-  const labels = { id: 'Record ID', school_year_id: 'School year ID', grade_level: 'Grade',
-    subject_id: 'Subject ID', classroom_id: 'Classroom ID', teacher_id: 'Teacher ID',
-    student_id: 'Student ID', assignment_id: 'Assignment ID', marking_period_id: 'Marking period ID',
-    assignment_date: 'Assignment date', max_score: 'Possible points', score: 'Earned points',
-    absence_date: 'Attendance date', created_at: 'Created at' };
-  try {
-    return Object.entries(JSON.parse(json)).map(([key, value]) =>
-      `<div><strong>${esc(labels[key] || key.replaceAll('_', ' '))}:</strong> ${esc(value ?? '—')}</div>`).join('');
-  } catch { return '<span>Details unavailable</span>'; }
+  if (!values) return '<span>Details unavailable</span>';
+  const labels = { grade_level: 'Grade', assignment_date: 'Assignment date',
+    max_score: 'Possible points', score: 'Earned points', absence_date: 'Attendance date', created_at: 'Created at' };
+  return Object.entries(values).filter(([key]) => key !== 'id' && key !== '_names').map(([key, value]) => {
+    const reference = Object.hasOwn(references, key);
+    const label = reference ? references[key][0] : labels[key] || key.replaceAll('_', ' ');
+    const display = reference && value != null ? historyName(values, key, names) || 'Name unavailable' : value ?? '—';
+    return `<div><strong>${esc(label)}:</strong> ${esc(display)}</div>`;
+  }).join('');
+}
+
+function describeChange(row, values, names) {
+  return ['school_year_id', 'student_id', 'assignment_id'].filter(key => values[key] != null).map(key => {
+    const name = key === 'assignment_id' && row.event_type === 'assignment' ? values.title : historyName(values, key, names);
+    return `${references[key][0]}: ${esc(name || 'Name unavailable')}`;
+  }).join(' · ');
 }
 
 function historyPage(querySql, url) {
@@ -43,9 +52,15 @@ function historyPage(querySql, url) {
     throw Object.assign(new Error('The history end date must follow the start date.'), { statusCode: 400 });
   }
   const rows = querySql(`SELECT * FROM os_academic_history ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY id DESC LIMIT 51`, parameters);
-  const page = rows.slice(0, 50);
+  const page = rows.slice(0, 50).map(row => {
+    const before = parseHistoryValues(row.before_json);
+    const after = parseHistoryValues(row.after_json);
+    return { row, before, after, summary: { ...row, ...(after || before) } };
+  });
+  const names = resolveHistoryNames(querySql, page.flatMap(({ before, after, summary }) =>
+    [before, after, summary].filter(Boolean)), { useDeletedAssignments: true });
   const next = new URLSearchParams(filters);
-  if (page.length) next.set('before', page.at(-1).id);
+  if (page.length) next.set('before', page.at(-1).row.id);
   const input = (label, name, type = 'number') => `<label>${label}<input type="${type}" name="${name}" ${type === 'number' ? 'min="1" step="1"' : ''} value="${esc(filters.get(name) || '')}"></label>`;
   return `<div class="workspace"><h1>Academic History</h1>
     <p>Changes recorded since history was installed. Dates are UTC. This is operational history, not a tamper-proof audit system. Restoring a backup restores its history too; later events remain only in the pre-restore backup.</p>
@@ -55,11 +70,11 @@ function historyPage(querySql, url) {
       <label>Event type<select name="eventType"><option value="">All events</option>${['score', 'assignment', 'attendance'].map(type => `<option value="${type}" ${type === eventType ? 'selected' : ''}>${type}</option>`).join('')}</select></label>
       <div><button type="submit">Filter history</button> <a href="/history">Clear filters</a></div>
     </form></section>
-    <section class="panel"><h2>Recorded changes</h2>${page.length ? `<div class="table-wrap"><table><thead><tr><th>When / who</th><th>Change</th><th>Before</th><th>After</th></tr></thead><tbody>${page.map(row => `<tr>
-      <td>${esc(row.occurred_at)}<br>${esc(row.actor_name)} (${esc(row.actor_role)})<br>Actor ID ${esc(row.actor_id ?? 'Demo')}<br>Request ${esc(row.request_id)}</td>
-      <td>${esc(row.event_type)} ${esc(row.operation)}<br>Year ${esc(row.school_year_id ?? '—')} · Student ${esc(row.student_id ?? '—')} · Assignment ${esc(row.assignment_id ?? '—')}</td>
-      <td>${describeValues(row.before_json)}</td>
-      <td>${describeValues(row.after_json)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="notice">No changes match these filters.</p>'}
+    <section class="panel"><h2>Recorded changes</h2>${page.length ? `<div class="table-wrap"><table><thead><tr><th>When / who</th><th>Change</th><th>Before</th><th>After</th></tr></thead><tbody>${page.map(({ row, before, after, summary }) => `<tr>
+      <td>${esc(row.occurred_at)}<br>${esc(row.actor_name)} (${esc(row.actor_role)})<br>Request ${esc(row.request_id)}</td>
+      <td>${esc(row.event_type)} ${esc(row.operation)}<br>${describeChange(row, summary, names)}</td>
+      <td>${describeValues(row.before_json, before, names)}</td>
+      <td>${describeValues(row.after_json, after, names)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="notice">No changes match these filters.</p>'}
       ${rows.length > 50 ? `<a class="secondary-btn" href="/history?${esc(next.toString())}">Older changes</a>` : ''}
     </section></div>`;
 }
