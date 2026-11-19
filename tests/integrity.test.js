@@ -8,6 +8,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { createDb } = require('../server/db');
 const { SCHEMA_SQL, applyAdditiveMigrations } = require('../server/schema');
 const { collectDataIntegrityIssues } = require('../server/integrity');
+const { recentSchoolDays } = require('../server/dates');
 const { schoolFixture } = require('./helpers/school');
 const { startApp } = require('./helpers/app');
 
@@ -88,7 +89,22 @@ test('demo reset and repeated seeding work with enforcement enabled', async (t) 
     assert.equal(result.status,0,result.stderr);
     const issues=app.withDb(db=>collectDataIntegrityIssues(sql=>db.prepare(sql).all()));
     assert.deepEqual(issues,[]);
-    assert.ok(app.withDb(db=>db.prepare('SELECT COUNT(*) AS n FROM os_scores').get().n)>0);
+    const recentDays = recentSchoolDays(7).map(({ key }) => key);
+    const scoredDays = app.withDb(db => db.prepare(`
+      SELECT DISTINCT a.assignment_date
+      FROM os_assignments a JOIN os_scores s ON s.assignment_id = a.id
+      WHERE a.assignment_date >= ?
+      ORDER BY a.assignment_date
+    `).all(recentDays[0]).map(row => row.assignment_date));
+    assert.deepEqual(scoredDays, recentDays);
     assert.equal(app.withDb(db=>db.prepare('SELECT COUNT(*) AS n FROM os_academic_history').get().n),0);
   }
+});
+
+test('the demo dashboard shows grades for all seven recent school days', async t => {
+  const app = await startApp(t, { demoMode: true });
+  const response = await app.request('/');
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.equal((html.match(/class="dot"/g) || []).length, 7);
 });
