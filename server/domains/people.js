@@ -3,7 +3,7 @@ const { text, json, redirectTo } = require('./results');
 const { createTransactionalService } = require('./service');
 
 function createPeopleService(deps) {
-  const { repository, asInt, canManageSchoolSetup, cleanDate, cleanGender, cleanGrade, cleanPersonRoleType, cleanText, firstNameOnly, sqlValue } = deps;
+  const { repository, asInt, canManageSchoolSetup, cleanDate, cleanGender, cleanGrade, cleanPersonRoleType, cleanText, firstNameOnly } = deps;
   const { querySql, runSql, executeSql, insertReturningId } = repository;
   return createTransactionalService(["/families","/school-districts","/congregations","/students","/emergency-contacts","/teachers","/person-roles"], (p, body, user, headers) => {
     if (p === '/families') {

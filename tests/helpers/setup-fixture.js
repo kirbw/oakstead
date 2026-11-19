@@ -14,7 +14,7 @@ function setupFixture({ familyCount = 1, studentCount = 8 } = {}) {
   fixture.db.exec('COMMIT;');
   fixture.db.exec(`UPDATE os_students SET family_id=((id-1)%${familyCount})+1;`);
   let calls=[];let io={};
-  const querySql=(sql)=>{calls.push(sql);return fixture.query(sql);};
+  const querySql=(sql, parameters=[])=>{calls.push(sql);return fixture.query(sql, parameters);};
   const count=(key)=>{io[key]=(io[key]||0)+1;};
   const helpers={
     querySql,

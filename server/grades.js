@@ -1,4 +1,4 @@
-const { asInt, sqlValue, normalizeCategory } = require('./input');
+const { asInt, sqlParameter, normalizeCategory } = require('./input');
 const { numericValue, average } = require('./averages');
 
 function gradeRank(grade) {
@@ -23,11 +23,12 @@ function rowInPeriod(row, period) {
     && row.assignment_date >= period.start_date && row.assignment_date <= period.end_date);
 }
 
-function assignmentPeriodClause(period) {
+function assignmentPeriodClause(period, parameters) {
   if (!period) return '';
-  const idClause = `a.marking_period_id=${asInt(period.id)}`;
-  if (!period.start_date || !period.end_date) return `AND ${idClause}`;
-  return `AND (${idClause} OR (a.marking_period_id IS NULL AND a.assignment_date >= ${sqlValue(period.start_date)} AND a.assignment_date <= ${sqlValue(period.end_date)}))`;
+  parameters.push(asInt(period.id));
+  if (!period.start_date || !period.end_date) return 'AND a.marking_period_id=?';
+  parameters.push(sqlParameter(period.start_date), sqlParameter(period.end_date));
+  return 'AND (a.marking_period_id=? OR (a.marking_period_id IS NULL AND a.assignment_date >= ? AND a.assignment_date <= ?))';
 }
 
 function accumulator() { return { sum: 0, count: 0, categories: new Map() }; }
@@ -116,8 +117,8 @@ function summarizeGradeRows(scoreRows, { grade, subjectIds, studentIds, periods,
 
 function loadGradeWeights(query, yearId) {
   return {
-    weightGroups: query(`SELECT * FROM os_grade_weight_groups WHERE school_year_id=${asInt(yearId)};`),
-    weightItems: query(`SELECT wi.* FROM os_grade_weight_items wi JOIN os_grade_weight_groups wg ON wg.id=wi.group_id WHERE wg.school_year_id=${asInt(yearId)};`)
+    weightGroups: query(`SELECT * FROM os_grade_weight_groups WHERE school_year_id=?;`, [asInt(yearId)]),
+    weightItems: query(`SELECT wi.* FROM os_grade_weight_items wi JOIN os_grade_weight_groups wg ON wg.id=wi.group_id WHERE wg.school_year_id=?;`, [asInt(yearId)])
   };
 }
 
@@ -125,13 +126,14 @@ function loadGradeAverages(query, { yearId, grade, subjectIds, studentIds, perio
   if (!grade || !subjectIds.length || !studentIds.length || !periods.length) {
     return { get: () => ({ classAverage: null, studentAverages: new Map() }) };
   }
+  const parameters = [asInt(yearId), sqlParameter(grade), ...subjectIds.map((id) => asInt(id)), ...studentIds.map((id) => asInt(id))];
   const scoreRows = query(`SELECT sc.student_id, a.subject_id, a.category, a.assignment_date, a.marking_period_id,
       ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
     FROM os_assignments a JOIN os_scores sc ON sc.assignment_id=a.id
-    WHERE a.school_year_id=${asInt(yearId)} AND a.grade_level=${sqlValue(grade)}
-      AND a.subject_id IN (${subjectIds.map((id) => asInt(id)).join(',')})
-      AND sc.student_id IN (${studentIds.map((id) => asInt(id)).join(',')})
-      ${periods.length === 1 && asInt(periods[0].id) ? assignmentPeriodClause(periods[0]) : ''};`);
+    WHERE a.school_year_id=? AND a.grade_level=?
+      AND a.subject_id IN (${subjectIds.map(() => '?').join(',')})
+      AND sc.student_id IN (${studentIds.map(() => '?').join(',')})
+      ${periods.length === 1 && asInt(periods[0].id) ? assignmentPeriodClause(periods[0], parameters) : ''};`, parameters);
   return summarizeGradeRows(scoreRows, { grade, subjectIds, studentIds, periods, ...(settings || loadGradeWeights(query, yearId)) });
 }
 

@@ -41,7 +41,6 @@ function createAcademicsService(deps) {
     runSqlBatch,
     scoreFieldEntries,
     scoreWriteStatements,
-    sqlValue,
     studentAccessClause,
     teacherAllowedForSelection,
   } = deps;

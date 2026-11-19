@@ -51,7 +51,6 @@ const {
   normalizeCategory,
   parseScoreInput,
   scoreValueForMode,
-  sqlValue
 } = require('./server/input');
 const { createDb } = require('./server/db');
 const { createOperationalMonitor, databaseReady, renderOperationalPage } = require('./server/operations');
@@ -1246,10 +1245,10 @@ function matchingLetterGradeGroup(groups, grade, subjectId) {
 }
 
 function letterGradeScale(yearId, grade, subjectId) {
-  const groups = querySql(`SELECT * FROM os_letter_grade_groups WHERE school_year_id=${yearId};`);
+  const groups = querySql(`SELECT * FROM os_letter_grade_groups WHERE school_year_id=?;`, [yearId]);
   const group = matchingLetterGradeGroup(groups, grade, subjectId);
   if (!group) return DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
-  const items = querySql(`SELECT letter, threshold FROM os_letter_grade_items WHERE group_id=${asInt(group.id)} ORDER BY threshold DESC, sort_order, letter;`);
+  const items = querySql(`SELECT letter, threshold FROM os_letter_grade_items WHERE group_id=? ORDER BY threshold DESC, sort_order, letter;`, [asInt(group.id)]);
   return items.length ? items : DEFAULT_LETTER_GRADES.map(([letter, threshold]) => ({ letter, threshold }));
 }
 
@@ -1802,7 +1801,7 @@ function roleAssignmentForm({ csrfToken, redirectTo, personType, personId, roleG
 }
 
 const repository = require('./server/domains/repository').createRepository(db);
-const academicAccess = require('./server/domains/academic-access').createAcademicAccess({ repository, asInt, isAdmin, isParent, isPrincipal, isTeacher, sqlValue });
+const academicAccess = require('./server/domains/academic-access').createAcademicAccess({ repository, asInt, isAdmin, isParent, isPrincipal, isTeacher });
 const authenticationService = require('./server/domains/authentication').createService({
   appendSetCookie,
   asInt,
@@ -1816,7 +1815,6 @@ const authenticationService = require('./server/domains/authentication').createS
   querySql,
   recordLoginFailure,
   requireCsrf,
-  sqlValue,
   verifyPassword,
 });
 const administrationOperations = require('./server/domains/administration-operations').createService({
@@ -1853,7 +1851,6 @@ const peopleService = require('./server/domains/people').createPeopleService({
   cleanPersonRoleType,
   cleanText,
   firstNameOnly,
-  sqlValue,
 });
 const academicsService = require('./server/domains/academics').createAcademicsService({
   repository,
@@ -1892,7 +1889,6 @@ const academicsService = require('./server/domains/academics').createAcademicsSe
   runSqlBatch,
   scoreFieldEntries,
   scoreWriteStatements,
-  sqlValue,
   studentAccessClause,
   teacherAllowedForSelection,
 });
@@ -1909,7 +1905,6 @@ const administrationService = require('./server/domains/administration').createA
   cleanText,
   hashPassword: require('./server/passwords').createPasswordHasher(),
   currentUser,
-  sqlValue,
 });
 const peopleViews = require('./server/domains/people-views').createViews({
   asInt,
@@ -1983,7 +1978,6 @@ const academicsViews = require('./server/domains/academics-views').createViews({
   scoreValueForMode,
   selectedPeriodFromRequest,
   sortGrades,
-  sqlValue,
   studentAccessClause,
   studentDisplayName,
   studentLastFirst,
@@ -2009,7 +2003,6 @@ const administrationViews = require('./server/domains/administration-views').cre
   recentSchoolDays,
   roleLabel,
   schoolYearHead,
-  sqlValue,
   studentAccessClause,
   weeklyAverageChart,
 });

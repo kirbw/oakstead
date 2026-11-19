@@ -16,31 +16,34 @@ function createViews({
   recentSchoolDays,
   roleLabel,
   schoolYearHead,
-  sqlValue,
   studentAccessClause,
   weeklyAverageChart,
 }) {
   function dashboardPage(selectedYear, user) {
     const yearId = asInt(selectedYear.id);
     const teacher = isTeacher(user);
+    const studentParameters = [yearId];
     const studentScope = `FROM os_students st JOIN os_student_years sy ON sy.student_id=st.id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' ${studentAccessClause(user, yearId)}`;
-    const roomScope = `WHERE school_year_id=${yearId} ${teacher ? `AND teacher_id=${asInt(user.teacher_id)}` : ''}`;
-    const assignmentScope = assignmentAccessClause(user, yearId);
+      WHERE sy.school_year_id=? AND sy.status='enrolled' ${studentAccessClause(user, yearId, 'st', 'sy', studentParameters)}`;
+    const roomParameters = teacher ? [yearId, asInt(user.teacher_id)] : [yearId];
+    const roomScope = `WHERE school_year_id=? ${teacher ? 'AND teacher_id=?' : ''}`;
+    const assignmentParameters = [];
+    const assignmentScope = assignmentAccessClause(user, yearId, assignmentParameters);
     const scoreScope = teacher ? `AND sc.student_id IN (SELECT st.id ${studentScope})` : '';
+    const scoreParameters = teacher ? studentParameters : [];
     const kpis = {
-      families: querySql(teacher ? `SELECT COUNT(DISTINCT st.family_id) AS c ${studentScope};` : 'SELECT COUNT(*) AS c FROM os_families;')[0]?.c || 0,
-      students: querySql(`SELECT COUNT(*) AS c ${studentScope};`)[0]?.c || 0,
-      teachers: querySql(teacher ? `SELECT COUNT(DISTINCT teacher_id) AS c FROM os_classrooms ${roomScope};` : 'SELECT COUNT(*) AS c FROM os_teachers;')[0]?.c || 0,
-      classrooms: querySql(`SELECT COUNT(*) AS c FROM os_classrooms ${roomScope};`)[0]?.c || 0,
-      assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments a WHERE a.school_year_id=${yearId} ${assignmentScope};`)[0]?.c || 0
+      families: querySql(teacher ? `SELECT COUNT(DISTINCT st.family_id) AS c ${studentScope};` : 'SELECT COUNT(*) AS c FROM os_families;', teacher ? studentParameters : [])[0]?.c || 0,
+      students: querySql(`SELECT COUNT(*) AS c ${studentScope};`, studentParameters)[0]?.c || 0,
+      teachers: querySql(teacher ? `SELECT COUNT(DISTINCT teacher_id) AS c FROM os_classrooms ${roomScope};` : 'SELECT COUNT(*) AS c FROM os_teachers;', teacher ? roomParameters : [])[0]?.c || 0,
+      classrooms: querySql(`SELECT COUNT(*) AS c FROM os_classrooms ${roomScope};`, roomParameters)[0]?.c || 0,
+      assignments: querySql(`SELECT COUNT(*) AS c FROM os_assignments a WHERE a.school_year_id=? ${assignmentScope};`, [yearId, ...assignmentParameters])[0]?.c || 0
     };
     // Limit the authorized assignments before touching their scores. Aggregating
     // every historical assignment just to display eight rows blocks other requests.
     const recent = querySql(`WITH recent_assignments AS MATERIALIZED (
         SELECT a.*, s.name AS subject_name
         FROM os_assignments a JOIN os_subjects s ON s.id=a.subject_id
-        WHERE a.school_year_id=${yearId} ${assignmentScope}
+        WHERE a.school_year_id=? ${assignmentScope}
         ORDER BY a.assignment_date DESC, a.id DESC LIMIT 8
       ) SELECT a.title, a.category, a.grade_level, a.subject_name,
         COUNT(sc.id) AS scores, ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
@@ -48,16 +51,16 @@ function createViews({
       LEFT JOIN os_scores sc ON sc.assignment_id = a.id ${scoreScope}
       GROUP BY a.id
       ORDER BY a.assignment_date DESC, a.id DESC
-      LIMIT 8;`);
+      LIMIT 8;`, [yearId, ...assignmentParameters, ...scoreParameters]);
     const schoolDays = recentSchoolDays(7);
     const weekData = querySql(`SELECT DATE(a.assignment_date) AS day,
         ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
       FROM os_assignments a
       JOIN os_scores sc ON sc.assignment_id = a.id ${scoreScope}
-      WHERE a.school_year_id=${yearId} ${assignmentScope}
-        AND DATE(a.assignment_date) IN (${schoolDays.map((day) => sqlValue(day.key)).join(', ')})
+      WHERE a.school_year_id=? ${assignmentScope}
+        AND DATE(a.assignment_date) IN (${schoolDays.map(() => '?').join(', ')})
       GROUP BY DATE(a.assignment_date)
-      ORDER BY day ASC;`);
+      ORDER BY day ASC;`, [...scoreParameters, yearId, ...assignmentParameters, ...schoolDays.map((day) => day.key)]);
     const chart = weeklyAverageChart(weekData, schoolDays);
     const overallLabel = chart.overallAvg !== null ? `${Number(chart.overallAvg).toFixed(1)}% school-day avg` : 'No school-day data';
 

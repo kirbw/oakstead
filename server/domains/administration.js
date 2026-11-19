@@ -3,7 +3,7 @@ const { text, redirectTo } = require('./results');
 const { formRecord } = require('./validation');
 
 function createAdministrationService(deps) {
-  const { repository, ROLES, ROLE_ADMIN, ROLE_PARENT, ROLE_PRINCIPAL, ROLE_TEACHER, asInt, canManageAdminUsers, canManageSchoolUsers, cleanText, hashPassword, currentUser, sqlValue } = deps;
+  const { repository, ROLES, ROLE_ADMIN, ROLE_PARENT, ROLE_PRINCIPAL, ROLE_TEACHER, asInt, canManageAdminUsers, canManageSchoolUsers, cleanText, hashPassword, currentUser } = deps;
   const { querySql, runSql, executeSql } = repository;
   return { paths: new Set(["/users"]), async execute(p, body, user, req) {
     formRecord(body);

@@ -15,7 +15,6 @@ function createService({
   querySql,
   recordLoginFailure,
   requireCsrf,
-  sqlValue,
   verifyPassword,
 }) {
   return { paths: new Set(["/login","/logout","/switch-year"]), async execute(p, body, user, req) {

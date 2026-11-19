@@ -23,12 +23,12 @@ function loadSetupCounts(query, yearId) {
     (SELECT COUNT(*) FROM os_school_districts) AS districts,
     (SELECT COUNT(*) FROM os_congregations) AS congregations,
     (SELECT COUNT(*) FROM os_teachers) AS teachers,
-    (SELECT COUNT(*) FROM os_classrooms WHERE school_year_id=${asInt(yearId)}) AS classrooms,
+    (SELECT COUNT(*) FROM os_classrooms WHERE school_year_id=?) AS classrooms,
     (SELECT COUNT(*) FROM os_subjects) AS subjects,
     (SELECT COUNT(*) FROM os_school_years) AS schoolYears,
-    (SELECT COUNT(*) FROM os_grade_weight_groups WHERE school_year_id=${asInt(yearId)}) AS weightGroups,
-    (SELECT COUNT(*) FROM os_letter_grade_groups WHERE school_year_id=${asInt(yearId)}) AS letterGroups,
-    (SELECT COUNT(*) FROM os_users) AS users`)[0];
+    (SELECT COUNT(*) FROM os_grade_weight_groups WHERE school_year_id=?) AS weightGroups,
+    (SELECT COUNT(*) FROM os_letter_grade_groups WHERE school_year_id=?) AS letterGroups,
+    (SELECT COUNT(*) FROM os_users) AS users`, [asInt(yearId), asInt(yearId), asInt(yearId)])[0];
 }
 
 function loadSetupSection(query, yearId, section, requestedFamilyId = 0) {
@@ -48,20 +48,20 @@ function loadSetupSection(query, yearId, section, requestedFamilyId = 0) {
     JOIN os_role_types rt ON rt.id = pr.role_type_id
     ORDER BY pr.term_start DESC, rg.name, rt.name;`),
     schoolYears: () => query('SELECT * FROM os_school_years ORDER BY is_active DESC, name DESC;'),
-    markingPeriods: () => query(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`),
+    markingPeriods: () => query(`SELECT * FROM os_marking_periods WHERE school_year_id=? ORDER BY period_number;`, [yearId]),
     classrooms: () => query(`SELECT c.*, t.name AS teacher_name,
       GROUP_CONCAT(cg.grade_level, ', ') AS grades
     FROM os_classrooms c
     LEFT JOIN os_teachers t ON t.id = c.teacher_id
     LEFT JOIN os_classroom_grades cg ON cg.classroom_id = c.id
-    WHERE c.school_year_id=${yearId}
+    WHERE c.school_year_id=?
     GROUP BY c.id
-    ORDER BY c.name;`),
+    ORDER BY c.name;`, [yearId]),
     gradeSubjects: () => query(`SELECT gs.grade_level, gs.subject_id, s.name AS subject_name
     FROM os_grade_subjects gs
     JOIN os_subjects s ON s.id = gs.subject_id
-    WHERE gs.school_year_id=${yearId}
-    ORDER BY gs.grade_level, s.name;`),
+    WHERE gs.school_year_id=?
+    ORDER BY gs.grade_level, s.name;`, [yearId]),
     families: () => query(`SELECT f.*, sd.name AS school_district_name, cng.name AS congregation_name,
       COUNT(st.id) AS child_count
     FROM os_families f
@@ -73,10 +73,10 @@ function loadSetupSection(query, yearId, section, requestedFamilyId = 0) {
     students: () => query(`SELECT st.*, f.family_name, sy.grade_level, sy.status, sy.classroom_id, c.name AS classroom_name
     FROM os_students st
     JOIN os_families f ON f.id = st.family_id
-    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
+    LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=?
     LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
-    WHERE st.family_id=${asInt(selectedFamily()?.id)}
-    ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`),
+    WHERE st.family_id=?
+    ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`, [yearId, asInt(selectedFamily()?.id)]),
     users: () => query(`SELECT u.id, u.name, u.username, u.role, u.teacher_id, u.parent_family_id, t.name AS teacher_name, f.family_name AS parent_family_name
     FROM os_users u
     LEFT JOIN os_teachers t ON t.id = u.teacher_id
@@ -85,24 +85,24 @@ function loadSetupSection(query, yearId, section, requestedFamilyId = 0) {
     weightGroups: () => query(`SELECT wg.*, s.name AS subject_name
     FROM os_grade_weight_groups wg
     LEFT JOIN os_subjects s ON s.id = wg.subject_id
-    WHERE wg.school_year_id=${yearId}
-    ORDER BY CAST(wg.min_grade AS INTEGER), wg.name;`),
+    WHERE wg.school_year_id=?
+    ORDER BY CAST(wg.min_grade AS INTEGER), wg.name;`, [yearId]),
     weightItems: () => query(`SELECT * FROM os_grade_weight_items
-    WHERE group_id IN (SELECT id FROM os_grade_weight_groups WHERE school_year_id=${yearId})
-    ORDER BY category;`),
+    WHERE group_id IN (SELECT id FROM os_grade_weight_groups WHERE school_year_id=?)
+    ORDER BY category;`, [yearId]),
     letterGroups: () => query(`SELECT lg.*, s.name AS subject_name
     FROM os_letter_grade_groups lg
     LEFT JOIN os_subjects s ON s.id = lg.subject_id
-    WHERE lg.school_year_id=${yearId}
-    ORDER BY CAST(lg.min_grade AS INTEGER), lg.name;`),
+    WHERE lg.school_year_id=?
+    ORDER BY CAST(lg.min_grade AS INTEGER), lg.name;`, [yearId]),
     letterItems: () => query(`SELECT * FROM os_letter_grade_items
-    WHERE group_id IN (SELECT id FROM os_letter_grade_groups WHERE school_year_id=${yearId})
-    ORDER BY threshold DESC, sort_order, letter;`)
+    WHERE group_id IN (SELECT id FROM os_letter_grade_groups WHERE school_year_id=?)
+    ORDER BY threshold DESC, sort_order, letter;`, [yearId])
   };
   for (const name of SECTION_DATA[section] || []) data[name] = loaders[name]();
   if (section === 'families') {
     const family = selectedFamily();
-    data.emergencyContacts = family ? query(`SELECT * FROM os_emergency_contacts WHERE family_id=${asInt(family.id)} ORDER BY priority, name;`) : [];
+    data.emergencyContacts = family ? query(`SELECT * FROM os_emergency_contacts WHERE family_id=? ORDER BY priority, name;`, [asInt(family.id)]) : [];
   }
   return data;
 }
