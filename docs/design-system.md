@@ -27,9 +27,9 @@ with a safe message, request ID and explicit retry while retaining the last view
 Do not substitute empty results for failures. Session loss offers sign-in in another
 tab so pending work is retained. Mutation retries remain explicit.
 
-Navigation announces loading and sets aria-busy. Forms announce saving while their
-submit button retains its label/width. Error summaries span the full form width,
-receive focus, list field errors and keep entered values. Autosave announces saving,
+Navigation marks the main view busy while the next page loads. Forms show progress
+in the submit button and reserve its original width while the request runs. Error
+summaries span the full form width, receive focus, list field errors and keep entered values. Autosave announces saving,
 saved or failed; cell symbols accompany status color and rejected input values are
 marked invalid. Grade-category colors and numeric/letter business rules remain unchanged.
 
