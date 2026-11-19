@@ -83,10 +83,12 @@ test('record routes cascade assignments and roll back multi-step failures before
 test('demo reset and repeated seeding work with enforcement enabled', async (t) => {
   const app=await schoolFixture(t);
   for(let i=0;i<2;i++) {
+    app.withDb(db=>db.prepare("INSERT INTO os_academic_history(occurred_at,actor_name,actor_role,request_id,event_type,operation) VALUES(?,?,?,?,?,?)").run('2026-11-19T00:00:00.000Z','Demo','Demo','fixture','score','create'));
     const result=spawnSync(process.execPath,['scripts/seed-demo.js','--reset'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,DB_FILE:app.dbFile},encoding:'utf8',windowsHide:true});
     assert.equal(result.status,0,result.stderr);
     const issues=app.withDb(db=>collectDataIntegrityIssues(sql=>db.prepare(sql).all()));
     assert.deepEqual(issues,[]);
     assert.ok(app.withDb(db=>db.prepare('SELECT COUNT(*) AS n FROM os_scores').get().n)>0);
+    assert.equal(app.withDb(db=>db.prepare('SELECT COUNT(*) AS n FROM os_academic_history').get().n),0);
   }
 });

@@ -400,6 +400,6 @@ function createAcademicsService(deps) {
     }
 
     return text(404, 'Not Found');
-  }, repository);
+  }, repository, deps.history);
 }
 module.exports = { createAcademicsService };

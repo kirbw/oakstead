@@ -1854,6 +1854,7 @@ const peopleService = require('./server/domains/people').createPeopleService({
 });
 const academicsService = require('./server/domains/academics').createAcademicsService({
   repository,
+  history: require('./server/history').createAcademicHistory(repository, { demoMode: DEMO_MODE }),
   CATEGORIES,
   DEFAULT_LETTER_GRADES,
   ROLE_TEACHER,
@@ -2048,9 +2049,10 @@ function operationalPage() {
     ready: readyForRequests(), backupAt: getSetting('backup_last_at', ''), scheduler: backupScheduler?.status() });
 }
 
-operations.configureRoutes([...domainRoutes.paths, '/', '/parent', '/setup', '/reports', '/report-cards', '/families', '/users', '/system/diagnostics', '/system/operations', '/system-update/status', '/backup/download', '/assets/app.css', '/assets/app.js', '/assets/logo', '/assets/favicon', '/health']);
+operations.configureRoutes([...domainRoutes.paths, '/history', '/', '/parent', '/setup', '/reports', '/report-cards', '/families', '/users', '/system/diagnostics', '/system/operations', '/system-update/status', '/backup/download', '/assets/app.css', '/assets/app.js', '/assets/logo', '/assets/favicon', '/health']);
 
 const handleGet = require('./server/routes').createPageRoutes({
+  historyPage: url => require('./server/history-page').historyPage(querySql, url),
   DEMO_MODE,
   absencesPage,
   appendSetCookie,
@@ -2141,7 +2143,8 @@ const server = http.createServer(async (req, res) => {
   res.once('finish', record);
   res.once('close', record);
   const headers = {};
-  res.setHeader('X-Request-ID', crypto.randomUUID());
+  req.requestId = crypto.randomUUID();
+  res.setHeader('X-Request-ID', req.requestId);
   res.setHeader('Cache-Control', 'no-store');
 
   try {

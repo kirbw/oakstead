@@ -1,9 +1,11 @@
 const { SCHEMA_SQL, applyAdditiveMigrations, validateApplicationSchema } = require('./schema');
+const { HISTORY_SCHEMA_SQL } = require('./history-schema');
 
 // Version 1 establishes the existing application schema; subsequent changes must
 // append a numbered step rather than modifying an already released migration.
-const MIGRATIONS = Object.freeze([{ version: 1, up: applyAdditiveMigrations }]);
-const CURRENT_SCHEMA_VERSION = 1;
+const MIGRATIONS = Object.freeze([{ version: 1, up: applyAdditiveMigrations },
+  { version: 2, up: connection => connection.exec(HISTORY_SCHEMA_SQL) }]);
+const CURRENT_SCHEMA_VERSION = 2;
 
 function migrateDatabase(connection, { migrations = MIGRATIONS, allowEmpty = true } = {}) {
   const target = migrations.at(-1)?.version || 0;
@@ -15,7 +17,7 @@ function migrateDatabase(connection, { migrations = MIGRATIONS, allowEmpty = tru
   const tables = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';").all();
   const fresh = tables.length === 0;
   if (fresh && (!allowEmpty || current !== 0)) throw new Error('Database is missing required Oakstead tables.');
-  if (!fresh) validateApplicationSchema(connection, { allowAdditive: current === 0 });
+  if (!fresh) validateApplicationSchema(connection, { allowAdditive: current === 0, schemaVersion: current });
   connection.exec('SAVEPOINT oakstead_migrations;');
   try {
     if (fresh) connection.exec(SCHEMA_SQL);
@@ -24,7 +26,7 @@ function migrateDatabase(connection, { migrations = MIGRATIONS, allowEmpty = tru
       step.up(connection);
       connection.exec(`PRAGMA user_version=${step.version};`);
     }
-    validateApplicationSchema(connection);
+    validateApplicationSchema(connection, { schemaVersion: target });
     connection.exec('RELEASE oakstead_migrations;');
   } catch (error) {
     connection.exec('ROLLBACK TO oakstead_migrations; RELEASE oakstead_migrations;');

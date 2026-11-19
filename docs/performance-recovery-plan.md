@@ -99,7 +99,7 @@ headers, and initial frontend extraction from server.js.
     comparisons are not a before/after performance claim for this PR.
   - Status: merged; PR https://github.com/kirbw/oakstead/pull/58; branch deleted.
     Merge: 962086c1cdd16fd9eaa341a99151df4fffe58499.
-- [ ] 5. Bound reads and measured reuse — `codex/parameterized-database-reads`
+- [x] 5. Bound reads and measured reuse — `codex/parameterized-database-reads`
   - Convert remaining runtime reads/access filters and IN lists; document safe
     structural SQL. Benchmark preparation with grade/Setup fixtures.
   - Include connection-local 128-entry LRU statements only with >=5% median gain
@@ -123,7 +123,8 @@ headers, and initial frontend extraction from server.js.
   - Load check: same-session baseline versus bound reads at 50 actors averages
     477.8 versus 476.3 ops/s; gradebook p95 132.7 versus 133.0ms. Zero failures,
     correct final scores and clean integrity in both runs; raw reports linked.
-  - Status: validated; PR https://github.com/kirbw/oakstead/pull/59; merge pending.
+  - Status: merged; PR https://github.com/kirbw/oakstead/pull/59; branch deleted.
+    Merge: 1ba2aedf71de700797e6639101493ae29cee4b97.
 - [ ] 6. Academic history — `codex/academic-change-history`
   - Versioned additive append-only history: actor identity/role snapshot, UTC,
     request ID, operation/record IDs, before/after values. All score paths,
@@ -135,7 +136,29 @@ headers, and initial frontend extraction from server.js.
     authorization, deletion, zero/clear/bulk and older restores.
   - Restore rolls history back too; later events survive only in pre-restore
     backup. Document operational (not tamper-proof) nature and code downgrade risk.
-  - Status/PR/validation/compatibility/merge: pending.
+  - Implemented: schema version 2 adds history without source-record foreign
+    keys. Academic service captures changes within its existing transaction;
+    failed history writes roll back the academic write. Score comparisons load
+    only submitted students, except assignment deletion captures all scores.
+    No-op saves produce no entries. Actor snapshots survive account deletion.
+  - UI: admin/principal-only /history with numeric ID, UTC date and event filters,
+    stable 50-event pagination and Gradebook/Absences links. Demo actor label and
+    reset behavior included; Backup Settings explains history rollback.
+  - Validation: 102 tests pass; syntax/refactor gates pass on Node 26.13.1 and
+    22.13.0 on Windows. Tests cover every score form, zero/clear/no-op, mixed
+    denial, cascades, history-write failure, actor deletion, filters/pagination,
+    escaping/no-store, migration rollback and version-one restore.
+  - Load: same 50-teacher/500-student fixture yields 480.0/482.4 ops/s at the two
+    50-actor stages, gradebook p95 134.2/133.0ms, save p95 129.9/123.2ms; zero
+    failures, correct final scores and clean integrity. Prior bound-read run:
+    473.3/479.2 ops/s, gradebook p95 129.2/136.9ms, save p95 124.2/124.4ms.
+    [Raw report](load-tests/school-2026-11-19T19-10-01-599Z.json). No speedup claimed.
+  - Browser initialization attempted again; trusted Node process crashed before
+    a page could open. No screenshots. [Manual checks and recovery notes](academic-history.md).
+  - Compatibility: additive migration only, no historical backfill/repair.
+    Older backup restores begin empty history; later events remain in pre-restore
+    backup. Do not downgrade code/schema; use compatible code and validated backup.
+  - Status: validated; PR/merge pending.
 - [ ] 7. Opt-in backup retention — `codex/safe-backup-retention`
   - Keep all by default; admin option newest N scheduled backups (minimum 3,
     suggested 30), preview before save, no deletion on settings save. Cleanup

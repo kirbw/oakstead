@@ -15,6 +15,7 @@ function createPageRoutes({
   dataIntegrityPage,
   fs,
   gradebookPage,
+  historyPage,
   isAdmin,
   isParent,
   loginPage,
@@ -65,6 +66,12 @@ function createPageRoutes({
     const context = selectedPageContext(req, url, pathname, csrfToken, user);
     if (!context) return sendText(res, 500, 'No school year configured');
     const { selected, pageArgs } = context;
+    const historyAllowed = ['admin', 'principal'].includes(user.role);
+    const historyLink = historyAllowed ? `<p><a class="secondary-btn" href="/history?yearId=${asInt(selected.id)}">Academic history</a></p>` : '';
+    if (pathname === '/history') {
+      if (!historyAllowed) return sendText(res, 403, 'Forbidden');
+      return sendAppPage(req, res, headers, pageArgs, 'Academic History', historyPage(url));
+    }
 
     if (pathname === '/system/diagnostics') {
       if (!isAdmin(user)) return sendText(res, 403, 'Forbidden');
@@ -98,7 +105,7 @@ function createPageRoutes({
       if (markingPeriodId) appendSetCookie(headers, `gradebookPeriodId=${cookieValue(markingPeriodId)}; Path=/; SameSite=Strict; Max-Age=31536000`);
       const gridParam = cleanText(url.searchParams.get('grid'), 12);
       if (gridParam === 'on' || gridParam === 'off') appendSetCookie(headers, `gradebookGrid=${gridParam}; Path=/; SameSite=Strict; Max-Age=31536000`);
-      return sendAppPage(req, res, headers, pageArgs, 'Gradebook', gradebookPage(req, url, user, selected, csrfToken));
+      return sendAppPage(req, res, headers, pageArgs, 'Gradebook', historyLink + gradebookPage(req, url, user, selected, csrfToken));
     }
     if (pathname === '/assignments') {
       if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
@@ -110,7 +117,7 @@ function createPageRoutes({
     }
     if (pathname === '/absences') {
       if (!canManageAcademicRecords(user)) return sendText(res, 403, 'Forbidden');
-      return sendAppPage(req, res, headers, pageArgs, 'Absences', absencesPage(url, selected, csrfToken, user));
+      return sendAppPage(req, res, headers, pageArgs, 'Absences', historyLink + absencesPage(url, selected, csrfToken, user));
     }
     if (pathname === '/reports') {
       if (isParent(user)) return sendText(res, 403, 'Forbidden');

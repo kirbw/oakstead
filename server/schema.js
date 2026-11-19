@@ -1,4 +1,5 @@
 const { DatabaseSync } = require('node:sqlite');
+const { HISTORY_SCHEMA_SQL } = require('./history-schema');
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS os_school_years (
@@ -360,6 +361,7 @@ function expectedSchema() {
   try {
     reference.exec(SCHEMA_SQL);
     applyAdditiveMigrations(reference);
+    reference.exec(HISTORY_SCHEMA_SQL);
     schemaManifest = reference.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'os_%';").all()
       .map(({ name }) => ({ table: name, columns: reference.prepare(`PRAGMA table_info(${identifier(name)});`).all(),
         uniqueKeys: uniqueKeys(reference, name), foreignKeys: foreignKeys(reference, name) }));
@@ -367,9 +369,10 @@ function expectedSchema() {
   } finally { reference.close(); }
 }
 
-function validateApplicationSchema(connection, { allowAdditive = false } = {}) {
+function validateApplicationSchema(connection, { allowAdditive = false, schemaVersion = 2 } = {}) {
   const tables = new Set(connection.prepare("SELECT name FROM sqlite_master WHERE type='table';").all().map((row) => row.name));
   for (const { table, columns, uniqueKeys: requiredKeys, foreignKeys: requiredRelations } of expectedSchema()) {
+    if (table === 'os_academic_history' && schemaVersion < 2) continue;
     if (!tables.has(table)) throw new Error(`Backup is missing required Oakstead table ${table}.`);
     const actual = new Map(connection.prepare(`PRAGMA table_info(${identifier(table)});`).all().map((row) => [row.name, row]));
     for (const column of columns) {
