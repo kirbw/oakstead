@@ -12,10 +12,10 @@ function createViews({ asInt, csrfInput, emptyState, esc, firstNameOnly, gradeOp
     const students = querySql(`SELECT st.*, f.family_name, sy.grade_level, sy.status, sy.classroom_id, c.name AS classroom_name
       FROM os_students st
       JOIN os_families f ON f.id = st.family_id
-      LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId}
+      LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=?
       LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
-      ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`);
-    const classrooms = querySql(`SELECT id, name FROM os_classrooms WHERE school_year_id=${yearId} ORDER BY name;`);
+      ORDER BY f.family_name, st.birth_date, st.last_name, st.first_name;`, [yearId]);
+    const classrooms = querySql(`SELECT id, name FROM os_classrooms WHERE school_year_id=? ORDER BY name;`, [yearId]);
     const classroomOptions = classrooms.map((room) => `<option value="${room.id}">${esc(room.name)}</option>`).join('');
     const congregationOptions = (selected = '') => congregations.map((congregation) => `<option value="${congregation.id}" ${selectedAttr(congregation.id, selected)}>${esc(congregation.name)}</option>`).join('');
     const showAddFamily = url.searchParams.get('action') === 'add-family' || families.length === 0;

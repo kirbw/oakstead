@@ -1,3 +1,4 @@
+const { sqlParameter } = require('../input');
 const ui = require('../ui');
 
 function createViews({
@@ -60,7 +61,6 @@ function createViews({
   scoreValueForMode,
   selectedPeriodFromRequest,
   sortGrades,
-  sqlValue,
   studentAccessClause,
   studentDisplayName,
   studentLastFirst,
@@ -98,8 +98,8 @@ function createViews({
           ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
         FROM os_scores sc
         JOIN os_assignments a ON a.id = sc.assignment_id
-        WHERE sc.assignment_id IN (${assignmentIds.join(',')})
-          AND sc.student_id IN (${studentIds.join(',')});`)
+        WHERE sc.assignment_id IN (${assignmentIds.map(() => '?').join(',')})
+          AND sc.student_id IN (${studentIds.map(() => '?').join(',')});`, [...assignmentIds, ...studentIds])
       : [];
     const scoresByCell = new Map(scoreRows.map((row) => [`${asInt(row.assignment_id)}:${asInt(row.student_id)}`, row]));
     const periodSelect = `<select name="markingPeriodId" required data-auto-submit>${periods.map((period) => `<option value="${period.id}" ${period.id === selectedPeriodId ? 'selected' : ''}>${esc(period.period_number)}</option>`).join('')}</select>`;
@@ -292,7 +292,7 @@ function createViews({
 
   function gradebookPage(req, url, user, selectedYear, csrfToken) {
     const yearId = asInt(selectedYear.id);
-    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=? ORDER BY period_number;`, [yearId]);
     const selectedPeriod = selectedPeriodFromRequest(req, url, periods);
     const selectedPeriodId = asInt(selectedPeriod?.id);
     const selectedGrade = cleanGrade(url.searchParams.get('grade'));
@@ -304,41 +304,46 @@ function createViews({
     const savedGridMode = parseCookies(req).gradebookGrid;
     const gridMode = gridParam ? gridParam !== 'off' : (savedGridMode ? savedGridMode === 'on' : true);
     const allGrades = sortGrades([
-      ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((row) => row.grade_level),
-      ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((row) => row.grade_level)
+      ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=?;`, [yearId]).map((row) => row.grade_level),
+      ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=?;`, [yearId]).map((row) => row.grade_level)
     ]);
     const subjects = selectedGrade
-      ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)} ORDER BY s.name;`)
+      ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=? AND gs.grade_level=? ORDER BY s.name;`, [yearId, sqlParameter(selectedGrade)])
       : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
     const subject = subjects.find((row) => row.id === selectedSubjectId);
     const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, 0);
-    const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
+    const teacherParameters = user.role === ROLE_TEACHER ? [asInt(user.teacher_id), yearId] : [];
+    const teacherStudentClause = user.role === ROLE_TEACHER ? 'AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?)' : '';
     const students = selectedGrade && allowed ? querySql(`SELECT st.id, st.first_name, st.last_name
         FROM os_student_years sy
         JOIN os_students st ON st.id = sy.student_id
-        WHERE sy.school_year_id=${yearId}
-          AND sy.grade_level=${sqlValue(selectedGrade)}
+        WHERE sy.school_year_id=?
+          AND sy.grade_level=?
           AND sy.status='enrolled'
           ${teacherStudentClause}
-        ORDER BY st.last_name, st.first_name;`) : [];
+        ORDER BY st.last_name, st.first_name;`, [yearId, sqlParameter(selectedGrade), ...teacherParameters]) : [];
+    const periodParameters = [];
+    const periodScope = assignmentPeriodClause(selectedPeriod, periodParameters);
+    const assignmentParameters = [];
+    const assignmentScope = assignmentAccessClause(user, yearId, assignmentParameters);
     const assignments = selectedGrade && selectedSubjectId && allowed ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
         COUNT(sc.id) AS score_count,
         ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
       FROM os_assignments a
       LEFT JOIN os_scores sc ON sc.assignment_id = a.id
-      WHERE a.school_year_id=${yearId}
-        AND a.grade_level=${sqlValue(selectedGrade)}
-        AND a.subject_id=${selectedSubjectId}
-        ${assignmentAccessClause(user, yearId)}
-        ${assignmentPeriodClause(selectedPeriod)}
+      WHERE a.school_year_id=?
+        AND a.grade_level=?
+        AND a.subject_id=?
+        ${assignmentScope}
+        ${periodScope}
       GROUP BY a.id
-      ORDER BY a.assignment_date DESC, a.id DESC;`) : [];
+      ORDER BY a.assignment_date DESC, a.id DESC;`, [yearId, sqlParameter(selectedGrade), selectedSubjectId, ...assignmentParameters, ...periodParameters]) : [];
     const selectedAssignmentId = showNewAssignment ? 0 : (requestedAssignmentId || asInt(assignments[0]?.id));
     const selectedAssignment = selectedAssignmentId
       ? authorizedAssignments(user, yearId, selectedGrade, selectedSubjectId, [selectedAssignmentId]).get(selectedAssignmentId)
       : null;
     const existingScores = selectedAssignment ? Object.fromEntries(
-      querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=${selectedAssignment.id};`).map((r) => [r.student_id, r.score])
+      querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=?;`, [selectedAssignment.id]).map((r) => [r.student_id, r.score])
     ) : {};
 
     const periodParam = selectedPeriodId ? `&markingPeriodId=${selectedPeriodId}` : '';
@@ -480,43 +485,46 @@ function createViews({
     const showAdd = !selectedAssignmentId || url.searchParams.get('action') === 'add';
 
     const allGrades = sortGrades([
-      ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=${yearId};`).map((r) => r.grade_level),
-      ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=${yearId};`).map((r) => r.grade_level)
+      ...querySql(`SELECT grade_level FROM os_student_years WHERE school_year_id=?;`, [yearId]).map((r) => r.grade_level),
+      ...querySql(`SELECT grade_level FROM os_grade_subjects WHERE school_year_id=?;`, [yearId]).map((r) => r.grade_level)
     ]);
     const subjects = selectedGrade
-      ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)} ORDER BY s.name;`)
+      ? querySql(`SELECT s.id, s.name FROM os_grade_subjects gs JOIN os_subjects s ON s.id=gs.subject_id WHERE gs.school_year_id=? AND gs.grade_level=? ORDER BY s.name;`, [yearId, sqlParameter(selectedGrade)])
       : querySql('SELECT id, name FROM os_subjects ORDER BY name;');
     const subject = subjects.find((s) => s.id === selectedSubjectId);
     const allowed = !selectedGrade || teacherAllowedForSelection(user, yearId, selectedGrade, 0);
 
+    const assignmentParameters = [];
+    const assignmentScope = assignmentAccessClause(user, yearId, assignmentParameters);
     const assignments = selectedGrade && selectedSubjectId && allowed ? querySql(`SELECT a.id, a.title, a.category, a.assignment_date, a.max_score,
         COUNT(sc.id) AS score_count,
         ROUND(AVG(CASE WHEN sc.score IS NULL THEN NULL ELSE (sc.score / NULLIF(a.max_score, 0)) * 100 END), 1) AS avg_score
       FROM os_assignments a
       LEFT JOIN os_scores sc ON sc.assignment_id = a.id
-      WHERE a.school_year_id=${yearId}
-        AND a.grade_level=${sqlValue(selectedGrade)}
-        AND a.subject_id=${selectedSubjectId}
-        ${assignmentAccessClause(user, yearId)}
+      WHERE a.school_year_id=?
+        AND a.grade_level=?
+        AND a.subject_id=?
+        ${assignmentScope}
       GROUP BY a.id
-      ORDER BY a.assignment_date DESC, a.id DESC;`) : [];
+      ORDER BY a.assignment_date DESC, a.id DESC;`, [yearId, sqlParameter(selectedGrade), selectedSubjectId, ...assignmentParameters]) : [];
 
     const selectedAssignment = selectedAssignmentId && !showAdd
       ? authorizedAssignments(user, yearId, selectedGrade, selectedSubjectId, [selectedAssignmentId]).get(selectedAssignmentId)
       : null;
 
-    const teacherStudentClause = user.role === ROLE_TEACHER ? `AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=${asInt(user.teacher_id)} AND school_year_id=${yearId})` : '';
+    const teacherParameters = user.role === ROLE_TEACHER ? [asInt(user.teacher_id), yearId] : [];
+    const teacherStudentClause = user.role === ROLE_TEACHER ? 'AND sy.classroom_id IN (SELECT id FROM os_classrooms WHERE teacher_id=? AND school_year_id=?)' : '';
     const students = selectedGrade && allowed ? querySql(`SELECT st.id, st.first_name, st.last_name
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId}
-        AND sy.grade_level=${sqlValue(selectedGrade)}
+      WHERE sy.school_year_id=?
+        AND sy.grade_level=?
         AND sy.status='enrolled'
         ${teacherStudentClause}
-      ORDER BY st.last_name, st.first_name;`) : [];
+      ORDER BY st.last_name, st.first_name;`, [yearId, sqlParameter(selectedGrade), ...teacherParameters]) : [];
 
     const existingScores = selectedAssignment ? Object.fromEntries(
-      querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=${selectedAssignment.id};`).map((r) => [r.student_id, r.score])
+      querySql(`SELECT student_id, score FROM os_scores WHERE assignment_id=?;`, [selectedAssignment.id]).map((r) => [r.student_id, r.score])
     ) : {};
 
     const baseParams = `yearId=${yearId}${selectedGrade ? `&grade=${encodeURIComponent(selectedGrade)}` : ''}${selectedSubjectId ? `&subjectId=${selectedSubjectId}` : ''}&mode=${scoreMode}`;
@@ -638,19 +646,20 @@ function createViews({
   }
 
   function reportOverview(yearId, selectedYear, user) {
-    const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+    const accessParameters = [];
+    const accessClause = studentAccessClause(user, yearId, 'st', 'sy', accessParameters);
     const kpis = {
       families: canAccessSetup(user) ? querySql('SELECT COUNT(*) AS count FROM os_families;')[0]?.count || 0 : 0,
       students: querySql(`SELECT COUNT(*) AS count
         FROM os_student_years sy
         JOIN os_students st ON st.id = sy.student_id
-        WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
-          ${accessClause};`)[0]?.count || 0,
-      classrooms: canAccessSetup(user) ? querySql(`SELECT COUNT(*) AS count FROM os_classrooms WHERE school_year_id=${yearId};`)[0]?.count || 0 : querySql(`SELECT COUNT(DISTINCT sy.classroom_id) AS count
+        WHERE sy.school_year_id=? AND sy.status='enrolled'
+          ${accessClause};`, [yearId, ...accessParameters])[0]?.count || 0,
+      classrooms: canAccessSetup(user) ? querySql(`SELECT COUNT(*) AS count FROM os_classrooms WHERE school_year_id=?;`, [yearId])[0]?.count || 0 : querySql(`SELECT COUNT(DISTINCT sy.classroom_id) AS count
         FROM os_student_years sy
         JOIN os_students st ON st.id = sy.student_id
-        WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
-          ${accessClause};`)[0]?.count || 0,
+        WHERE sy.school_year_id=? AND sy.status='enrolled'
+          ${accessClause};`, [yearId, ...accessParameters])[0]?.count || 0,
       board: canAccessSetup(user) ? querySql(`SELECT COUNT(*) AS count
         FROM os_person_roles pr
         JOIN os_role_groups rg ON rg.id = pr.group_id
@@ -659,18 +668,18 @@ function createViews({
     const gradeRows = querySql(`SELECT sy.grade_level AS grade_level, COUNT(*) AS count
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      WHERE sy.school_year_id=? AND sy.status='enrolled'
         ${accessClause}
-      GROUP BY sy.grade_level;`);
+      GROUP BY sy.grade_level;`, [yearId, ...accessParameters]);
     const sortedGrades = sortGrades(gradeRows.map((row) => row.grade_level));
     const gradesByName = new Map(gradeRows.map((row) => [row.grade_level, Number(row.count || 0)]));
     const largestGrade = Math.max(1, ...gradeRows.map((row) => Number(row.count || 0)));
     const birthdayRows = querySql(`SELECT CAST(strftime('%m', st.birth_date) AS INTEGER) AS month, COUNT(*) AS count
       FROM os_students st
       JOIN os_student_years sy ON sy.student_id = st.id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
+      WHERE sy.school_year_id=? AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
         ${accessClause}
-      GROUP BY month;`);
+      GROUP BY month;`, [yearId, ...accessParameters]);
     const birthdayByMonth = new Map(birthdayRows.map((row) => [Number(row.month), Number(row.count || 0)]));
     const largestMonth = Math.max(1, ...birthdayRows.map((row) => Number(row.count || 0)));
 
@@ -715,9 +724,9 @@ function createViews({
       FROM os_families f
       LEFT JOIN os_congregations cng ON cng.id = f.congregation_id
       LEFT JOIN os_students st ON st.family_id = f.id
-      LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=${yearId} AND sy.status='enrolled'
+      LEFT JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id=? AND sy.status='enrolled'
       GROUP BY f.id
-      ORDER BY f.family_name;`);
+      ORDER BY f.family_name;`, [yearId]);
     return `${printReportHead('Families', selectedYear, `${rows.length} families`)}
     <section class="ledger family-report">
       <div class="ledger-head"><h2>Families</h2><p>Parent names, household contact information, and enrolled student counts.</p></div>
@@ -739,22 +748,24 @@ function createViews({
 
   function studentsReport(url, yearId, selectedYear, user) {
     const selectedGrade = cleanGrade(url.searchParams.get('grade'));
-    const gradeClause = selectedGrade ? `AND sy.grade_level=${sqlValue(selectedGrade)}` : '';
-    const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+    const gradeClause = selectedGrade ? 'AND sy.grade_level=?' : '';
+    const gradeParameters = selectedGrade ? [sqlParameter(selectedGrade)] : [];
+    const accessParameters = [];
+    const accessClause = studentAccessClause(user, yearId, 'st', 'sy', accessParameters);
     const grades = sortGrades(querySql(`SELECT DISTINCT sy.grade_level
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
-        ${accessClause};`).map((row) => row.grade_level));
+      WHERE sy.school_year_id=? AND sy.status='enrolled'
+        ${accessClause};`, [yearId, ...accessParameters]).map((row) => row.grade_level));
     const rows = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, st.birth_date,
         sy.grade_level, c.name AS classroom_name, t.name AS teacher_name
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
       LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
       LEFT JOIN os_teachers t ON t.id = c.teacher_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' ${gradeClause}
+      WHERE sy.school_year_id=? AND sy.status='enrolled' ${gradeClause}
         ${accessClause}
-      ORDER BY st.last_name, st.first_name;`);
+      ORDER BY st.last_name, st.first_name;`, [yearId, ...gradeParameters, ...accessParameters]);
     const groupedGrades = sortGrades(rows.map((row) => row.grade_level));
     return `<div class="workspace">
       <section class="panel">
@@ -815,7 +826,8 @@ function createViews({
   }
 
   function birthdaysReport(yearId, selectedYear, user) {
-    const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+    const accessParameters = [];
+    const accessClause = studentAccessClause(user, yearId, 'st', 'sy', accessParameters);
     const rows = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, st.birth_date,
         CAST(strftime('%m', st.birth_date) AS INTEGER) AS birth_month,
         CAST(strftime('%d', st.birth_date) AS INTEGER) AS birth_day,
@@ -823,9 +835,9 @@ function createViews({
       FROM os_students st
       JOIN os_student_years sy ON sy.student_id = st.id
       LEFT JOIN os_classrooms c ON c.id = sy.classroom_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
+      WHERE sy.school_year_id=? AND sy.status='enrolled' AND st.birth_date IS NOT NULL AND st.birth_date != ''
         ${accessClause}
-      ORDER BY birth_month, birth_day, st.last_name, st.first_name;`);
+      ORDER BY birth_month, birth_day, st.last_name, st.first_name;`, [yearId, ...accessParameters]);
     return `${printReportHead('Student Birthdays', selectedYear)}
     <section class="ledger birthday-report">
       <div class="ledger-head"><h2>Student Birthdays</h2><p>Birthdays grouped by month for the selected school year.</p></div>
@@ -847,32 +859,33 @@ function createViews({
   }
 
   function gradeGraphReport(url, yearId, selectedYear, user) {
-    const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+    const accessParameters = [];
+    const accessClause = studentAccessClause(user, yearId, 'st', 'sy', accessParameters);
     const grades = sortGrades(querySql(`SELECT DISTINCT sy.grade_level
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
-        ${accessClause};`).map((row) => row.grade_level));
+      WHERE sy.school_year_id=? AND sy.status='enrolled'
+        ${accessClause};`, [yearId, ...accessParameters]).map((row) => row.grade_level));
     const selectedGrade = cleanGrade(url.searchParams.get('grade')) || grades[0] || '';
     const requestedScope = cleanText(url.searchParams.get('scope'), 12);
     const scope = requestedScope === 'student' ? 'student' : 'grade';
     const students = selectedGrade ? querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled' AND sy.grade_level=${sqlValue(selectedGrade)}
+      WHERE sy.school_year_id=? AND sy.status='enrolled' AND sy.grade_level=?
         ${accessClause}
-      ORDER BY st.last_name, st.first_name;`) : [];
+      ORDER BY st.last_name, st.first_name;`, [yearId, sqlParameter(selectedGrade), ...accessParameters]) : [];
     const selectedStudentId = scope === 'student' ? (asInt(url.searchParams.get('studentId')) || asInt(students[0]?.id)) : 0;
     const selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || null;
     const graphStudentIds = scope === 'student'
       ? (selectedStudent ? [asInt(selectedStudent.id)] : [])
       : students.map((student) => asInt(student.id));
-    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=? ORDER BY period_number;`, [yearId]);
     const subjects = selectedGrade ? querySql(`SELECT DISTINCT s.id, s.name
       FROM os_assignments a
       JOIN os_subjects s ON s.id = a.subject_id
-      WHERE a.school_year_id=${yearId} AND a.grade_level=${sqlValue(selectedGrade)}
-      ORDER BY s.name;`) : [];
+      WHERE a.school_year_id=? AND a.grade_level=?
+      ORDER BY s.name;`, [yearId, sqlParameter(selectedGrade)]) : [];
     const graphPeriods = periods.length ? periods : [{ id: 0, name: 'Current', start_date: '', end_date: '' }];
     const averages = loadGradeAverages(querySql, { yearId, grade: selectedGrade, subjectIds: subjects.map((subject) => subject.id), studentIds: graphStudentIds, periods: graphPeriods });
     const series = subjects.map((subject, index) => ({
@@ -918,13 +931,13 @@ function createViews({
   function studentGradeGraphPanel(student, yearId, selectedYear, gradeSettings) {
     if (!student) return emptyState('No child is linked to this parent account for the selected school year.');
     const selectedGrade = cleanGrade(student.grade_level);
-    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=? ORDER BY period_number;`, [yearId]);
     const graphPeriods = periods.length ? periods : [{ id: 0, name: 'Current', start_date: '', end_date: '' }];
     const subjects = selectedGrade ? querySql(`SELECT DISTINCT s.id, s.name
       FROM os_assignments a
       JOIN os_subjects s ON s.id = a.subject_id
-      WHERE a.school_year_id=${yearId} AND a.grade_level=${sqlValue(selectedGrade)}
-      ORDER BY s.name;`) : [];
+      WHERE a.school_year_id=? AND a.grade_level=?
+      ORDER BY s.name;`, [yearId, sqlParameter(selectedGrade)]) : [];
     const averages = loadGradeAverages(querySql, {
       yearId,
       grade: selectedGrade,
@@ -966,10 +979,10 @@ function createViews({
     const children = querySql(`SELECT st.id, st.first_name, st.middle_name, st.last_name, sy.grade_level
       FROM os_students st
       JOIN os_student_years sy ON sy.student_id = st.id
-      WHERE st.family_id=${asInt(user.parent_family_id)}
-        AND sy.school_year_id=${yearId}
+      WHERE st.family_id=?
+        AND sy.school_year_id=?
         AND sy.status='enrolled'
-      ORDER BY st.birth_date, st.last_name, st.first_name;`);
+      ORDER BY st.birth_date, st.last_name, st.first_name;`, [asInt(user.parent_family_id), yearId]);
     const selectedStudentId = asInt(url.searchParams.get('studentId')) || asInt(children[0]?.id);
     const selectedStudent = children.find((student) => asInt(student.id) === selectedStudentId) || children[0] || null;
     const gradeSettings = loadGradeWeights(querySql, yearId);
@@ -1016,17 +1029,18 @@ function createViews({
     let selectedGrade = cleanGrade(url.searchParams.get('grade'));
     const selectedStudentId = asInt(url.searchParams.get('studentId'));
     const selectedPeriodId = asInt(url.searchParams.get('markingPeriodId'));
-    const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+    const accessParameters = [];
+    const accessClause = studentAccessClause(user, yearId, 'st', 'sy', accessParameters);
     const allAccessibleStudents = querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      WHERE sy.school_year_id=? AND sy.status='enrolled'
         ${accessClause}
-      ORDER BY st.last_name, st.first_name;`);
+      ORDER BY st.last_name, st.first_name;`, [yearId, ...accessParameters]);
     const grades = sortGrades(allAccessibleStudents.map((row) => row.grade_level));
     if (options.childPicker && !selectedStudentId && allAccessibleStudents[0]) selectedGrade = allAccessibleStudents[0].grade_level;
     if (options.childPicker && selectedStudentId) selectedGrade = allAccessibleStudents.find((student) => asInt(student.id) === selectedStudentId)?.grade_level || '';
-    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=${yearId} ORDER BY period_number;`);
+    const periods = querySql(`SELECT * FROM os_marking_periods WHERE school_year_id=? ORDER BY period_number;`, [yearId]);
     const selectedPeriod = periods.find((period) => period.id === selectedPeriodId) || (options.childPicker ? periods[0] : null);
     const students = options.childPicker ? allAccessibleStudents : allAccessibleStudents.filter((student) => student.grade_level === selectedGrade);
     const selectedStudent = students.find((student) => asInt(student.id) === selectedStudentId) || (options.childPicker ? students[0] : null);
@@ -1036,22 +1050,22 @@ function createViews({
     const subjects = selectedGrade ? querySql(`SELECT s.id, s.name
       FROM os_grade_subjects gs
       JOIN os_subjects s ON s.id = gs.subject_id
-      WHERE gs.school_year_id=${yearId} AND gs.grade_level=${sqlValue(selectedGrade)}
-      ORDER BY s.name;`) : [];
+      WHERE gs.school_year_id=? AND gs.grade_level=?
+      ORDER BY s.name;`, [yearId, sqlParameter(selectedGrade)]) : [];
     const { weightGroups, weightItems } = options.gradeSettings || loadGradeWeights(querySql, yearId);
     const scoreRows = selectedStudent ? querySql(`SELECT sc.student_id, a.subject_id, s.name AS subject_name, a.category, a.assignment_date, a.marking_period_id,
         ROUND((sc.score / NULLIF(a.max_score, 0)) * 100, 1) AS percent
       FROM os_scores sc
       JOIN os_assignments a ON a.id = sc.assignment_id
       JOIN os_subjects s ON s.id = a.subject_id
-      WHERE a.school_year_id=${yearId}
-        AND a.grade_level=${sqlValue(selectedGrade)}
-        AND sc.student_id=${selectedStudent.id};`) : [];
+      WHERE a.school_year_id=?
+        AND a.grade_level=?
+        AND sc.student_id=?;`, [yearId, sqlParameter(selectedGrade), selectedStudent.id]) : [];
     const absenceRows = selectedStudent ? querySql(`SELECT * FROM os_absences
-      WHERE school_year_id=${yearId}
-        AND student_id=${selectedStudent.id}
+      WHERE school_year_id=?
+        AND student_id=?
         AND kind='absence'
-      ORDER BY absence_date;`) : [];
+      ORDER BY absence_date;`, [yearId, selectedStudent.id]) : [];
     const reportAverages = summarizeGradeRows(scoreRows, {
       grade: selectedGrade,
       subjectIds: subjects.map((subject) => subject.id),
@@ -1172,13 +1186,14 @@ function createViews({
   function absencesPage(url, selectedYear, csrfToken, user) {
     const yearId = asInt(selectedYear.id);
     const action = cleanText(url.searchParams.get('action'), 40);
-    const accessClause = studentAccessClause(user, yearId, 'st', 'sy');
+    const accessParameters = [];
+    const accessClause = studentAccessClause(user, yearId, 'st', 'sy', accessParameters);
     const students = querySql(`SELECT st.id, st.first_name, st.last_name, sy.grade_level
       FROM os_student_years sy
       JOIN os_students st ON st.id = sy.student_id
-      WHERE sy.school_year_id=${yearId} AND sy.status='enrolled'
+      WHERE sy.school_year_id=? AND sy.status='enrolled'
         ${accessClause}
-      ORDER BY sy.grade_level, st.last_name, st.first_name;`);
+      ORDER BY sy.grade_level, st.last_name, st.first_name;`, [yearId, ...accessParameters]);
     students.sort((a, b) => gradeRank(a.grade_level) - gradeRank(b.grade_level)
       || String(a.last_name).localeCompare(String(b.last_name))
       || String(a.first_name).localeCompare(String(b.first_name)));
@@ -1192,18 +1207,20 @@ function createViews({
       selectedStudent = null;
     }
     const filteredStudentOptions = selectedGrade ? students.filter((student) => student.grade_level === selectedGrade) : students;
-    const gradeClause = selectedGrade ? `AND sy.grade_level=${sqlValue(selectedGrade)}` : '';
-    const studentClause = selectedStudentId ? `AND st.id=${selectedStudentId}` : '';
+    const gradeClause = selectedGrade ? 'AND sy.grade_level=?' : '';
+    const gradeParameters = selectedGrade ? [sqlParameter(selectedGrade)] : [];
+    const studentClause = selectedStudentId ? 'AND st.id=?' : '';
+    const studentParameters = selectedStudentId ? [selectedStudentId] : [];
     const absences = querySql(`SELECT a.*, st.first_name, st.last_name, sy.grade_level
       FROM os_absences a
       JOIN os_students st ON st.id = a.student_id
       JOIN os_student_years sy ON sy.student_id = st.id AND sy.school_year_id = a.school_year_id AND sy.status='enrolled'
-      WHERE a.school_year_id=${yearId}
+      WHERE a.school_year_id=?
         ${accessClause}
         ${gradeClause}
         ${studentClause}
       ORDER BY a.absence_date DESC, st.last_name, st.first_name
-      LIMIT 80;`);
+      LIMIT 80;`, [yearId, ...accessParameters, ...gradeParameters, ...studentParameters]);
     const filterParams = new URLSearchParams();
     filterParams.set('yearId', String(yearId));
     if (selectedGrade) filterParams.set('grade', selectedGrade);

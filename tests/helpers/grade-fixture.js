@@ -34,8 +34,8 @@ function createGradeFixture({ studentCount = 30, assignmentCount = 300, subjectC
   const subjectIds = Array.from({length:subjectCount},(_,i)=>i+1);
   const studentIds = Array.from({length:studentCount},(_,i)=>i+1);
   let queries = 0, rows = 0, scoreRows = [];
-  function query(sql) {
-    const result = db.prepare(sql).all(); queries++; rows += result.length;
+  function query(sql, parameters = []) {
+    const result = db.prepare(sql).all(...parameters); queries++; rows += result.length;
     if (sql.includes('AS percent')) scoreRows.push(...result);
     return result;
   }

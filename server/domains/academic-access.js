@@ -1,8 +1,7 @@
 const { sqlParameter } = require('../input');
-function createAcademicAccess({ repository, asInt, isAdmin, isParent, isPrincipal, isTeacher, sqlValue }) {
+function createAcademicAccess({ repository, asInt, isAdmin, isParent, isPrincipal, isTeacher }) {
   const { querySql } = repository;
   function integer(value, parameters) {
-    if (!parameters) return asInt(value); // Compatibility for reads converted in the next PR.
     parameters.push(asInt(value));
     return '?';
   }

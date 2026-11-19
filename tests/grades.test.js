@@ -4,6 +4,26 @@ const baselineGrades = require('./helpers/baseline-grades');
 const { createGradeFixture } = require('./helpers/grade-fixture');
 const { calculateWeightedAverage, loadGradeAverages, rowInPeriod } = require('../server/grades');
 
+test('bound grade reads handle empty and changing ID lists and keep text out of SQL', () => {
+  const fixture = createGradeFixture({ studentCount: 3, assignmentCount: 12, subjectCount: 2 });
+  try {
+    const calls = [];
+    const query = (sql, parameters) => { calls.push({ sql, parameters }); return fixture.query(sql, parameters); };
+    const options = { yearId: 1, grade: '1', subjectIds: [1], studentIds: [], periods: fixture.periods };
+    assert.equal(loadGradeAverages(query, options).get(1, fixture.periods[0]).classAverage, null);
+    assert.equal(calls.length, 0);
+    for (const studentIds of [[1], [1, 2, 3], [2]]) {
+      const result = loadGradeAverages(query, { ...options, studentIds });
+      assert.deepEqual([...result.get(1, fixture.periods[0]).studentAverages.keys()], studentIds);
+    }
+    const grade = "1' OR 1=1 -- 日本語";
+    const result = loadGradeAverages(query, { ...options, grade, studentIds: [1] });
+    assert.equal(result.get(1, fixture.periods[0]).classAverage, null);
+    assert.ok(calls.every(call => !call.sql.includes(grade)));
+    assert.ok(calls.some(call => call.parameters.includes(grade)));
+  } finally { fixture.db.close(); }
+});
+
 test('grouped graph calculations match the frozen corrected implementation with bounded queries', () => {
   const fixture=createGradeFixture({studentCount:8,assignmentCount:36,subjectCount:4});
   try {

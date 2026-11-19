@@ -71,7 +71,7 @@ headers, and initial frontend extraction from server.js.
     content hashes. No schema or dependency changes.
   - Status: merged; PR https://github.com/kirbw/oakstead/pull/57; branch deleted.
     Merge: e71e4cb33e59e507d5668d705d2e75af10fdae63.
-- [ ] 4. Bound database writes — `codex/parameterized-database-writes`
+- [x] 4. Bound database writes — `codex/parameterized-database-writes`
   - Single-statement parameterized reads/writes/inserted IDs; trusted schema
     scripts stay separate. Convert authentication, users, settings, people,
     academic mutations and authorization lookups. Structured transactional score
@@ -97,14 +97,33 @@ headers, and initial frontend extraction from server.js.
   - Benchmarks: correctness comparisons pass; current graph 95.03ms, single
     period 1.43ms; Setup Network 0.04ms, Families 1.09ms. Historical fixture
     comparisons are not a before/after performance claim for this PR.
-  - Status: validated; PR https://github.com/kirbw/oakstead/pull/58; merge pending.
+  - Status: merged; PR https://github.com/kirbw/oakstead/pull/58; branch deleted.
+    Merge: 962086c1cdd16fd9eaa341a99151df4fffe58499.
 - [ ] 5. Bound reads and measured reuse — `codex/parameterized-database-reads`
   - Convert remaining runtime reads/access filters and IN lists; document safe
     structural SQL. Benchmark preparation with grade/Setup fixtures.
   - Include connection-local 128-entry LRU statements only with >=5% median gain
     over three comparable runs and no material p95 regression. Clear on migration,
     close, restore/reopen. Never cache results. Test lists, eviction and recovery.
-  - Status/PR/validation/compatibility/merge: pending.
+  - Implemented: remaining runtime reads use positional values, including
+    varying IN lists, report/dashboard permissions and explicit/date periods.
+    Removed legacy interpolation fallbacks from shared access predicates.
+  - Validation: 96 tests pass on Windows under Node 26.13.1 and 22.13.0;
+    syntax/refactor checks pass. Empty/changing lists and SQL-looking text covered;
+    rendered Setup equivalence, grade fixtures, role access and restores pass.
+  - Cache decision: omitted. Three comparable rounds do not demonstrate a 5%
+    graph median improvement; one round worsens median and p95. No eviction or
+    invalidation state is introduced. [Measurements and SQL audit](performance-recovery/bound-reads-results.md).
+  - Browser tooling failed during this session's initialization and retry with
+    a trusted Node process crash. No screenshot available. Manual checks: open
+    Dashboard, Gradebook, Reports, parent graphs and every Setup section; compare
+    counts, rows, selection, ordering and averages for each allowed role.
+  - Compatibility: schema, permissions, URLs and response fields unchanged.
+    No persistent cache, dependencies or production data changes.
+  - Load check: same-session baseline versus bound reads at 50 actors averages
+    477.8 versus 476.3 ops/s; gradebook p95 132.7 versus 133.0ms. Zero failures,
+    correct final scores and clean integrity in both runs; raw reports linked.
+  - Status: validated; PR https://github.com/kirbw/oakstead/pull/59; merge pending.
 - [ ] 6. Academic history — `codex/academic-change-history`
   - Versioned additive append-only history: actor identity/role snapshot, UTC,
     request ID, operation/record IDs, before/after values. All score paths,
